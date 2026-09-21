@@ -1,13 +1,13 @@
 {
   "budgets": {
     "flight_samples": 1000,
-    "flight_table_cells": 64,
+    "flight_table_cells": 32,
     "formula_samples": 512,
     "reference_path_samples": 256,
-    "render_height": 512,
-    "render_spp": 4,
+    "render_height": 256,
+    "render_spp": 16,
     "render_threads": 0,
-    "render_width": 512
+    "render_width": 256
   },
   "classic_phase_proposal": "target_vndf",
   "derived": {
@@ -28,22 +28,22 @@
     ],
     "kernel_precision": [
       [
-        16.0,
+        144.0,
         0.0,
         0.0
       ],
       [
         0.0,
-        16.0,
+        144.0,
         0.0
       ],
       [
         0.0,
         0.0,
-        16.0
+        144.0
       ]
     ],
-    "sigma": 0.2
+    "sigma": 0.03
   },
   "modes": [
     "classic"

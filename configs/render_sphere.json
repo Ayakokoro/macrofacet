@@ -67,5 +67,5 @@
     "flight_table_cells": 64,
     "linear_output_format": "pfm"
   },
-  "output_directory": "outputs/render_sphere_sigma_0.09"
+  "output_directory": "outputs/render_sphere"
 }
