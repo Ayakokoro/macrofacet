@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "seed": 17429,
+  "modes": ["classic"],
+  "field": {
+    "mean_type": "plane",
+    "plane_normal": [0.0, 0.0, 1.0],
+    "plane_offset": 0.0,
+    "sigma": 0.1,
+    "correlation_lengths": [0.2, 0.2, 0.2],
+    "kernel_rotation": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    "ndf_family": "generalized_gaussian",
+    "domain_min": [-2.0, -2.0, -0.3],
+    "domain_max": [2.0, 2.0, 0.3],
+    "outside_domain": "vacuum"
+  },
+  "material": {
+    "type": "conductor",
+    "eta_rgb": [0.2, 0.9, 1.1],
+    "k_rgb": [3.9, 2.5, 2.2],
+    "force_unit_fresnel_for_energy_test": true
+  },
+  "transport": {
+    "external_policy": "original_macrofacet",
+    "classic_sampler": "null_tracking",
+    "correlated_sampler": "optical_depth",
+    "classic_phase_proposal": "uniform",
+    "beckmann_mixture_weight": 0.5,
+    "next_event_estimation": false,
+    "roulette_start_depth": 5,
+    "hard_depth_cap": null
+  },
+  "fixed_flight": {
+    "birth_position": [0.0, 0.0, 0.0],
+    "birth_gradient": [0.0, 0.0, 1.0],
+    "direction": [0.984807753012208, 0.0, 0.17364817766693033],
+    "requested_maximum_age": 0.8,
+    "curve_sample_count": 17,
+    "flight_sample_count": 100
+  },
+  "reference": {
+    "path_sample_count": 64,
+    "nested_grid_intervals": [16],
+    "formula_checkpoint_counts": [0, 1],
+    "formula_age_count": 2,
+    "formula_sample_count": 64,
+    "confidence_level": 0.95,
+    "max_grid_points": 16
+  },
+  "numeric": {
+    "relative_tolerance": 1e-6,
+    "absolute_tolerance": 1e-9,
+    "max_quadrature_subdivisions": 2048,
+    "max_root_iterations": 128,
+    "higher_precision_fallback": true,
+    "allow_unreported_jitter": false
+  },
+  "render": {
+    "width": 8,
+    "height": 8,
+    "samples_per_pixel": 256,
+    "camera_position": [0.0, 0.0, 1.0],
+    "camera_target": [0.0, 0.0, 0.0],
+    "vertical_fov_degrees": 45.0,
+    "environment": "unit_white",
+    "linear_output_format": "pfm"
+  },
+  "output_directory": "outputs/macrofacet_white_validation"
+}
+

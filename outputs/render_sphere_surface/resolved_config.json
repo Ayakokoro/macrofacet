@@ -1,0 +1,54 @@
+{
+  "budgets": {
+    "flight_samples": 1000,
+    "flight_table_cells": 64,
+    "formula_samples": 512,
+    "reference_path_samples": 256,
+    "render_height": 512,
+    "render_spp": 4,
+    "render_threads": 0,
+    "render_width": 512
+  },
+  "classic_phase_proposal": "target_vndf",
+  "derived": {
+    "domain_max": [
+      1.6,
+      1.6,
+      1.6
+    ],
+    "domain_min": [
+      -1.6,
+      -1.6,
+      -1.6
+    ],
+    "fixed_direction": [
+      0.7071067811865476,
+      0.0,
+      0.7071067811865476
+    ],
+    "kernel_precision": [
+      [
+        16.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        16.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        16.0
+      ]
+    ],
+    "sigma": 0.01
+  },
+  "modes": [
+    "classic"
+  ],
+  "rng_stream": "per_pixel_v1",
+  "schema_version": 1,
+  "seed": 17429
+}

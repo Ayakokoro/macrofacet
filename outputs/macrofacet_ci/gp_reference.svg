@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620">
+<rect width="100%" height="100%" fill="#f8fafc"/>
+<rect x="70" y="70" width="960" height="190" fill="white" stroke="#64748b"/>
+<text x="70" y="60" font-size="16" font-family="sans-serif">Joint-GP prefix-positive survival</text>
+<polyline points="130.00,83.29 190.00,105.91 250.00,120.40 310.00,127.11 370.00,133.47 430.00,138.07 490.00,141.96 550.00,145.49 610.00,147.26 670.00,149.38 730.00,153.62 790.00,154.68 850.00,157.15 910.00,158.57 970.00,159.63 1030.00,161.75" fill="none" stroke="#7c3aed" stroke-width="2"/>
+<polyline points="100.00,79.05 130.00,83.29 160.00,93.89 190.00,106.61 220.00,113.68 250.00,118.63 280.00,123.23 310.00,127.47 340.00,129.23 370.00,130.29 400.00,130.65 430.00,132.77 460.00,135.60 490.00,136.66 520.00,139.48 550.00,141.25 580.00,142.31 610.00,143.72 640.00,145.84 670.00,146.55 700.00,146.90 730.00,147.26 760.00,148.67 790.00,150.09 820.00,151.15 850.00,152.56 880.00,153.62 910.00,155.39 940.00,157.15 970.00,157.51 1000.00,157.51 1030.00,157.86" fill="none" stroke="#ea580c" stroke-width="2"/>
+<text x="70" y="278" font-size="12" font-family="sans-serif">0</text>
+<text x="990" y="278" font-size="12" font-family="sans-serif">t=0.8</text>
+<text x="74" y="84" font-size="11" font-family="sans-serif">1.05</text>
+<rect x="70" y="350" width="960" height="190" fill="white" stroke="#64748b"/>
+<text x="70" y="340" font-size="16" font-family="sans-serif">Finite-checkpoint screened formula h_N</text>
+<polyline points="310.00,367.48 550.00,446.71 790.00,471.53 1030.00,500.55" fill="none" stroke="#2563eb" stroke-width="2"/>
+<polyline points="310.00,374.30 550.00,434.89 790.00,457.21 1030.00,499.58" fill="none" stroke="#dc2626" stroke-width="2"/>
+<polyline points="310.00,359.05 550.00,420.77 790.00,463.12 1030.00,496.17" fill="none" stroke="#059669" stroke-width="2"/>
+<polyline points="310.00,374.66 550.00,426.78 790.00,455.43 1030.00,490.42" fill="none" stroke="#7c3aed" stroke-width="2"/>
+<text x="70" y="558" font-size="12" font-family="sans-serif">0</text>
+<text x="990" y="558" font-size="12" font-family="sans-serif">t=0.8</text>
+<text x="74" y="364" font-size="11" font-family="sans-serif">0.995</text>
+</svg>

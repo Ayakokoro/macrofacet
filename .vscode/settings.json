@@ -1,0 +1,21 @@
+{
+    "C_Cpp.files.exclude": {
+        "**/.vscode": true,
+        "**/.vs": true,
+        "**/build": true
+    },
+    "files.exclude": {
+    },
+    "search.exclude": {
+        "**/build": true
+    },
+    "files.associations": {
+        "*.tcc": "cpp",
+        "array": "cpp",
+        "memory": "cpp",
+        "optional": "cpp",
+        "string_view": "cpp",
+        "utility": "cpp",
+        "vector": "cpp"
+    }
+}
