@@ -5,6 +5,7 @@
 #include "macrofacet/transport/FlightState.h"
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -48,6 +49,9 @@ struct ExperimentConfig {
     std::uint64_t seed = 17429;
     std::vector<ModelMode> modes{ModelMode::Classic, ModelMode::Conditional29, ModelMode::Midpoint};
     GPSSField field;
+    // Isotropic Gaussian gradient-component standard deviation, not GGX alpha
+    // or a perceptual roughness mapping. When present, ell = sigma / roughness.
+    std::optional<double> materialRoughness;
     FixedFlightConfig fixedFlight;
     ReferenceConfig reference;
     RenderConfig render;
@@ -58,6 +62,8 @@ struct ExperimentConfig {
 };
 
 ExperimentConfig loadExperimentConfig(const std::filesystem::path& path);
+void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
+                         std::optional<double> roughness, bool preserveSlope);
 void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::path& path);
 std::string modelModeName(ModelMode mode);
 GPSSField buildDefaultField();

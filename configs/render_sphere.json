@@ -6,7 +6,7 @@
     "mean_type": "sphere",
     "sphere_center": [0.0, 0.0, 0.0],
     "sphere_radius": 0.8,
-    "sigma": 0.09,
+    "sigma": 0.03,
     "correlation_lengths": [0.25, 0.25, 0.25],
     "kernel_rotation": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
     "ndf_family": "generalized_gaussian",
@@ -49,8 +49,8 @@
     "max_grid_points": 64
   },
   "numeric": {
-    "relative_tolerance": 1e-6,
-    "absolute_tolerance": 1e-9,
+    "relative_tolerance": 1e-4,
+    "absolute_tolerance": 1e-7,
     "max_quadrature_subdivisions": 2048,
     "max_root_iterations": 128,
     "higher_precision_fallback": true,

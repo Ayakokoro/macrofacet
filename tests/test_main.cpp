@@ -16,6 +16,12 @@ int main() {
     catch (const std::exception& e) { context.require(false, std::string("sampling threw: ") + e.what()); }
     try { testRenderingThreads(context); }
     catch (const std::exception& e) { context.require(false, std::string("render threading threw: ") + e.what()); }
+    try { testCutawayMean(context); }
+    catch (const std::exception& e) { context.require(false, std::string("cutaway mean threw: ") + e.what()); }
+    try { testShaderBallMean(context); }
+    catch (const std::exception& e) { context.require(false, std::string("shader ball mean threw: ") + e.what()); }
+    try { testMaterialRoughness(context); }
+    catch (const std::exception& e) { context.require(false, std::string("material roughness threw: ") + e.what()); }
     std::cout << "checks=" << context.checks << " failures=" << context.failures << '\n';
     return context.failures == 0 ? 0 : 1;
 }
