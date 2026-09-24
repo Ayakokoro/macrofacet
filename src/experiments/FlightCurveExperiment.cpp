@@ -25,7 +25,8 @@ void runFlightCurves(const ExperimentConfig& config) {
     histograms << "mode,bin_left,bin_right,observed_mass,expected_mass,escape_bin\n";
 
     for (ModelMode mode : config.modes) {
-        std::unique_ptr<FlightKernel> kernel = makeFlightKernel(mode, config.field, state);
+        std::unique_ptr<FlightKernel> kernel = makeFlightKernel(
+            mode, config.field, state, config.conditional29.externalPolicy, config.numeric);
         const double maximumAge = std::min(config.fixedFlight.requestedMaximumAge,
                                            kernel->maximumAgeInDomain());
         const int count = config.fixedFlight.curveSampleCount;
@@ -63,7 +64,18 @@ void runFlightCurves(const ExperimentConfig& config) {
         std::vector<int> bins(static_cast<std::size_t>(count - 1), 0);
         int escapes = 0;
         Random rng(config.seed + static_cast<unsigned>(mode) * 7919ULL);
+        std::unique_ptr<OpticalDepthSampler> regular;
+        if (mode == ModelMode::Conditional29)
+            regular = std::make_unique<OpticalDepthSampler>(*kernel, config.numeric, maximumAge);
         for (int sample = 0; sample < config.fixedFlight.flightSampleCount; ++sample) {
+            if (regular) {
+                const auto flight = regular->sample(rng);
+                if (!flight.collided) { ++escapes; continue; }
+                const auto upper = std::upper_bound(ages.begin(), ages.end(), flight.age);
+                const int index = std::clamp(static_cast<int>(upper - ages.begin()) - 1, 0, count - 2);
+                ++bins[static_cast<std::size_t>(index)];
+                continue;
+            }
             const double target = -std::log1p(-rng.openUniform01());
             if (target >= opticalDepth.back()) { ++escapes; continue; }
             const auto upper = std::upper_bound(opticalDepth.begin(), opticalDepth.end(), target);
@@ -88,4 +100,3 @@ void runFlightCurves(const ExperimentConfig& config) {
 }
 
 } // namespace mf
-

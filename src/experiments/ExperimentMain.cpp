@@ -93,7 +93,8 @@ int main(int argc, char** argv) {
         std::cerr << "usage: macrofacet_experiments {curves|gp-reference|render|all} "
                      "--config <file> [--sigma <value>] [--preserve-slope] "
                      "[--width <pixels>] [--height <pixels>] [--spp <count>] "
-                     "[--flight-cells <count>] [--threads <count>] [--output <directory>]\n";
+                     "[--flight-cells <count>] [--threads <count>] [--output <directory>]\n"
+                     "  --flight-cells: initial integration panels for conditional29; legacy table cells otherwise\n";
         return 2;
     }
     try {

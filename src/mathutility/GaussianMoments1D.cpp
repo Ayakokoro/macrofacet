@@ -85,27 +85,22 @@ PositiveResult negativeFluxNormalCdf(double k, double mean, double stddev,
     if (denominator.status == NumericStatus::ExactZero) return exactZero();
     const double z = (k - mean) / stddev;
     const double direct = stddev * normalPdf(z) - mean * normalCdf(z);
-    if (direct > 0.0 && std::isfinite(direct)) {
+    if (direct > 0.0 && std::isfinite(direct) && denominator.value > 0.0 &&
+        (mean <= 0.0 || z > -5.0)) {
         const double value = std::clamp(direct / denominator.value, 0.0, 1.0);
         return {value, value > 0.0 ? std::log(value) : -std::numeric_limits<double>::infinity(),
                 0.0, value > 0.0 ? NumericStatus::Ok : NumericStatus::ExactZero};
     }
 
-    auto logIntegrand = [=](double u) {
-        const double factor = -k + stddev * u;
-        return std::log(factor) + normalLogPdf(z - u);
-    };
-    const double mode = std::max(0.0, z + std::sqrt(z * z + 4.0));
-    const PositiveResult numerator = integratePositiveLog(logIntegrand, 0.0, mode, policy);
-    if (numerator.status == NumericStatus::ExactZero) return numerator;
-    const double logValue = numerator.logValue - denominator.logValue;
-    PositiveResult result = positiveFromLog(logValue, numerator.absError / denominator.value,
-                                            numerator.status);
-    if (result.value > 1.0 && result.value - 1.0 <= 64.0 * std::numeric_limits<double>::epsilon()) {
-        result.value = 1.0;
-        result.logValue = 0.0;
-    }
-    return result;
+    // sigma*phi(z)-mean*Phi(z) = sigma*E[(N(z,1))_+] + (-k)*Phi(z).
+    // Both terms are positive; log addition avoids cancelling Gaussian tails
+    // and still works when the ordinary normalizer underflows.
+    const double first = std::log(stddev) + positiveRawMoment(1, z, 1.0, policy).logValue;
+    const double second = std::log(-k) + normalLogCdf(z);
+    const double largest = std::max(first, second);
+    if (!std::isfinite(largest)) return exactZero();
+    const double logNumerator = largest + std::log1p(std::exp(std::min(first, second) - largest));
+    return positiveFromLog(std::min(0.0, logNumerator - denominator.logValue));
 }
 
 double sampleNegativeFluxNormal(double mean, double stddev, Random& rng,
@@ -114,16 +109,36 @@ double sampleNegativeFluxNormal(double mean, double stddev, Random& rng,
         if (mean < 0.0) return mean;
         throw NumericError(NumericStatus::InvalidInput, "negative-flux distribution has no mass");
     }
+    if (!(stddev > 0.0) || !std::isfinite(stddev) || !std::isfinite(mean))
+        throw NumericError(NumericStatus::InvalidInput, "invalid negative-flux Gaussian");
     const double u = rng.openUniform01();
-    auto cdf = [&](double k) { return negativeFluxNormalCdf(k, mean, stddev, policy).value; };
-    double lower = std::min(-stddev, mean - 8.0 * stddev);
-    for (int i = 0; i < 128 && cdf(lower) >= u; ++i) lower = lower * 2.0 - stddev;
-    const RootResult root = solveMonotoneIncreasing(cdf, u, lower, 0.0, policy);
+    const double location = std::min(mean, 0.0);
+    const double scale = mean > 0.0 ? stddev / (1.0 + mean / stddev) : stddev;
+    if (!(scale > 0.0)) throw NumericError(NumericStatus::NeedHigherPrecision, "flux sampling scale underflowed");
+    // Solve in units of the distribution's width, not world gradient units.
+    // This is essential when a near-surface conditional variance is O(t^4).
+    auto cdf = [&](double z) { return negativeFluxNormalCdf(location + scale * z, mean, stddev, policy).value; };
+    double lower = -8.0, upper = std::min(8.0, -location / scale);
+    for (int i = 0; i < 128 && cdf(lower) >= u; ++i) lower *= 2.0;
+    for (int i = 0; i < 128 && cdf(upper) < u; ++i) upper = std::min(upper * 2.0, -location / scale);
+    const double logNormalizer = negativePartMean(mean, stddev, policy).logValue;
+    auto evaluate = [&](double z) {
+        const double k = location + scale * z;
+        const double derivative = k < 0.0 ? std::exp(std::log(-k) + normalLogPdf((k - mean) / stddev) -
+            std::log(stddev) - logNormalizer + std::log(scale)) : 0.0;
+        return RootEvaluation{cdf(z), derivative};
+    };
+    NumericPolicy inversePolicy = policy;
+    inversePolicy.distanceAbsoluteTolerance = 1e-11;
+    inversePolicy.distanceRelativeTolerance = 1e-10;
+    const RootResult root = solveMonotoneSafeguardedNewton(evaluate, u, lower, upper,
+                                                          0.5 * (lower + upper), inversePolicy);
     if (root.status != NumericStatus::Ok) {
         throw NumericError(root.status, "failed to sample negative-flux Gaussian");
     }
-    return std::min(root.value, -std::numeric_limits<double>::min());
+    const double result = location + scale * root.value;
+    if (!(result < 0.0)) throw NumericError(NumericStatus::NeedHigherPrecision, "flux sample rounded outside negative support");
+    return result;
 }
 
 } // namespace mf
-

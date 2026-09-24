@@ -7,9 +7,15 @@
 namespace mf {
 
 Conditional29FlightKernel::Conditional29FlightKernel(const GPSSField& field,
-                                                     const FlightState& state)
+                                                     const FlightState& state, const NumericPolicy& policy)
     : FlightKernel(field, state),
-      ray_(field, state.birthPosition, state.birthGradient, state.direction) {}
+      ray_(field, state.birthPosition, state.birthValue, state.birthGradient, state.direction, policy),
+      policy_(policy) {
+    if (!(state.direction.dot(field.kernel.precision() * state.direction) > 0.0)) {
+        throw NumericError(NumericStatus::UnsupportedSingularFlight,
+                           "conditional29 requires nonzero kernel precision along the ray");
+    }
+}
 
 HazardEvaluation Conditional29FlightKernel::evaluate(double age) const {
     if (!(age >= currentAge() && age <= maximumAgeInDomain())) {
@@ -17,49 +23,31 @@ HazardEvaluation Conditional29FlightKernel::evaluate(double age) const {
     }
     if (age == 0.0) return {exactZero(), 0.0, -std::numeric_limits<double>::infinity()};
     const Gaussian<2> fk = ray_.endpointValueSlope(age);
-    const double tolerance = covarianceTolerance(std::max(1.0, fk.covariance.norm()));
     const double varianceF = fk.covariance(0, 0);
-    if (varianceF <= tolerance) {
-        if (fk.mean[0] > 0.0) return {exactZero(), 0.0, -std::numeric_limits<double>::infinity()};
+    if (!(varianceF > 0.0)) {
         throw NumericError(NumericStatus::UnsupportedSingularFlight,
                            "deterministic endpoint zero cannot be represented by a continuous hazard");
     }
-    Gaussian<1> target;
-    target.mean[0] = fk.mean[1];
-    target.covariance(0, 0) = fk.covariance(1, 1);
-    Gaussian<1> observation;
-    observation.mean[0] = fk.mean[0];
-    observation.covariance(0, 0) = varianceF;
-    Eigen::Matrix<double, 1, 1> cross;
-    cross(0, 0) = fk.covariance(1, 0);
-    const Gaussian<1> kGivenZero = conditionGaussian(target, observation, cross,
-                                                     Eigen::Matrix<double, 1, 1>::Zero());
+    const Gaussian<1> kGivenZero = ray_.slopeGivenEndpointZero(age);
     const double stddevF = std::sqrt(varianceF);
     const double logU = normalLogCdf(fk.mean[0] / stddevF);
-    const double varianceK = validateNonnegative(kGivenZero.covariance(0, 0),
-                                                 fk.covariance.norm());
-    const PositiveResult moment = negativePartMean(kGivenZero.mean[0], std::sqrt(varianceK));
+    const double varianceK = kGivenZero.covariance(0, 0);
+    const PositiveResult moment = negativePartMean(kGivenZero.mean[0], std::sqrt(varianceK), policy_);
     if (moment.status == NumericStatus::ExactZero) {
         return {exactZero(), logU, -std::numeric_limits<double>::infinity()};
     }
     const double logPdfF0 = normalLogPdf(-fk.mean[0] / stddevF) - std::log(stddevF);
     const double logJ = logPdfF0 + moment.logValue;
-    return {positiveFromLog(logJ - logU), logU, logJ};
+    const double zeta = fk.mean[0] / stddevF;
+    const double logRho = zeta < -32.0
+        ? std::log(normalPdfOverCdf(zeta)) - std::log(stddevF) : logPdfF0 - logU;
+    return {positiveFromLog(logRho + moment.logValue), logU, logJ};
 }
 
 HitStatistics Conditional29FlightKernel::hitStatistics(double age) const {
-    const Gaussian<4> fg = ray_.endpointValueGradient(age);
-    Gaussian<3> target;
-    target.mean = fg.mean.template segment<3>(1);
-    target.covariance = fg.covariance.template block<3, 3>(1, 1);
-    Gaussian<1> observation;
-    observation.mean[0] = fg.mean[0];
-    observation.covariance(0, 0) = fg.covariance(0, 0);
-    Eigen::Matrix<double, 3, 1> cross = fg.covariance.template block<3, 1>(1, 0);
-    const Gaussian<3> conditioned = conditionGaussian(target, observation, cross,
-                                                      Eigen::Matrix<double, 1, 1>::Zero());
-    return {conditioned, std::nullopt};
+    if (!(age > 0.0 && age >= currentAge() && age <= maximumAgeInDomain()))
+        throw std::out_of_range("invalid conditional collision age");
+    return {ray_.gradientGivenEndpointZero(age), std::nullopt};
 }
 
 } // namespace mf
-

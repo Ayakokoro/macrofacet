@@ -13,7 +13,11 @@ bool sameStatistics(const mf::RenderStatistics& a, const mf::RenderStatistics& b
            a.rouletteTerminations == b.rouletteTerminations &&
            a.safetyCapTerminations == b.safetyCapTerminations &&
            a.numericalFailures == b.numericalFailures &&
-           a.accumulatedPathDepth == b.accumulatedPathDepth;
+           a.accumulatedPathDepth == b.accumulatedPathDepth &&
+           a.tracking.hazardEvaluations == b.tracking.hazardEvaluations &&
+           a.tracking.newtonIterations == b.tracking.newtonIterations &&
+           a.tracking.bisectionSteps == b.tracking.bisectionSteps &&
+           a.tracking.maximumResidual == b.tracking.maximumResidual;
 }
 
 class ThrowingMean final : public mf::MeanField {
@@ -37,6 +41,7 @@ void testRenderingThreads(TestContext& context) {
     config.render.samplesPerPixel = 1;
     config.render.flightTableCells = 4;
     config.render.environment = "directional_gradient";
+    config.conditional29.externalPolicy = ExternalPolicy::SampledExterior;
 
     for (ModelMode mode : std::array<ModelMode, 3>{ModelMode::Classic,
                                                     ModelMode::Conditional29,

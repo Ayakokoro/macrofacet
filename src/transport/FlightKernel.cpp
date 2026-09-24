@@ -17,23 +17,28 @@ FlightKernel::FlightKernel(const GPSSField& field, FlightState state)
 }
 
 std::unique_ptr<FlightKernel> makeFlightKernel(ModelMode mode, const GPSSField& field,
-                                               const FlightState& state, ExternalPolicy policy) {
-    (void)policy;
+                                               const FlightState& state, ExternalPolicy policy,
+                                               const NumericPolicy& numeric) {
     if (mode == ModelMode::Classic) return std::make_unique<ClassicFlightKernel>(field, state);
     if (field.ndfFamily == NdfFamily::GGXBaseline) {
         throw std::invalid_argument("conditional GP flight is incompatible with a GGX baseline");
     }
     if (state.birthKind == BirthKind::External) {
+        if (mode == ModelMode::Conditional29 && policy == ExternalPolicy::SampledExterior) {
+            throw std::invalid_argument("sampled_exterior must initialize an observed exterior state");
+        }
         return std::make_unique<ClassicFlightKernel>(field, state);
     }
-    if (!state.hasFullGradient || !(state.direction.dot(state.birthGradient) > 0.0)) {
+    if (!state.hasFullGradient || (state.birthKind == BirthKind::Surface &&
+                                  !(state.direction.dot(state.birthGradient) > 0.0))) {
         throw std::invalid_argument("conditional flight requires an outward full-gradient surface birth");
     }
     if (mode == ModelMode::Conditional29) {
-        return std::make_unique<Conditional29FlightKernel>(field, state);
+        return std::make_unique<Conditional29FlightKernel>(field, state, numeric);
     }
+    if (state.birthKind == BirthKind::ObservedExterior)
+        throw std::invalid_argument("observed exterior is currently supported only by conditional29");
     return std::make_unique<MidpointFlightKernel>(field, state, true);
 }
 
 } // namespace mf
-

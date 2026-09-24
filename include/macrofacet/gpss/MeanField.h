@@ -21,6 +21,10 @@ class MeanField {
 public:
     virtual ~MeanField() = default;
     virtual MeanJet evaluate(const Point3& x) const = 0;
+    virtual double valueDifference(const Point3& x, const Vector3& displacement) const {
+        if (const auto gradient = affineGradient()) return gradient->dot(displacement);
+        return evaluate(x + displacement).value - evaluate(x).value;
+    }
     virtual BoundsSummary bounds(const Bounds3& domain) const = 0;
     virtual std::optional<Vector3> affineGradient() const { return std::nullopt; }
 };
@@ -42,6 +46,7 @@ class SphereMean final : public MeanField {
 public:
     SphereMean(Point3 center, double radius);
     MeanJet evaluate(const Point3& x) const override;
+    double valueDifference(const Point3& x, const Vector3& displacement) const override;
     BoundsSummary bounds(const Bounds3& domain) const override;
 private:
     Point3 center_;
@@ -61,4 +66,3 @@ private:
 using MeanFieldPtr = std::shared_ptr<const MeanField>;
 
 } // namespace mf
-

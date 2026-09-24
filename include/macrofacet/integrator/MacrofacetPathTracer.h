@@ -2,6 +2,7 @@
 
 #include "macrofacet/core/Random.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
+#include "macrofacet/transport/OpticalDepthSampler.h"
 #include <vector>
 
 namespace mf {
@@ -14,6 +15,7 @@ struct RenderStatistics {
     std::uint64_t safetyCapTerminations = 0;
     std::uint64_t numericalFailures = 0;
     double accumulatedPathDepth = 0.0;
+    TrackingDiagnostics tracking;
 };
 
 inline void mergeInto(RenderStatistics& destination, const RenderStatistics& source) {
@@ -24,6 +26,13 @@ inline void mergeInto(RenderStatistics& destination, const RenderStatistics& sou
     destination.safetyCapTerminations += source.safetyCapTerminations;
     destination.numericalFailures += source.numericalFailures;
     destination.accumulatedPathDepth += source.accumulatedPathDepth;
+    destination.tracking.hazardEvaluations += source.tracking.hazardEvaluations;
+    destination.tracking.quadratureIntervals += source.tracking.quadratureIntervals;
+    destination.tracking.newtonIterations += source.tracking.newtonIterations;
+    destination.tracking.bisectionSteps += source.tracking.bisectionSteps;
+    destination.tracking.maximumResidual = std::max(destination.tracking.maximumResidual, source.tracking.maximumResidual);
+    destination.tracking.maximumIntegrationError = std::max(destination.tracking.maximumIntegrationError,
+                                                           source.tracking.maximumIntegrationError);
 }
 
 struct RenderedImage {

@@ -10,10 +10,14 @@ class ConditionedRay {
 public:
     ConditionedRay(const GPSSField& field, Point3 x0, Vector3 g0, Vector3 w,
                    const NumericPolicy& policy = defaultNumericPolicy());
+    ConditionedRay(const GPSSField& field, Point3 x0, double f0, Vector3 g0, Vector3 w,
+                   const NumericPolicy& policy = defaultNumericPolicy());
 
     Gaussian<2> endpointValueSlope(double t) const;
     Gaussian<3> midpointValueSlope(double t) const;
     Gaussian<4> endpointValueGradient(double t) const;
+    Gaussian<1> slopeGivenEndpointZero(double t) const;
+    Gaussian<3> gradientGivenEndpointZero(double t) const;
     Gaussian<5> midpointValueGradient(double t) const;
     DynamicGaussian valuesAt(const std::vector<double>& ages) const;
     DynamicGaussian checkpointValuesAndEndpointSlope(
@@ -23,6 +27,7 @@ public:
     const Vector3& birthGradient() const { return g0_; }
     const Vector3& direction() const { return w_; }
     const GPSSField& field() const { return field_; }
+    double birthValue() const { return f0_; }
 
 private:
     struct Descriptor { Point3 point; int component; }; // -1 value, 0..2 gradient
@@ -42,7 +47,8 @@ private:
     Eigen::Vector4d observed_;
     double rayPrecision_;
     NumericPolicy policy_;
+    double f0_ = 0.0;
+    MeanJet originMean_;
 };
 
 } // namespace mf
-

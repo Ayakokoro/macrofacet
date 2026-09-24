@@ -5,22 +5,62 @@
 #include <stdexcept>
 
 namespace mf {
+namespace {
+
+// z = (t / ell)^2. Avoid cancellation of the O(z^2) value variance
+// and O(z^4) Schur-complement numerator near a known surface point.
+double valueVarianceFraction(double z) {
+    if (z < 0.1) {
+        double powerOverFactorial = z * z / 2.0;
+        double sum = powerOverFactorial;
+        for (int n = 3; n <= 18; ++n) {
+            powerOverFactorial *= -z / n;
+            sum += (n - 1) * powerOverFactorial;
+        }
+        return sum;
+    }
+    return -std::expm1(-z) - z * std::exp(-z);
+}
+
+double zeroSlopeVarianceFraction(double z) {
+    if (z == 0.0) return 0.0;
+    const double e = std::exp(-z);
+    double numerator;
+    if (z < 0.5) {
+        const double z2 = z * z;
+        numerator = e * z2 * z2 * (1.0 / 12.0 + z2 * (1.0 / 360.0 +
+            z2 * (1.0 / 20160.0 + z2 * (1.0 / 1814400.0 +
+            z2 * (1.0 / 239500800.0 + z2 / 43589145600.0)))));
+    } else {
+        const double oneMinusE = -std::expm1(-z);
+        numerator = oneMinusE * oneMinusE - z * z * e;
+    }
+    return numerator / valueVarianceFraction(z);
+}
+
+} // namespace
 
 ConditionedRay::ConditionedRay(const GPSSField& field, Point3 x0, Vector3 g0, Vector3 w,
                                const NumericPolicy& policy)
+    : ConditionedRay(field, std::move(x0), 0.0, std::move(g0), std::move(w), policy) {}
+
+ConditionedRay::ConditionedRay(const GPSSField& field, Point3 x0, double f0,
+                               Vector3 g0, Vector3 w, const NumericPolicy& policy)
     : field_(field), x0_(std::move(x0)), g0_(std::move(g0)), w_(normalizedOrThrow(w)),
-      rayPrecision_(w_.dot(field.kernel.precision() * w_)), policy_(policy) {
+      rayPrecision_(w_.dot(field.kernel.precision() * w_)), policy_(policy), f0_(f0) {
     field_.validate();
-    if (!x0_.allFinite() || !g0_.allFinite() || !(g0_.norm() > 0.0) || !(w_.dot(g0_) > 0.0)) {
-        throw std::invalid_argument("conditioned ray requires a finite outward full gradient");
+    if (!x0_.allFinite() || !g0_.allFinite() || !std::isfinite(f0_) || f0_ < 0.0 ||
+        (f0_ == 0.0 && !(w_.dot(g0_) > 0.0))) {
+        throw std::invalid_argument("conditioned ray requires an outward surface or positive exterior observation");
     }
+    originMean_ = field_.mean->evaluate(x0_);
     const PointPrior originPrior = field_.pointPrior(x0_);
     observation_.mean << originPrior.meanF, originPrior.meanG.x(), originPrior.meanG.y(),
                          originPrior.meanG.z();
     observation_.covariance.setZero();
     observation_.covariance(0, 0) = originPrior.varianceF;
     observation_.covariance.template block<3, 3>(1, 1) = originPrior.covarianceG;
-    observed_ << 0.0, g0_.x(), g0_.y(), g0_.z();
+    observed_ << f0_, g0_.x(), g0_.y(), g0_.z();
 
     // This support check catches impossible observations for height-field limits.
     Gaussian<1> dummyTarget;
@@ -101,30 +141,24 @@ double ConditionedRay::stableSlopeVariance(double t) const {
     const double a = rayPrecision_;
     const double q = a * t * t;
     if (a == 0.0) return 0.0;
-    double bracket;
-    if (std::abs(q) < 1e-3) {
-        // 1-exp(-q)(1-q+q^2) = 2q - 5q^2/2 + 5q^3/3 - ...
-        bracket = 2.0 * q - 2.5 * q * q + (5.0 / 3.0) * q * q * q;
-    } else {
-        bracket = 1.0 - std::exp(-q) * (1.0 - q + q * q);
-    }
+    if (q == 0.0) return 0.0;
+    const double bracket = zeroSlopeVarianceFraction(q) +
+        std::exp(-2.0 * q) * q * q * q / valueVarianceFraction(q);
     return sigma2 * a * validateNonnegative(bracket, 1.0, policy_);
 }
 
 std::pair<double, double> ConditionedRay::conditionedValueSlopeMean(double t) const {
-    if (const auto gradient = field_.mean->affineGradient()) {
-        const double d0 = field_.mean->evaluate(x0_).value;
-        const double mk = w_.dot(*gradient);
-        const double departure = w_.dot(g0_) - mk;
-        const double c = std::exp(-0.5 * rayPrecision_ * t * t);
-        const double b = -d0 + t * departure;
-        return {d0 + t * mk + c * b,
-                mk + c * (departure - rayPrecision_ * t * b)};
-    }
-    const Point3 point = x0_ + t * w_;
-    std::vector<Descriptor> descriptors{{point, -1}, {point, 0}, {point, 1}, {point, 2}};
-    DynamicGaussian conditioned = conditionDescriptors(descriptors);
-    return {conditioned.mean[0], w_.dot(conditioned.mean.segment<3>(1))};
+    if (t == 0.0) return {f0_, w_.dot(g0_)};
+    const MeanJet endpoint = field_.mean->evaluate(x0_ + t * w_);
+    const double deltaF = f0_ - originMean_.value;
+    const double deltaK = w_.dot(g0_ - originMean_.gradient);
+    const double exponent = -0.5 * rayPrecision_ * t * t;
+    const double r = std::exp(exponent);
+    const double meanRemainder = field_.mean->affineGradient() ? 0.0 :
+        field_.mean->valueDifference(x0_, t * w_) - t * w_.dot(originMean_.gradient);
+    return {f0_ + meanRemainder + t * w_.dot(g0_) +
+                std::expm1(exponent) * (deltaF + t * deltaK),
+            w_.dot(endpoint.gradient) + r * (deltaK - rayPrecision_ * t * (deltaF + t * deltaK))};
 }
 
 Gaussian<2> ConditionedRay::endpointValueSlope(double t) const {
@@ -135,13 +169,7 @@ Gaussian<2> ConditionedRay::endpointValueSlope(double t) const {
     if (t == 0.0) return result;
     const double sigma2 = field_.kernel.sigma() * field_.kernel.sigma();
     const double q = rayPrecision_ * t * t;
-    double varianceF;
-    if (std::abs(q) < 1e-3) {
-        varianceF = sigma2 * (0.5 * q * q - (1.0 / 3.0) * q * q * q +
-                              0.125 * q * q * q * q);
-    } else {
-        varianceF = sigma2 * (1.0 - std::exp(-q) * (1.0 + q));
-    }
+    const double varianceF = sigma2 * valueVarianceFraction(q);
     const double covariance = sigma2 * rayPrecision_ * rayPrecision_ * t * t * t * std::exp(-q);
     result.covariance << validateNonnegative(varianceF, sigma2, policy_), covariance,
                          covariance, stableSlopeVariance(t);
@@ -164,19 +192,65 @@ Gaussian<3> ConditionedRay::midpointValueSlope(double t) const {
 }
 
 Gaussian<4> ConditionedRay::endpointValueGradient(double t) const {
-    const Point3 point = x0_ + t * w_;
-    DynamicGaussian dynamic = conditionDescriptors(
-        {{point, -1}, {point, 0}, {point, 1}, {point, 2}});
-    Gaussian<4> result{dynamic.mean, dynamic.covariance};
+    if (!(t >= 0.0) || !std::isfinite(t)) throw std::invalid_argument("invalid ray age");
+    Gaussian<4> result;
+    if (t == 0.0) {
+        result.mean << f0_, g0_.x(), g0_.y(), g0_.z();
+        return result;
+    }
+    const double z = rayPrecision_ * t * t;
+    const double r = std::exp(-0.5 * z);
+    const double sigma2 = field_.kernel.sigma() * field_.kernel.sigma();
+    const Matrix3& a = field_.kernel.precision();
+    const Vector3 aw = a * w_;
+    const double deltaF = f0_ - originMean_.value;
+    const Vector3 deltaG = g0_ - originMean_.gradient;
+    result.mean.template tail<3>() = field_.mean->evaluate(x0_ + t * w_).gradient +
+        r * (deltaG - t * aw * (deltaF + t * w_.dot(deltaG)));
     const Gaussian<2> stable = endpointValueSlope(t);
     result.mean[0] = stable.mean[0];
-    const Vector3 cw = result.covariance.template block<3, 1>(1, 0);
-    const double currentProjection = w_.dot(cw);
-    const double correction = stable.covariance(0, 1) - currentProjection;
-    result.covariance.template block<3, 1>(1, 0) += correction * w_;
+    result.covariance.template block<3, 1>(1, 0) = sigma2 * std::exp(-z) * t * z * aw;
     result.covariance.template block<1, 3>(0, 1) =
         result.covariance.template block<3, 1>(1, 0).transpose();
     result.covariance(0, 0) = stable.covariance(0, 0);
+    result.covariance.template block<3, 3>(1, 1) = sigma2 *
+        (-std::expm1(-z) * a + std::exp(-z) * t * t * (1.0 - z) * aw * aw.transpose());
+    return result;
+}
+
+Gaussian<1> ConditionedRay::slopeGivenEndpointZero(double t) const {
+    const Gaussian<2> fk = endpointValueSlope(t);
+    if (!(fk.covariance(0, 0) > 0.0)) {
+        throw NumericError(NumericStatus::UnsupportedSingularFlight, "zero-value conditioning has no continuous density");
+    }
+    const double z = rayPrecision_ * t * t;
+    Gaussian<1> result;
+    result.mean[0] = fk.mean[1] - fk.covariance(0, 1) / fk.covariance(0, 0) * fk.mean[0];
+    result.covariance(0, 0) = field_.kernel.sigma() * field_.kernel.sigma() *
+                             rayPrecision_ * zeroSlopeVarianceFraction(z);
+    return result;
+}
+
+Gaussian<3> ConditionedRay::gradientGivenEndpointZero(double t) const {
+    const Gaussian<4> fg = endpointValueGradient(t);
+    if (!(fg.covariance(0, 0) > 0.0)) {
+        throw NumericError(NumericStatus::UnsupportedSingularFlight, "zero-value conditioning has no continuous density");
+    }
+    Gaussian<3> result;
+    result.mean = fg.mean.template tail<3>() -
+        fg.covariance.template block<3, 1>(1, 0) * (fg.mean[0] / fg.covariance(0, 0));
+    const double z = rayPrecision_ * t * t;
+    // Construct the Schur complement from nonnegative whitened components.
+    Eigen::SelfAdjointEigenSolver<Matrix3> eig(field_.kernel.precision());
+    const Matrix3 squareRoot = eig.eigenvectors() * eig.eigenvalues().cwiseMax(0.0).cwiseSqrt().asDiagonal() *
+                              eig.eigenvectors().transpose();
+    const Vector3 p = normalizedOrThrow(squareRoot * w_);
+    Vector3 u, v;
+    orthonormalComplement(p, u, v);
+    const Vector3 su = squareRoot * u, sv = squareRoot * v, sp = squareRoot * p;
+    result.covariance = field_.kernel.sigma() * field_.kernel.sigma() *
+        (-std::expm1(-z) * (su * su.transpose() + sv * sv.transpose()) +
+         zeroSlopeVarianceFraction(z) * sp * sp.transpose());
     return result;
 }
 
@@ -242,4 +316,3 @@ DynamicGaussian ConditionedRay::checkpointValuesAndEndpointSlope(
 }
 
 } // namespace mf
-

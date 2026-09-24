@@ -1,0 +1,7 @@
+mode,environment,width,height,spp,seconds,paths,real_collisions,escaped_paths,roulette_terminations,safety_cap_terminations,numerical_failures,mean_path_depth,hazard_evaluations,quadrature_intervals,newton_iterations,bisection_steps,maximum_optical_residual,maximum_integration_error
+classic,unit_white,8,8,2,0.0049576000000000004,128,321,89,39,0,0,2.5078125,0,0,0,0,0,0
+classic,directional_gradient,8,8,2,0.0060514999999999996,128,321,89,39,0,0,2.5078125,0,0,0,0,0,0
+conditional29,unit_white,8,8,2,0.035258299999999999,128,172,128,0,0,0,1.34375,345522,22899,478,1,7.3371898334784191e-08,1.8088735222457933e-11
+conditional29,directional_gradient,8,8,2,0.036010800000000003,128,172,128,0,0,0,1.34375,345522,22899,478,1,7.3371898334784191e-08,1.8088735222457933e-11
+midpoint,unit_white,8,8,2,0.73383330000000002,128,165,128,0,0,0,1.2890625,0,0,0,0,0,0
+midpoint,directional_gradient,8,8,2,0.70252890000000001,128,165,128,0,0,0,1.2890625,0,0,0,0,0,0

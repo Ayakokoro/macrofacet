@@ -5,6 +5,7 @@
 #include "macrofacet/transport/FlightState.h"
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -43,6 +44,11 @@ struct RenderConfig {
     int threadCount = 0;  // 0 selects the hardware concurrency
 };
 
+struct Conditional29TransportConfig {
+    ExternalPolicy externalPolicy = ExternalPolicy::OriginalMacrofacet;
+    std::optional<int> hardDepthCap; // null: escape and roulette only
+};
+
 struct ExperimentConfig {
     int schemaVersion = 1;
     std::uint64_t seed = 17429;
@@ -52,6 +58,7 @@ struct ExperimentConfig {
     ReferenceConfig reference;
     RenderConfig render;
     NumericPolicy numeric;
+    Conditional29TransportConfig conditional29;
     std::filesystem::path outputDirectory = "outputs/macrofacet_experiments";
     double beckmannMixtureWeight = 0.5;
     std::string classicPhaseProposal = "uniform";

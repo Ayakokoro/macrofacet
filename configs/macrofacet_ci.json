@@ -24,6 +24,11 @@
     "external_policy": "original_macrofacet",
     "classic_sampler": "null_tracking",
     "correlated_sampler": "optical_depth",
+    "conditional29": {
+      "sampler": "regular_tracking",
+      "external_policy": "sampled_exterior",
+      "optical_depth_solver": "safeguarded_newton"
+    },
     "classic_phase_proposal": "uniform",
     "beckmann_mixture_weight": 0.5,
     "next_event_estimation": false,
@@ -67,4 +72,3 @@
   },
   "output_directory": "outputs/macrofacet_ci"
 }
-

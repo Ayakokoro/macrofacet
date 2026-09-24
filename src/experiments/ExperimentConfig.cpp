@@ -1,5 +1,6 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -105,9 +106,27 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.field.conductor.forceUnitFresnel =
         material.value("force_unit_fresnel_for_energy_test", false);
     const auto& transport = root.at("transport");
-    if (transport.at("external_policy").get<std::string>() != "original_macrofacet") {
-        throw std::invalid_argument("only original_macrofacet external policy is supported");
+    const auto conditional = transport.value("conditional29", nlohmann::json::object());
+    if (!conditional.is_object()) throw std::invalid_argument("conditional29 transport must be an object");
+    const std::string sampler = conditional.value("sampler", transport.value("correlated_sampler", "optical_depth"));
+    if (sampler != "regular_tracking" && sampler != "optical_depth")
+        throw std::invalid_argument("conditional29 supports only regular_tracking (optical_depth alias)");
+    if (conditional.value("optical_depth_solver", "safeguarded_newton") != "safeguarded_newton")
+        throw std::invalid_argument("conditional29 requires safeguarded_newton");
+    const std::string commonExternal = transport.value("external_policy", "original_macrofacet");
+    if (commonExternal != "original_macrofacet" && commonExternal != "sampled_exterior")
+        throw std::invalid_argument("unknown external policy");
+    const std::string external = conditional.value("external_policy", commonExternal);
+    if (external == "original_macrofacet") config.conditional29.externalPolicy = ExternalPolicy::OriginalMacrofacet;
+    else if (external == "sampled_exterior") config.conditional29.externalPolicy = ExternalPolicy::SampledExterior;
+    else throw std::invalid_argument("unknown conditional29 external policy");
+    if (transport.contains("hard_depth_cap") && !transport["hard_depth_cap"].is_null()) {
+        config.conditional29.hardDepthCap = transport["hard_depth_cap"].get<int>();
+        if (*config.conditional29.hardDepthCap < 1) throw std::invalid_argument("hard_depth_cap must be positive or null");
     }
+    if (transport.value("next_event_estimation", false) &&
+        std::find(config.modes.begin(), config.modes.end(), ModelMode::Conditional29) != config.modes.end())
+        throw std::invalid_argument("conditional29 NEE requires an extended gradient-state light sampler and is not implemented");
     config.beckmannMixtureWeight = transport.value("beckmann_mixture_weight", 0.5);
     config.classicPhaseProposal = transport.value("classic_phase_proposal", "uniform");
     if (config.classicPhaseProposal != "uniform" &&
@@ -144,6 +163,8 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.numeric.absoluteTolerance = numeric.at("absolute_tolerance").get<double>();
     config.numeric.maxQuadratureSubdivisions = numeric.at("max_quadrature_subdivisions").get<int>();
     config.numeric.maxRootIterations = numeric.at("max_root_iterations").get<int>();
+    config.numeric.distanceAbsoluteTolerance = numeric.value("distance_absolute_tolerance", 1e-10);
+    config.numeric.distanceRelativeTolerance = numeric.value("distance_relative_tolerance", 1e-8);
     config.numeric.allowHigherPrecisionFallback = numeric.value("higher_precision_fallback", true);
     if (numeric.value("allow_unreported_jitter", false)) {
         throw std::invalid_argument("unreported covariance jitter is intentionally unsupported");
@@ -170,9 +191,15 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     if (config.fixedFlight.curveSampleCount < 2 || config.fixedFlight.flightSampleCount < 1 ||
         config.render.width < 1 || config.render.height < 1 || config.render.samplesPerPixel < 1 ||
         config.render.flightTableCells < 4 || config.render.threadCount < 0 ||
+        config.render.rouletteStartDepth < 1 || config.numeric.maxRootIterations < 1 ||
+        config.numeric.maxQuadratureSubdivisions < 1 ||
+        !(config.numeric.distanceAbsoluteTolerance > 0.0) || !(config.numeric.distanceRelativeTolerance > 0.0) ||
         !(config.numeric.relativeTolerance > 0.0) || !(config.numeric.absoluteTolerance > 0.0)) {
         throw std::invalid_argument("invalid experiment budget or numerical tolerance");
     }
+    if (!std::isfinite(config.numeric.relativeTolerance) || !std::isfinite(config.numeric.absoluteTolerance) ||
+        !std::isfinite(config.numeric.distanceAbsoluteTolerance) || !std::isfinite(config.numeric.distanceRelativeTolerance))
+        throw std::invalid_argument("numerical tolerances must be finite");
     if (config.field.ndfFamily == NdfFamily::GGXBaseline) {
         for (ModelMode mode : config.modes) if (mode != ModelMode::Classic) {
             throw std::invalid_argument("GGX is supported only by classic mode");
@@ -205,6 +232,21 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                           {"flight_table_cells", config.render.flightTableCells},
                           {"render_threads", config.render.threadCount}};
     result["classic_phase_proposal"] = config.classicPhaseProposal;
+    result["transport"]["conditional29"] = {
+        {"sampler", "regular_tracking"}, {"optical_depth_solver", "safeguarded_newton"},
+        {"external_policy", config.conditional29.externalPolicy == ExternalPolicy::SampledExterior
+            ? "sampled_exterior" : "original_macrofacet"},
+        {"hard_depth_cap", config.conditional29.hardDepthCap
+            ? nlohmann::json(*config.conditional29.hardDepthCap) : nlohmann::json(nullptr)},
+        {"initial_integration_cells", config.render.flightTableCells}};
+    result["transport"]["classic"]["sampler"] = "tabulated_legacy";
+    result["transport"]["midpoint"]["sampler"] = "tabulated_legacy";
+    result["numeric"] = {{"relative_tolerance", config.numeric.relativeTolerance},
+        {"absolute_tolerance", config.numeric.absoluteTolerance},
+        {"distance_absolute_tolerance", config.numeric.distanceAbsoluteTolerance},
+        {"distance_relative_tolerance", config.numeric.distanceRelativeTolerance},
+        {"max_root_iterations", config.numeric.maxRootIterations},
+        {"max_quadrature_subdivisions", config.numeric.maxQuadratureSubdivisions}};
     result["rng_stream"] = "per_pixel_v1";
     std::ofstream stream(path);
     if (!stream) throw std::runtime_error("cannot write resolved config");

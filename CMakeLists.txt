@@ -54,6 +54,7 @@ add_executable(macrofacet_tests
     tests/test_macrofacet_baseline.cpp
     tests/test_flight_kernels.cpp
     tests/test_sampling.cpp
+    tests/test_regular_tracking.cpp
     tests/test_rendering_threads.cpp)
 target_link_libraries(macrofacet_tests PRIVATE macrofacet)
 

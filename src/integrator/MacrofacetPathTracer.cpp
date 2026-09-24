@@ -10,6 +10,7 @@
 #include <exception>
 #include <fstream>
 #include <limits>
+#include <sstream>
 #include <thread>
 
 namespace mf {
@@ -68,13 +69,20 @@ Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
     }
     const Point3 entry = initialRay.origin + firstInterval.entry * initialDirection;
     FlightState state = startExternalFlight(entry, initialDirection);
+    if (mode == ModelMode::Conditional29 &&
+        config.conditional29.externalPolicy == ExternalPolicy::SampledExterior)
+        state = sampleExteriorFlight(config.field, entry, initialDirection, rng, config.numeric);
     Spectrum throughput = Spectrum::Ones();
     int depth = 0;
-    for (; depth < config.render.safetyDepthCap; ++depth) {
+    for (; mode == ModelMode::Conditional29
+             ? (!config.conditional29.hardDepthCap || depth < *config.conditional29.hardDepthCap)
+             : depth < config.render.safetyDepthCap; ++depth) {
         try {
-            std::unique_ptr<FlightKernel> kernel = makeFlightKernel(mode, config.field, state);
-            const FlightSample flight = sampleTabulatedFlight(
-                *kernel, rng, config.numeric, config.render.flightTableCells);
+            std::unique_ptr<FlightKernel> kernel = makeFlightKernel(
+                mode, config.field, state, config.conditional29.externalPolicy, config.numeric);
+            const FlightSample flight = mode == ModelMode::Conditional29
+                ? sampleFlight(*kernel, rng, config.numeric, &statistics.tracking, config.render.flightTableCells)
+                : sampleTabulatedFlight(*kernel, rng, config.numeric, config.render.flightTableCells);
             if (!flight.collided) {
                 ++statistics.escapedPaths;
                 statistics.accumulatedPathDepth += depth;
@@ -97,7 +105,7 @@ Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
                 const Vector3 normal = normalizedOrThrow(gradient);
                 const Vector3 outgoing = reflectTravelDirection(state.direction, normal);
                 throughput = throughput.cwiseProduct(
-                    conductorFresnel(std::abs(state.direction.dot(normal)),
+                    conductorFresnel(-state.direction.dot(normal),
                                      config.field.conductor));
                 state = startSurfaceFlight(hit, gradient, outgoing);
             }
@@ -110,9 +118,16 @@ Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
                 }
                 throughput /= continuation;
             }
-        } catch (const NumericError&) {
+        } catch (const NumericError& error) {
             ++statistics.numericalFailures;
             statistics.accumulatedPathDepth += depth;
+            if (mode == ModelMode::Conditional29) {
+                std::ostringstream message;
+                message << "conditional29 " << toString(error.status()) << ": " << error.what()
+                        << "; depth=" << depth << "; birth=" << state.birthPosition.transpose()
+                        << "; direction=" << state.direction.transpose() << "; age=" << state.age;
+                throw NumericError(error.status(), message.str());
+            }
             return Spectrum::Zero();
         }
     }

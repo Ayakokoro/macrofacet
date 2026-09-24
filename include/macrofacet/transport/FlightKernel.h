@@ -7,8 +7,6 @@
 
 namespace mf {
 
-enum class ExternalPolicy { OriginalMacrofacet };
-
 struct HazardEvaluation {
     PositiveResult hazard;
     std::optional<double> logExteriorScreenProbability;
@@ -39,7 +37,7 @@ protected:
 
 std::unique_ptr<FlightKernel> makeFlightKernel(
     ModelMode mode, const GPSSField& field, const FlightState& state,
-    ExternalPolicy policy = ExternalPolicy::OriginalMacrofacet);
+    ExternalPolicy policy = ExternalPolicy::OriginalMacrofacet,
+    const NumericPolicy& numeric = defaultNumericPolicy());
 
 } // namespace mf
-

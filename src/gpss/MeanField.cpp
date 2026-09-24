@@ -43,5 +43,11 @@ BoundsSummary SphereMean::bounds(const Bounds3& domain) const {
     return {(closest - center_).norm() - radius_, 1.0, true};
 }
 
-} // namespace mf
+double SphereMean::valueDifference(const Point3& x, const Vector3& displacement) const {
+    const Vector3 radial = x - center_;
+    const double denominator = radial.norm() + (radial + displacement).norm();
+    if (denominator == 0.0) return 0.0;
+    return (2.0 * radial.dot(displacement) + displacement.squaredNorm()) / denominator;
+}
 
+} // namespace mf

@@ -2,6 +2,8 @@
 
 报告日期：2026-09-18
 
+更新：2026-09-24 的 conditional29 连续 regular tracking / Newton 实现见 [CONDITIONAL29_IMPLEMENTATION.md](CONDITIONAL29_IMPLEMENTATION.md)。下文分格距离采样与 External 首段的描述保留为原始实现记录，不代表当前 conditional29 的全部配置能力。
+
 ## 1. 完成状态
 
 本工程从空目录建立，已实现并编译 A（论文去相关 Macrofacet）、B（最近完整交点条件下的式 (29) hazard）、C（同一中点筛选的局部闭合）和 F27（联合条件 GP 的有限网格首次相交参考）。实现不是接口空壳；测试和本报告中的数据均来自本机实际命令。
@@ -137,4 +139,3 @@ py scripts\plot_experiments.py outputs\macrofacet_experiments
 - Generalized Gaussian 支持 SPD 梯度协方差；显式支持的奇异面积密度只有对齐的 Beckmann heightfield。其他 PSD 梯度可采样，但不冒充已有普通 NDF 密度。
 - Sphere mean 在球心按不可微输入报错。非平稳核、dielectric、完整路径历史条件、连续首次穿越 rare-event 求解和生产级优化不在当前范围。
 - 默认 64×64×256 发布渲染配置已提供但未在本次会话执行；实际图像预算和时间均按上节记录，没有把 CI 图冒充默认预算结果。
-

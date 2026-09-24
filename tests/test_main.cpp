@@ -16,6 +16,8 @@ int main() {
     catch (const std::exception& e) { context.require(false, std::string("sampling threw: ") + e.what()); }
     try { testRenderingThreads(context); }
     catch (const std::exception& e) { context.require(false, std::string("render threading threw: ") + e.what()); }
+    try { testRegularTracking(context); }
+    catch (const std::exception& e) { context.require(false, std::string("regular tracking threw: ") + e.what()); }
     std::cout << "checks=" << context.checks << " failures=" << context.failures << '\n';
     return context.failures == 0 ? 0 : 1;
 }
