@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "seed": 17429,
-  "modes": ["classic"],
+  "modes": ["conditional29"],
   "field": {
-    "mean_type": "plane",
-    "plane_normal": [0.0, 0.0, 1.0],
-    "plane_offset": 0.0,
-    "sigma": 0.05,
+    "mean_type": "sphere",
+    "sphere_center": [0.0, 0.0, 0.0],
+    "sphere_radius": 0.8,
+    "sigma": 0.09,
     "correlation_lengths": [0.25, 0.25, 0.25],
     "kernel_rotation": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
     "ndf_family": "generalized_gaussian",
-    "domain_min": [-2.0, -2.0, -0.8],
-    "domain_max": [2.0, 2.0, 0.8],
+    "domain_min": [-1.6, -1.6, -1.6],
+    "domain_max": [1.6, 1.6, 1.6],
     "outside_domain": "vacuum"
   },
   "material": {
@@ -24,14 +24,15 @@
     "external_policy": "original_macrofacet",
     "classic_sampler": "null_tracking",
     "correlated_sampler": "optical_depth",
-    "classic_phase_proposal": "paper_mixture",
+    "classic_phase_proposal": "target_vndf",
+    
     "beckmann_mixture_weight": 0.5,
     "next_event_estimation": false,
     "roulette_start_depth": 5,
     "hard_depth_cap": null
   },
   "fixed_flight": {
-    "birth_position": [0.0, 0.0, 0.0],
+    "birth_position": [0.0, 0.0, 0.8],
     "birth_gradient": [0.0, 0.0, 1.0],
     "direction": [0.7071067811865476, 0.0, 0.7071067811865476],
     "requested_maximum_age": 1.0,
@@ -59,12 +60,12 @@
     "width": 512,
     "height": 512,
     "samples_per_pixel": 4,
-    "camera_position": [1.7, -2.5, 1.4],
+    "camera_position": [2.2, -3.0, 1.7],
     "camera_target": [0.0, 0.0, 0.0],
-    "vertical_fov_degrees": 42.0,
+    "vertical_fov_degrees": 38.0,
     "environment": "directional_gradient",
     "flight_table_cells": 64,
     "linear_output_format": "pfm"
   },
-  "output_directory": "outputs/render_plane"
+  "output_directory": "outputs/render_sphere"
 }

@@ -53,6 +53,24 @@ private:
     double radius_;
 };
 
+// A solid sphere with the quarter-sector x > 0, y > 0 removed outside
+// innerRadius. Coordinates are relative to center; the inner sphere is kept.
+// evaluate() returns the exact signed Euclidean distance. At sharp edges or
+// medial-axis points its unit gradient is a deterministic one-sided choice.
+class CutawaySphereMean final : public MeanField {
+public:
+    CutawaySphereMean(Point3 center, double innerRadius, double outerRadius);
+    MeanJet evaluate(const Point3& x) const override;
+    BoundsSummary bounds(const Bounds3& domain) const override;
+    const Point3& center() const { return center_; }
+    double innerRadius() const { return innerRadius_; }
+    double outerRadius() const { return outerRadius_; }
+private:
+    Point3 center_;
+    double innerRadius_;
+    double outerRadius_;
+};
+
 class ConstantMean final : public MeanField {
 public:
     explicit ConstantMean(double value) : value_(value) {}

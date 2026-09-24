@@ -1,6 +1,8 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
+#include "macrofacet/gpss/ShaderBallMean.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -28,6 +30,38 @@ Matrix3 matrix3(const nlohmann::json& value) {
 
 nlohmann::json toArray(const Vector3& v) { return {v.x(), v.y(), v.z()}; }
 
+void requirePositiveFinite(double value, const char* name) {
+    if (!(value > 0.0) || !std::isfinite(value)) {
+        throw std::invalid_argument(std::string(name) + " must be a finite positive number");
+    }
+}
+
+SquaredExponentialKernel roughnessKernel(double sigma, double roughness, NdfFamily family) {
+    requirePositiveFinite(sigma, "sigma");
+    requirePositiveFinite(roughness, "material roughness");
+    if (family != NdfFamily::GeneralizedGaussian) {
+        throw std::invalid_argument("material roughness requires the generalized_gaussian NDF family");
+    }
+    const double valueVariance = sigma * sigma;
+    const double gradientVariance = roughness * roughness;
+    const double correlationLength = sigma / roughness;
+    if (!(valueVariance > 0.0) || !std::isfinite(valueVariance) ||
+        !(gradientVariance > 0.0) || !std::isfinite(gradientVariance) ||
+        !(correlationLength > 0.0) || !std::isfinite(correlationLength)) {
+        throw std::invalid_argument(
+            "roughness and sigma must yield finite positive variances and correlation length");
+    }
+    const double inverseLength = roughness / sigma;
+    const double precision = inverseLength * inverseLength;
+    const double actualGradientVariance = valueVariance * precision;
+    if (!(precision > 0.0) || !std::isfinite(precision) ||
+        !(actualGradientVariance > 0.0) || !std::isfinite(actualGradientVariance)) {
+        throw std::invalid_argument(
+            "roughness / sigma must yield finite positive kernel precision and gradient covariance");
+    }
+    return SquaredExponentialKernel(sigma, precision * Matrix3::Identity());
+}
+
 } // namespace
 
 GPSSField buildDefaultField() {
@@ -44,6 +78,29 @@ std::string modelModeName(ModelMode mode) {
     if (mode == ModelMode::Classic) return "classic";
     if (mode == ModelMode::Conditional29) return "conditional29";
     return "midpoint";
+}
+
+void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
+                         std::optional<double> roughness, bool preserveSlope) {
+    if (sigma) requirePositiveFinite(*sigma, "sigma");
+    // Explicit CLI roughness replaces either config roughness or legacy
+    // anisotropic lengths. Config roughness also stays fixed as sigma changes.
+    const std::optional<double> effectiveRoughness = roughness ? roughness : config.materialRoughness;
+    if (effectiveRoughness) {
+        config.field.kernel = roughnessKernel(sigma.value_or(config.field.kernel.sigma()),
+                                             *effectiveRoughness, config.field.ndfFamily);
+        config.materialRoughness = effectiveRoughness;
+        config.field.validate();
+    } else if (sigma) {
+        const double oldSigma = config.field.kernel.sigma();
+        Matrix3 precision = config.field.kernel.precision();
+        if (preserveSlope) {
+            const double scale = oldSigma / *sigma;
+            precision *= scale * scale;
+        }
+        config.field.kernel = SquaredExponentialKernel(*sigma, precision);
+        config.field.validate();
+    }
 }
 
 ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
@@ -73,26 +130,53 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     } else if (meanType == "sphere") {
         mean = std::make_shared<SphereMean>(vector3(fieldJson.at("sphere_center")),
                                             fieldJson.at("sphere_radius").get<double>());
+    } else if (meanType == "cutaway_sphere") {
+        mean = std::make_shared<CutawaySphereMean>(vector3(fieldJson.at("sphere_center")),
+            fieldJson.at("inner_radius").get<double>(),
+            fieldJson.at("outer_radius").get<double>());
+    } else if (meanType == "shader_ball") {
+        mean = std::make_shared<ShaderBallMean>(vector3(fieldJson.at("sphere_center")),
+            fieldJson.at("sphere_radius").get<double>(),
+            vector3(fieldJson.at("groove_axis")),
+            fieldJson.at("groove_radius").get<double>());
     } else if (meanType == "constant") {
         mean = std::make_shared<ConstantMean>(fieldJson.at("constant_value").get<double>());
     } else {
         throw std::invalid_argument("unknown mean type: " + meanType);
     }
     const double sigma = fieldJson.at("sigma").get<double>();
-    Vector3 lengths;
-    const auto& lengthJson = fieldJson.at("correlation_lengths");
-    for (int i = 0; i < 3; ++i) {
-        lengths[i] = lengthJson[i].is_null() ? std::numeric_limits<double>::infinity()
-                                             : lengthJson[i].get<double>();
-    }
-    const Matrix3 rotation = matrix3(fieldJson.at("kernel_rotation"));
     const std::string family = fieldJson.at("ndf_family").get<std::string>();
     NdfFamily ndfFamily;
     if (family == "generalized_gaussian") ndfFamily = NdfFamily::GeneralizedGaussian;
     else if (family == "beckmann_limit") ndfFamily = NdfFamily::BeckmannLimit;
     else if (family == "ggx") ndfFamily = NdfFamily::GGXBaseline;
     else throw std::invalid_argument("unknown NDF family: " + family);
-    config.field = {mean, SquaredExponentialKernel::fromCorrelationLengths(sigma, lengths, rotation),
+    const auto& material = root.at("material");
+    SquaredExponentialKernel kernel;
+    if (material.contains("roughness")) {
+        if (fieldJson.contains("correlation_lengths")) {
+            throw std::invalid_argument("material.roughness and field.correlation_lengths are mutually exclusive");
+        }
+        if (!material.at("roughness").is_number()) {
+            throw std::invalid_argument("material.roughness must be a finite positive number");
+        }
+        config.materialRoughness = material.at("roughness").get<double>();
+        kernel = roughnessKernel(sigma, *config.materialRoughness, ndfFamily);
+    } else {
+        Vector3 lengths;
+        const auto& lengthJson = fieldJson.at("correlation_lengths");
+        if (!lengthJson.is_array() || lengthJson.size() != 3) {
+            throw std::invalid_argument("correlation_lengths must contain three entries");
+        }
+        for (int i = 0; i < 3; ++i) {
+            lengths[i] = lengthJson[i].is_null() ? std::numeric_limits<double>::infinity()
+                                                 : lengthJson[i].get<double>();
+        }
+        const Matrix3 rotation = fieldJson.contains("kernel_rotation") ?
+            matrix3(fieldJson.at("kernel_rotation")) : Matrix3::Identity();
+        kernel = SquaredExponentialKernel::fromCorrelationLengths(sigma, lengths, rotation);
+    }
+    config.field = {mean, kernel,
                     {vector3(fieldJson.at("domain_min")), vector3(fieldJson.at("domain_max"))},
                     {}, ndfFamily, Vector2(0.5, 0.5)};
     if (fieldJson.contains("ggx_alpha")) {
@@ -100,7 +184,6 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
                                         fieldJson["ggx_alpha"][1].get<double>());
     }
 
-    const auto& material = root.at("material");
     config.field.conductor.eta = vector3(material.at("eta_rgb"));
     config.field.conductor.k = vector3(material.at("k_rgb"));
     config.field.conductor.forceUnitFresnel =
@@ -215,6 +298,19 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
     result["schema_version"] = config.schemaVersion;
     result["seed"] = config.seed;
     for (ModelMode mode : config.modes) result["modes"].push_back(modelModeName(mode));
+    if (const auto* cutaway = dynamic_cast<const CutawaySphereMean*>(config.field.mean.get())) {
+        result["field"] = {{"mean_type", "cutaway_sphere"},
+                           {"sphere_center", toArray(cutaway->center())},
+                           {"inner_radius", cutaway->innerRadius()},
+                           {"outer_radius", cutaway->outerRadius()},
+                           {"removed_wedge", "local_x > 0 && local_y > 0 outside inner sphere"}};
+    } else if (const auto* shaderBall = dynamic_cast<const ShaderBallMean*>(config.field.mean.get())) {
+        result["field"] = {{"mean_type", "shader_ball"},
+                           {"sphere_center", toArray(shaderBall->center())},
+                           {"sphere_radius", shaderBall->radius()},
+                           {"groove_axis", toArray(shaderBall->grooveAxis())},
+                           {"groove_radius", shaderBall->grooveRadius()}};
+    }
     result["derived"] = {
         {"sigma", config.field.kernel.sigma()},
         {"kernel_precision", {{config.field.kernel.precision()(0,0), config.field.kernel.precision()(0,1), config.field.kernel.precision()(0,2)},
@@ -223,6 +319,18 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         {"domain_min", toArray(config.field.activeDomain.minimum)},
         {"domain_max", toArray(config.field.activeDomain.maximum)},
         {"fixed_direction", toArray(config.fixedFlight.direction)}};
+    const double fieldVariance = config.field.kernel.sigma() * config.field.kernel.sigma();
+    const Vector3 gradientStddev =
+        (fieldVariance * config.field.kernel.precision().diagonal()).cwiseMax(0.0).cwiseSqrt();
+    result["derived"]["gradient_stddev_xyz"] = toArray(gradientStddev);
+    if (config.materialRoughness) {
+        result["material"]["roughness"] = *config.materialRoughness;
+        result["material"]["roughness_definition"] =
+            "standard deviation of each isotropic generalized_gaussian gradient component; "
+            "Sigma_G = roughness^2 I; correlation length = sigma / roughness";
+        result["derived"]["isotropic_correlation_length"] =
+            config.field.kernel.sigma() / *config.materialRoughness;
+    }
     result["budgets"] = {{"flight_samples", config.fixedFlight.flightSampleCount},
                           {"reference_path_samples", config.reference.pathSampleCount},
                           {"formula_samples", config.reference.formulaSampleCount},

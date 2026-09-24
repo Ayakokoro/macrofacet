@@ -16,6 +16,7 @@ struct CommandLine {
     std::string command;
     std::filesystem::path configPath;
     std::optional<double> sigma;
+    std::optional<double> roughness;
     std::optional<std::filesystem::path> outputDirectory;
     std::optional<int> samplesPerPixel;
     std::optional<int> flightTableCells;
@@ -43,6 +44,15 @@ int parseNonnegativeInteger(const std::string& option, const std::string& value)
     return result;
 }
 
+double parsePositiveNumber(const std::string& option, const std::string& value) {
+    std::size_t consumed = 0;
+    const double result = std::stod(value, &consumed);
+    if (consumed != value.size() || !(result > 0.0) || !std::isfinite(result)) {
+        throw std::invalid_argument(option + " must be a finite positive number");
+    }
+    return result;
+}
+
 CommandLine parseCommandLine(int argc, char** argv) {
     if (argc < 2) throw std::invalid_argument("missing command");
     CommandLine options;
@@ -57,12 +67,9 @@ CommandLine parseCommandLine(int argc, char** argv) {
         const std::string value = argv[++i];
         if (argument == "--config") options.configPath = value;
         else if (argument == "--sigma") {
-            std::size_t consumed = 0;
-            const double sigma = std::stod(value, &consumed);
-            if (consumed != value.size() || !(sigma > 0.0) || !std::isfinite(sigma)) {
-                throw std::invalid_argument("--sigma must be a finite positive number");
-            }
-            options.sigma = sigma;
+            options.sigma = parsePositiveNumber(argument, value);
+        } else if (argument == "--roughness") {
+            options.roughness = parsePositiveNumber(argument, value);
         } else if (argument == "--output") options.outputDirectory = value;
         else if (argument == "--spp") {
             options.samplesPerPixel = parsePositiveInteger(argument, value);
@@ -91,7 +98,7 @@ CommandLine parseCommandLine(int argc, char** argv) {
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "usage: macrofacet_experiments {curves|gp-reference|render|all} "
-                     "--config <file> [--sigma <value>] [--preserve-slope] "
+                     "--config <file> [--sigma <value>] [--roughness <value>] [--preserve-slope] "
                      "[--width <pixels>] [--height <pixels>] [--spp <count>] "
                      "[--flight-cells <count>] [--threads <count>] [--output <directory>]\n"
                      "  --flight-cells: initial integration panels for conditional29; legacy table cells otherwise\n";
@@ -101,16 +108,7 @@ int main(int argc, char** argv) {
         const CommandLine options = parseCommandLine(argc, argv);
         const std::string& command = options.command;
         mf::ExperimentConfig config = mf::loadExperimentConfig(options.configPath);
-        if (options.sigma) {
-            const double oldSigma = config.field.kernel.sigma();
-            mf::Matrix3 precision = config.field.kernel.precision();
-            if (options.preserveSlope) {
-                const double scale = oldSigma / *options.sigma;
-                precision *= scale * scale;
-            }
-            config.field.kernel = mf::SquaredExponentialKernel(*options.sigma, precision);
-            config.field.validate();
-        }
+        mf::applyFieldOverrides(config, options.sigma, options.roughness, options.preserveSlope);
         if (options.outputDirectory) config.outputDirectory = *options.outputDirectory;
         if (options.samplesPerPixel) config.render.samplesPerPixel = *options.samplesPerPixel;
         if (options.flightTableCells) config.render.flightTableCells = *options.flightTableCells;

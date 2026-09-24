@@ -15,6 +15,7 @@ add_library(macrofacet
     src/mathutility/BivariateGaussian.cpp
     src/mathutility/GaussianScreenIntegral.cpp
     src/gpss/MeanField.cpp
+    src/gpss/ShaderBallMean.cpp
     src/gpss/SquaredExponentialKernel.cpp
     src/gpss/GPSSField.cpp
     src/gpss/ConditionedRay.cpp
@@ -55,6 +56,9 @@ add_executable(macrofacet_tests
     tests/test_flight_kernels.cpp
     tests/test_sampling.cpp
     tests/test_regular_tracking.cpp
+    tests/test_cutaway_mean.cpp
+    tests/test_shader_ball_mean.cpp
+    tests/test_material_roughness.cpp
     tests/test_rendering_threads.cpp)
 target_link_libraries(macrofacet_tests PRIVATE macrofacet)
 
