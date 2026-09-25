@@ -36,8 +36,8 @@ void testGpssStatistics(TestContext& context) {
     context.near(origin.mean[1], direction.z(), 1e-14, "conditioned origin slope");
     context.near(origin.covariance.norm(), 0.0, 1e-15, "conditioned origin covariance");
     for (double age : {1e-8, 1e-6, 1e-4, 0.02, 1.0}) {
-        const Gaussian<3> yfk = ray.midpointValueSlope(age);
-        Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eig(yfk.covariance);
+        const Gaussian<2> yfk = ray.endpointValueSlope(age);
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> eig(yfk.covariance);
         context.require(eig.eigenvalues().minCoeff() >= -1e-12,
                         "near-origin conditional covariance remains PSD");
         context.require(yfk.mean.allFinite() && yfk.covariance.allFinite(),

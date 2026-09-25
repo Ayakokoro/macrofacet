@@ -1,4 +1,5 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
+#include "macrofacet/fields/MeanFactory.h"
 #include "macrofacet/gpss/ShaderBallMean.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -68,27 +69,54 @@ GPSSField buildDefaultField() {
     GPSSField field{
         std::make_shared<PlaneMean>(Vector3::UnitZ(), 0.0),
         SquaredExponentialKernel::fromCorrelationLengths(0.1, Vector3(0.2, 0.2, 0.2)),
-        {Point3(-2.0, -2.0, -0.3), Point3(2.0, 2.0, 0.3)},
-        {}, NdfFamily::GeneralizedGaussian, Vector2(0.5, 0.5)};
+        {Point3(-2.0, -2.0, -0.3), Point3(2.0, 2.0, 0.3)}};
     field.validate();
     return field;
 }
 
 std::string modelModeName(ModelMode mode) {
     if (mode == ModelMode::Classic) return "classic";
-    if (mode == ModelMode::Conditional29) return "conditional29";
-    return "midpoint";
+    return "conditional29";
+}
+
+void requireNanoVdbField(const ExperimentConfig& config) {
+    if (!config.mediumDensity || !config.field.mean ||
+        std::string(config.field.mean->typeName()) != "nanovdb" ||
+        !(config.field.mean->voxelSizeHint() > 0.0)) {
+        throw std::invalid_argument("experiment tracing requires a prepared NanoVDB field");
+    }
 }
 
 void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
                          std::optional<double> roughness, bool preserveSlope) {
     if (sigma) requirePositiveFinite(*sigma, "sigma");
+    // The CLI is the other way a sigma can reach a baked field, so it obeys the
+    // same rule as the config key: sigma is part of the data, not a knob.
+    // Sweeping it would reinterpret the band (+-3 sigma) and the background
+    // (+6 sigma) at the wrong scale and render a plausible but wrong surface.
+    // An agreeing value stays allowed -- it keeps a sweep script that passes one
+    // sigma to every config working -- but the field's own spelling wins, so the
+    // override really is the no-op it claims to be rather than a swap to a value
+    // one float32 ulp away.
+    if (sigma && config.field.mean) {
+        if (const std::optional<double> baked = config.field.mean->intrinsicSigma()) {
+            // Compared as float32 because that is the precision a baked field
+            // holds sigma at, so it is the finest distinction that means
+            // anything here; anything further apart is a different bake.
+            if (static_cast<float>(*baked) != static_cast<float>(*sigma)) {
+                throw std::invalid_argument(
+                    "--sigma (" + std::to_string(*sigma) + ") disagrees with the baked field (" +
+                    std::to_string(*baked) + "); re-bake instead of overriding");
+            }
+            sigma = *baked;
+        }
+    }
     // Explicit CLI roughness replaces either config roughness or legacy
     // anisotropic lengths. Config roughness also stays fixed as sigma changes.
     const std::optional<double> effectiveRoughness = roughness ? roughness : config.materialRoughness;
     if (effectiveRoughness) {
         config.field.kernel = roughnessKernel(sigma.value_or(config.field.kernel.sigma()),
-                                             *effectiveRoughness, config.field.ndfFamily);
+                                             *effectiveRoughness, config.material.ndfFamily);
         config.materialRoughness = effectiveRoughness;
         config.field.validate();
     } else if (sigma) {
@@ -117,41 +145,45 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         const std::string mode = modeValue.get<std::string>();
         if (mode == "classic") config.modes.push_back(ModelMode::Classic);
         else if (mode == "conditional29") config.modes.push_back(ModelMode::Conditional29);
-        else if (mode == "midpoint") config.modes.push_back(ModelMode::Midpoint);
         else throw std::invalid_argument("unknown model mode: " + mode);
     }
 
     const auto& fieldJson = root.at("field");
-    const std::string meanType = fieldJson.at("mean_type").get<std::string>();
-    MeanFieldPtr mean;
-    if (meanType == "plane") {
-        mean = std::make_shared<PlaneMean>(vector3(fieldJson.at("plane_normal")),
-                                           fieldJson.at("plane_offset").get<double>());
-    } else if (meanType == "sphere") {
-        mean = std::make_shared<SphereMean>(vector3(fieldJson.at("sphere_center")),
-                                            fieldJson.at("sphere_radius").get<double>());
-    } else if (meanType == "cutaway_sphere") {
-        mean = std::make_shared<CutawaySphereMean>(vector3(fieldJson.at("sphere_center")),
-            fieldJson.at("inner_radius").get<double>(),
-            fieldJson.at("outer_radius").get<double>());
-    } else if (meanType == "shader_ball") {
-        mean = std::make_shared<ShaderBallMean>(vector3(fieldJson.at("sphere_center")),
-            fieldJson.at("sphere_radius").get<double>(),
-            vector3(fieldJson.at("groove_axis")),
-            fieldJson.at("groove_radius").get<double>());
-    } else if (meanType == "constant") {
-        mean = std::make_shared<ConstantMean>(fieldJson.at("constant_value").get<double>());
-    } else {
-        throw std::invalid_argument("unknown mean type: " + meanType);
+    config.sourceFieldSpec = fieldJson.dump();
+    if (fieldJson.contains("bake_voxel_size")) {
+        config.bakeVoxelSize = fieldJson.at("bake_voxel_size").get<double>();
+        requirePositiveFinite(*config.bakeVoxelSize, "field.bake_voxel_size");
     }
-    const double sigma = fieldJson.at("sigma").get<double>();
-    const std::string family = fieldJson.at("ndf_family").get<std::string>();
+    // The registry owns the procedural types (plane / sphere / cutaway_sphere /
+    // shader_ball / constant) and macrofacet_field adds "nanovdb" at startup.
+    // Keeping the lookup here means the core library never learns about NanoVDB.
+    MeanBuildResult built = buildMeanFromJson(fieldJson);
+    // The field schema splits in two here, and the split is the field's to
+    // declare (MeanField::intrinsicSigma), not the config's to guess: this
+    // library never learns which mean types are baked. A procedural mean is
+    // scale-free, so "sigma" is required and is the only source. A baked mean
+    // froze sigma into its own data, so "sigma" may be omitted and the file
+    // supplies it -- and when it is given anyway the type's builder has already
+    // cross-checked it against the file (NanoVdbMean::open rejects a
+    // disagreement) rather than letting the config silently win.
+    const std::optional<double> fromField = built.mean->intrinsicSigma();
+    if (!fieldJson.contains("sigma") && !fromField) {
+        throw std::invalid_argument(
+            std::string("field.sigma is required for mean_type '") + built.mean->typeName() +
+            "', which fixes no scale of its own");
+    }
+    const double sigma = fieldJson.contains("sigma")
+        ? fieldJson.at("sigma").get<double>() : *fromField;
+    const auto& material = root.at("material");
+    // Accept the historical field key while writing new configs under material.
+    const std::string family = material.contains("ndf_family")
+        ? material.at("ndf_family").get<std::string>()
+        : fieldJson.at("ndf_family").get<std::string>();
     NdfFamily ndfFamily;
     if (family == "generalized_gaussian") ndfFamily = NdfFamily::GeneralizedGaussian;
     else if (family == "beckmann_limit") ndfFamily = NdfFamily::BeckmannLimit;
     else if (family == "ggx") ndfFamily = NdfFamily::GGXBaseline;
     else throw std::invalid_argument("unknown NDF family: " + family);
-    const auto& material = root.at("material");
     SquaredExponentialKernel kernel;
     if (material.contains("roughness")) {
         if (fieldJson.contains("correlation_lengths")) {
@@ -176,17 +208,30 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
             matrix3(fieldJson.at("kernel_rotation")) : Matrix3::Identity();
         kernel = SquaredExponentialKernel::fromCorrelationLengths(sigma, lengths, rotation);
     }
-    config.field = {mean, kernel,
-                    {vector3(fieldJson.at("domain_min")), vector3(fieldJson.at("domain_max"))},
-                    {}, ndfFamily, Vector2(0.5, 0.5)};
-    if (fieldJson.contains("ggx_alpha")) {
-        config.field.ggxAlpha = Vector2(fieldJson["ggx_alpha"][0].get<double>(),
-                                        fieldJson["ggx_alpha"][1].get<double>());
+    // A baked grid fixes its own spatial coverage, just as it fixes sigma.
+    // Legacy domain_min/domain_max entries are ignored for baked fields so a
+    // config cannot silently clip a newly imported mesh at an old bbox.
+    Bounds3 domain;
+    if (built.activeDomain) {
+        domain = *built.activeDomain;
+    } else {
+        if (!fieldJson.contains("domain_min") || !fieldJson.contains("domain_max"))
+            throw std::invalid_argument("procedural field requires domain_min and domain_max");
+        domain = {vector3(fieldJson.at("domain_min")),
+                  vector3(fieldJson.at("domain_max"))};
     }
+    config.field = {std::move(built.mean), kernel, domain};
+    config.material.ndfFamily = ndfFamily;
+    const auto alpha = material.contains("ggx_alpha") ? material.at("ggx_alpha") :
+        fieldJson.value("ggx_alpha", nlohmann::json());
+    if (!alpha.is_null()) {
+        config.material.ggxAlpha = Vector2(alpha[0].get<double>(), alpha[1].get<double>());
+    }
+    config.material.alphaField = std::move(built.alphaField);
 
-    config.field.conductor.eta = vector3(material.at("eta_rgb"));
-    config.field.conductor.k = vector3(material.at("k_rgb"));
-    config.field.conductor.forceUnitFresnel =
+    config.material.conductor.eta = vector3(material.at("eta_rgb"));
+    config.material.conductor.k = vector3(material.at("k_rgb"));
+    config.material.conductor.forceUnitFresnel =
         material.value("force_unit_fresnel_for_energy_test", false);
     const auto& transport = root.at("transport");
     const auto conditional = transport.value("conditional29", nlohmann::json::object());
@@ -218,7 +263,7 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         throw std::invalid_argument("unknown classic phase proposal");
     }
     if (config.classicPhaseProposal == "target_vndf" &&
-        config.field.ndfFamily == NdfFamily::GGXBaseline) {
+        config.material.ndfFamily == NdfFamily::GGXBaseline) {
         throw std::invalid_argument("target_vndf requires a Gaussian NDF");
     }
     config.render.rouletteStartDepth = transport.value("roulette_start_depth", 5);
@@ -238,7 +283,6 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         reference.at("formula_checkpoint_counts").get<std::vector<int>>();
     config.reference.formulaAgeCount = reference.at("formula_age_count").get<int>();
     config.reference.formulaSampleCount = reference.at("formula_sample_count").get<int>();
-    config.reference.confidenceLevel = reference.at("confidence_level").get<double>();
     config.reference.maxGridPoints = reference.at("max_grid_points").get<int>();
 
     const auto& numeric = root.at("numeric");
@@ -248,7 +292,6 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.numeric.maxRootIterations = numeric.at("max_root_iterations").get<int>();
     config.numeric.distanceAbsoluteTolerance = numeric.value("distance_absolute_tolerance", 1e-10);
     config.numeric.distanceRelativeTolerance = numeric.value("distance_relative_tolerance", 1e-8);
-    config.numeric.allowHigherPrecisionFallback = numeric.value("higher_precision_fallback", true);
     if (numeric.value("allow_unreported_jitter", false)) {
         throw std::invalid_argument("unreported covariance jitter is intentionally unsupported");
     }
@@ -268,9 +311,6 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     if (config.fixedFlight.direction.dot(config.fixedFlight.birthGradient) <= 0.0) {
         throw std::invalid_argument("fixed-flight direction must depart along the exterior gradient");
     }
-    if (!config.field.activeDomain.contains(config.fixedFlight.birthPosition, 1e-12)) {
-        throw std::invalid_argument("fixed-flight birth lies outside the active domain");
-    }
     if (config.fixedFlight.curveSampleCount < 2 || config.fixedFlight.flightSampleCount < 1 ||
         config.render.width < 1 || config.render.height < 1 || config.render.samplesPerPixel < 1 ||
         config.render.flightTableCells < 4 || config.render.threadCount < 0 ||
@@ -283,12 +323,13 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     if (!std::isfinite(config.numeric.relativeTolerance) || !std::isfinite(config.numeric.absoluteTolerance) ||
         !std::isfinite(config.numeric.distanceAbsoluteTolerance) || !std::isfinite(config.numeric.distanceRelativeTolerance))
         throw std::invalid_argument("numerical tolerances must be finite");
-    if (config.field.ndfFamily == NdfFamily::GGXBaseline) {
+    if (config.material.ndfFamily == NdfFamily::GGXBaseline) {
         for (ModelMode mode : config.modes) if (mode != ModelMode::Classic) {
             throw std::invalid_argument("GGX is supported only by classic mode");
         }
     }
     config.field.validate();
+    config.material.validate(config.field.activeDomain);
     defaultNumericPolicy() = config.numeric;
     return config;
 }
@@ -310,6 +351,10 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                            {"sphere_radius", shaderBall->radius()},
                            {"groove_axis", toArray(shaderBall->grooveAxis())},
                            {"groove_radius", shaderBall->grooveRadius()}};
+    } else if (const auto written = writeMeanToJson(*config.field.mean)) {
+        // Types the core library does not know (a baked NanoVDB grid, say)
+        // describe themselves through the same registry that built them.
+        result["field"] = *written;
     }
     result["derived"] = {
         {"sigma", config.field.kernel.sigma()},
@@ -323,6 +368,11 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
     const Vector3 gradientStddev =
         (fieldVariance * config.field.kernel.precision().diagonal()).cwiseMax(0.0).cwiseSqrt();
     result["derived"]["gradient_stddev_xyz"] = toArray(gradientStddev);
+    result["material"]["ndf_family"] = config.material.ndfFamily == NdfFamily::GGXBaseline
+        ? "ggx" : config.material.ndfFamily == NdfFamily::BeckmannLimit
+            ? "beckmann_limit" : "generalized_gaussian";
+    result["material"]["ggx_alpha"] =
+        {config.material.ggxAlpha.x(), config.material.ggxAlpha.y()};
     if (config.materialRoughness) {
         result["material"]["roughness"] = *config.materialRoughness;
         result["material"]["roughness_definition"] =
@@ -347,8 +397,8 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         {"hard_depth_cap", config.conditional29.hardDepthCap
             ? nlohmann::json(*config.conditional29.hardDepthCap) : nlohmann::json(nullptr)},
         {"initial_integration_cells", config.render.flightTableCells}};
-    result["transport"]["classic"]["sampler"] = "tabulated_legacy";
-    result["transport"]["midpoint"]["sampler"] = "tabulated_legacy";
+    result["transport"]["classic"]["sampler"] = config.mediumSurfaceBand
+        ? "dda_null_tracking" : "regular_tracking";
     result["numeric"] = {{"relative_tolerance", config.numeric.relativeTolerance},
         {"absolute_tolerance", config.numeric.absoluteTolerance},
         {"distance_absolute_tolerance", config.numeric.distanceAbsoluteTolerance},

@@ -71,7 +71,6 @@ struct NumericPolicy {
     int maxQuadratureSubdivisions = 4096;
     int maxRootIterations = 128;
     double covarianceRoundoffMultiplier = 128.0;
-    bool allowHigherPrecisionFallback = true;
     // Distance and dimensionless optical depth have separate error budgets.
     double distanceAbsoluteTolerance = 1e-10;
     double distanceRelativeTolerance = 1e-8;

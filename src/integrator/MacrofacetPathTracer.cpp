@@ -3,6 +3,7 @@
 #include "macrofacet/transport/CollisionGradientSampler.h"
 #include "macrofacet/transport/FlightKernel.h"
 #include "macrofacet/transport/OpticalDepthSampler.h"
+#include "macrofacet/transport/NarrowBandMedium.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -20,32 +21,6 @@ Spectrum environmentEmission(const Vector3& direction, const std::string& enviro
     if (environment == "unit_white") return Spectrum::Ones();
     const double up = 0.5 * (normalizedOrThrow(direction).z() + 1.0);
     return Spectrum(0.15 + 0.85 * up, 0.2 + 0.7 * up, 0.35 + 0.55 * up);
-}
-
-FlightSample sampleTabulatedFlight(const FlightKernel& kernel, Random& rng,
-                                   const NumericPolicy& policy, int cells) {
-    const double a = kernel.currentAge();
-    const double b = kernel.maximumAgeInDomain();
-    const double target = -std::log1p(-rng.openUniform01());
-    double lowerAge = a;
-    double accumulatedDepth = 0.0;
-    for (int i = 1; i <= cells; ++i) {
-        const double upperAge = i == cells ? b : a + (b - a) * i / cells;
-        const PositiveResult interval = integrateHazard(kernel, lowerAge, upperAge, policy);
-        const double intervalDepth = interval.status == NumericStatus::ExactZero
-            ? 0.0 : interval.value;
-        const double nextDepth = accumulatedDepth + intervalDepth;
-        if (target < nextDepth) {
-            const double fraction = intervalDepth > 0.0
-                ? (target - accumulatedDepth) / intervalDepth : 0.0;
-            const double age = lowerAge + fraction * (upperAge - lowerAge);
-            const double piecewiseHazard = intervalDepth / (upperAge - lowerAge);
-            return {true, age, -target, std::log(piecewiseHazard) - target, std::nullopt};
-        }
-        accumulatedDepth = nextDepth;
-        lowerAge = upperAge;
-    }
-    return {false, b, -accumulatedDepth, std::nullopt, std::exp(-accumulatedDepth)};
 }
 
 int resolveWorkerCount(int requested, int rows) {
@@ -68,21 +43,21 @@ Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
         return environmentEmission(initialDirection, config.render.environment);
     }
     const Point3 entry = initialRay.origin + firstInterval.entry * initialDirection;
-    FlightState state = startExternalFlight(entry, initialDirection);
-    if (mode == ModelMode::Conditional29 &&
-        config.conditional29.externalPolicy == ExternalPolicy::SampledExterior)
-        state = sampleExteriorFlight(config.field, entry, initialDirection, rng, config.numeric);
+    const NarrowBandMedium medium(config.field, config.material, config.mediumDensity,
+                                  config.mediumSurfaceBand, config.densityMajorantGrid);
+    FlightState state = medium.startExternal(mode, config.conditional29.externalPolicy,
+                                              entry, initialDirection, rng, config.numeric);
     Spectrum throughput = Spectrum::Ones();
     int depth = 0;
     for (; mode == ModelMode::Conditional29
              ? (!config.conditional29.hardDepthCap || depth < *config.conditional29.hardDepthCap)
              : depth < config.render.safetyDepthCap; ++depth) {
         try {
-            std::unique_ptr<FlightKernel> kernel = makeFlightKernel(
-                mode, config.field, state, config.conditional29.externalPolicy, config.numeric);
-            const FlightSample flight = mode == ModelMode::Conditional29
-                ? sampleFlight(*kernel, rng, config.numeric, &statistics.tracking, config.render.flightTableCells)
-                : sampleTabulatedFlight(*kernel, rng, config.numeric, config.render.flightTableCells);
+            std::unique_ptr<FlightKernel> kernel = medium.beginFlight(
+                mode, state, config.conditional29.externalPolicy, config.numeric);
+            const FlightSample flight = medium.sample(*kernel, rng, config.numeric,
+                                                       &statistics.tracking,
+                                                       config.render.flightTableCells);
             if (!flight.collided) {
                 ++statistics.escapedPaths;
                 statistics.accumulatedPathDepth += depth;
@@ -95,7 +70,7 @@ Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
                 const double mixture = config.classicPhaseProposal == "paper_mixture"
                     ? config.beckmannMixtureWeight : 0.0;
                 const bool useTargetVndf = config.classicPhaseProposal == "target_vndf";
-                ConductorPhase phase(config.field, hit, mixture, useTargetVndf);
+                ConductorPhase phase(config.field, config.material, hit, mixture, useTargetVndf);
                 const PhaseSample sample = phase.samplePhase(state.direction, rng);
                 throughput = throughput.cwiseProduct(sample.throughputWeight);
                 state = startClassicCollisionFlight(hit, sample.direction);
@@ -106,7 +81,7 @@ Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
                 const Vector3 outgoing = reflectTravelDirection(state.direction, normal);
                 throughput = throughput.cwiseProduct(
                     conductorFresnel(-state.direction.dot(normal),
-                                     config.field.conductor));
+                                     config.material.conductor));
                 state = startSurfaceFlight(hit, gradient, outgoing);
             }
             if (depth + 1 >= config.render.rouletteStartDepth) {

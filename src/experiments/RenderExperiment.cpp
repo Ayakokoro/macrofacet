@@ -9,6 +9,7 @@
 namespace mf {
 
 void runRenderExperiments(const ExperimentConfig& config) {
+    requireNanoVdbField(config);
     std::filesystem::create_directories(config.outputDirectory);
     std::ofstream summary(config.outputDirectory / "render_summary.csv");
     summary << "mode,environment,width,height,spp,seconds,paths,real_collisions,escaped_paths,"
@@ -22,7 +23,7 @@ void runRenderExperiments(const ExperimentConfig& config) {
             ExperimentConfig renderConfig = config;
             renderConfig.render.environment = environment;
             if (environment == "unit_white") {
-                renderConfig.field.conductor.forceUnitFresnel = true;
+                renderConfig.material.conductor.forceUnitFresnel = true;
             }
             const auto start = std::chrono::steady_clock::now();
             const RenderedImage image = renderAnalyticScene(mode, renderConfig);

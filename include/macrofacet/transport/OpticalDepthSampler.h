@@ -47,6 +47,7 @@ PositiveResult integrateHazard(const FlightKernel& kernel, double a, double b,
                                const NumericPolicy& policy = defaultNumericPolicy());
 FlightSample sampleFlight(const FlightKernel& kernel, Random& rng,
                           const NumericPolicy& policy = defaultNumericPolicy(),
-                          TrackingDiagnostics* diagnostics = nullptr, int initialCells = 16);
+                          TrackingDiagnostics* diagnostics = nullptr, int initialCells = 16,
+                          double maximumAge = -1.0);
 
 } // namespace mf

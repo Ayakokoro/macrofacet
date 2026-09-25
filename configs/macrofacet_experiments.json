@@ -1,34 +1,23 @@
 {
   "schema_version": 1,
   "seed": 17429,
-  "modes": ["classic", "conditional29", "midpoint"],
+  "modes": ["classic", "conditional29"],
   "field": {
     "mean_type": "plane",
     "plane_normal": [0.0, 0.0, 1.0],
     "plane_offset": 0.0,
     "sigma": 0.1,
     "correlation_lengths": [0.2, 0.2, 0.2],
-    "kernel_rotation": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-    "ndf_family": "generalized_gaussian",
     "domain_min": [-2.0, -2.0, -0.3],
-    "domain_max": [2.0, 2.0, 0.3],
-    "outside_domain": "vacuum"
+    "domain_max": [2.0, 2.0, 0.3]
   },
   "material": {
-    "type": "conductor",
+    "ndf_family": "generalized_gaussian",
     "eta_rgb": [0.2, 0.9, 1.1],
-    "k_rgb": [3.9, 2.5, 2.2],
-    "force_unit_fresnel_for_energy_test": false
+    "k_rgb": [3.9, 2.5, 2.2]
   },
   "transport": {
-    "external_policy": "original_macrofacet",
-    "classic_sampler": "null_tracking",
-    "correlated_sampler": "optical_depth",
-    "classic_phase_proposal": "uniform",
-    "beckmann_mixture_weight": 0.5,
-    "next_event_estimation": false,
-    "roulette_start_depth": 5,
-    "hard_depth_cap": null
+    "roulette_start_depth": 5
   },
   "fixed_flight": {
     "birth_position": [0.0, 0.0, 0.0],
@@ -44,16 +33,13 @@
     "formula_checkpoint_counts": [0, 1, 4, 8, 16, 32],
     "formula_age_count": 12,
     "formula_sample_count": 8192,
-    "confidence_level": 0.95,
     "max_grid_points": 512
   },
   "numeric": {
     "relative_tolerance": 1e-7,
     "absolute_tolerance": 1e-10,
     "max_quadrature_subdivisions": 4096,
-    "max_root_iterations": 128,
-    "higher_precision_fallback": true,
-    "allow_unreported_jitter": false
+    "max_root_iterations": 128
   },
   "render": {
     "width": 64,
@@ -62,9 +48,7 @@
     "camera_position": [0.0, 0.0, 1.0],
     "camera_target": [0.0, 0.0, 0.0],
     "vertical_fov_degrees": 45.0,
-    "environment": "directional_gradient",
-    "linear_output_format": "pfm"
+    "environment": "directional_gradient"
   },
   "output_directory": "outputs/macrofacet_experiments"
 }
-

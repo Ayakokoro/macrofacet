@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "seed": 17429,
+  "modes": ["classic"],
+  "field": {
+    "mean_type": "nanovdb",
+    "grid_file": "outputs/fields/shader_ball.nvdb",
+    "use_alpha_grid": true,
+    "correlation_lengths": [0.0044, 0.0044, 0.0044],
+    "kernel_rotation": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    "outside_domain": "vacuum"
+  },
+  "material": {
+    "ndf_family": "generalized_gaussian",
+    "type": "conductor",
+    "eta_rgb": [0.2, 0.9, 1.1],
+    "k_rgb": [3.9, 2.5, 2.2],
+    "force_unit_fresnel_for_energy_test": false
+  },
+  "transport": {
+    "classic_phase_proposal": "target_vndf",
+    "beckmann_mixture_weight": 0.9,
+    "next_event_estimation": false,
+    "roulette_start_depth": 8,
+    "hard_depth_cap": null
+  },
+  "fixed_flight": {
+    "birth_position": [0.0, 0.0, 0.082],
+    "birth_gradient": [0.0, 0.0, 1.0],
+    "direction": [0.0, 0.0, 1.0],
+    "requested_maximum_age": 0.006,
+    "curve_sample_count": 17,
+    "flight_sample_count": 1000
+  },
+  "reference": {
+    "path_sample_count": 256,
+    "nested_grid_intervals": [16, 32],
+    "formula_checkpoint_counts": [0, 4],
+    "formula_age_count": 4,
+    "formula_sample_count": 512,
+    "confidence_level": 0.95,
+    "max_grid_points": 64
+  },
+  "numeric": {
+    "relative_tolerance": 1e-6,
+    "absolute_tolerance": 1e-9,
+    "max_quadrature_subdivisions": 16384,
+    "max_root_iterations": 128,
+    "higher_precision_fallback": true,
+    "allow_unreported_jitter": false,
+    "distance_absolute_tolerance": 1e-10,
+    "distance_relative_tolerance": 1e-08
+  },
+  "render": {
+    "width": 256,
+    "height": 256,
+    "samples_per_pixel": 64,
+    "camera_position": [0.134, -0.178, 0.153],
+    "camera_target": [0.0, 0.0, 0.041],
+    "vertical_fov_degrees": 32.0,
+    "environment": "directional_gradient",
+    "flight_table_cells": 256,
+    "linear_output_format": "pfm"
+  },
+  "output_directory": "outputs/render_shader_ball_nanovdb"
+}

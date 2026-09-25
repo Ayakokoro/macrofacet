@@ -1,13 +1,15 @@
 # Macrofacet 实验配置参数参考
 
-本文逐项说明 `ExperimentConfig` 及其子结构中的每个参数：JSON 键名、结构体字段、默认值、对应的数学含义与消费点。
+本文说明当前配置中的模型和数值参数。NVDB 烘焙、覆盖范围及两个 mode 的
+实际 tracing 路径统一见 [NVDB 场与 tracing](NVDB_TRACING.md)。
 
 数据流为：
 
 ```
-configs/*.json  ──loadExperimentConfig──▶  ExperimentConfig  ──▶  run{Curves|ConditionalGPReference|RenderExperiments}
-                                       │
-                                       └──writeResolvedConfig──▶  resolved_config.json（派生量 + 实际预算）
+configs/*.json ──loadExperimentConfig──▶ ExperimentConfig
+                  ──CLI overrides──▶ prepareNanoVdbField ──▶ 三个实验入口
+                                          │
+                                          └──writeResolvedConfig──▶ resolved_config.json
 ```
 
 结构体定义位于 `include/macrofacet/experiments/ExperimentConfig.h`，解析与写回位于 `src/experiments/ExperimentConfig.cpp`。
@@ -97,7 +99,7 @@ $$
 |---|---|---|---|
 | `schema_version` | `schemaVersion` | `1` | 必须为 1，否则抛异常 |
 | `seed` | `seed` | `17429` | 所有随机流的根种子 |
-| `modes` | `modes` | `{Classic, Conditional29, Midpoint}` | 字符串 `classic` / `conditional29` / `midpoint` |
+| `modes` | `modes` | `{Classic, Conditional29}` | 字符串 `classic` / `conditional29` |
 | `field` | `field` | — | 见 §2 |
 | `fixed_flight` | `fixedFlight` | — | 见 §3 |
 | `reference` | `reference` | — | 见 §4 |
@@ -138,11 +140,10 @@ $$
 |---|---|
 | `classic` | 论文的去相关 Macrofacet 模型（A） |
 | `conditional29` | 保留最近真实交点的 $F=0$ 与完整梯度，用式 (29) 的 crossing/exterior 比率作 hazard（B） |
-| `midpoint` | 在同一条件统计中对分子分母同时加入一个中点正值筛选（C） |
 
 ---
 
-## 2. `GPSSField`（JSON `field` 与 `material` 块）
+## 2. `GPSSField`（JSON `field` 块）与 `MaterialConfig`（JSON `material` 块）
 
 ### 2.1 `mean` — 均值场
 
@@ -153,6 +154,14 @@ $$
 | `plane` | `plane_normal` $n$、`plane_offset` | $m(x) = n \cdot x - \text{offset}$（$n$ 在构造时归一化） |
 | `sphere` | `sphere_center` $c$、`sphere_radius` $r$ | $m(x) = \lVert x - c \rVert - r$ |
 | `constant` | `constant_value` | $m(x) = c$ |
+| `cutaway_sphere` | `sphere_center`、`inner_radius`、`outer_radius` | 带扇形切口的球体精确 SDF |
+| `shader_ball` | `sphere_center`、`sphere_radius`、`groove_axis`、`groove_radius` | 材质预览球精确 SDF |
+| `nanovdb` | `grid_file`，可选 `use_alpha_grid` | 读取三线性 `sdf` 与 `density`；`density` 的零背景定义窄带外真空 |
+
+解析类型在实验入口前烘焙为 NVDB。可选 `field.bake_voxel_size` 显式指定
+体素边长；默认从 $\sigma/2$ 开始，受 800 万体素预算约束。NVDB 输入的
+`sigma` 由文件提供；配置中若也指定，则必须一致。`use_alpha_grid` 默认为
+`true`，只对现成 NVDB 输入生效。完整规则见 [场管线](NVDB_TRACING.md)。
 
 配置中 $n = (0,0,1)$、`offset = 0`，故 $m(x) = z$：表面是 $z$ 平面，$F > 0$ 侧是外部（真空），$F < 0$ 侧是物质。
 
@@ -211,6 +220,11 @@ $$
 即 `--preserve-slope` **恰好保持 $\sigma^2 P$ 不变**。含义是：只改变高度方差 $\sigma^2$，而把由梯度分布决定的 NDF 与坡度统计完全冻结。这是一个干净的消融开关。
 
 ### 2.3 `activeDomain`（`domain_min` / `domain_max`）
+
+解析场必须在配置中给出 `domain_min` / `domain_max`，以确定自动 NVDB 烘焙范围。
+直接读入 `mean_type: "nanovdb"` 时，追踪域从文件的 `sdf` 与 `density` 网格
+自动计算，包含一个体素的插值余量；旧配置中的显式 domain 会被忽略。
+最终范围写入 `resolved_config.json` 的 `derived.domain_min/max`。
 
 包围盒 $[\text{min}, \text{max}]$。射线求交使用 slab 法（`Bounds3::intersect`）：
 
@@ -287,7 +301,7 @@ $$
 = \sigma_K\, \varphi\!\left(\frac{\mu_K}{\sigma_K}\right) + \mu_K\, \Phi\!\left(-\frac{\mu_K}{\sigma_K}\right)
 $$
 
-`ggx_alpha` 仅在 JSON 含该键时读取，用于 GGX 家族。
+`material.ndf_family` 选择 Classic 的 NDF；`material.ggx_alpha` 仅在 JSON 含该键时读取，用于 GGX 家族。旧配置中的 `field.ndf_family` 与 `field.ggx_alpha` 仍可读取。`GPSSField` 只保存均值场、GP 核和追踪域；GGX 不属于 GP 先验，仍仅支持 Classic 模式。
 
 ---
 
@@ -297,7 +311,7 @@ $$
 
 | JSON | 字段 | 默认 | 含义 |
 |---|---|---|---|
-| `birth_position` | `birthPosition` | $(0,0,0)$ | 出生点 $x_0$，须落在 activeDomain 内（容差 $10^{-12}$） |
+| `birth_position` | `birthPosition` | $(0,0,0)$ | 曲线或 GP 参考实验的出生点 $x_0$，运行这些实验时须落在 activeDomain 内（容差 $10^{-12}$）；单独 render 不使用它 |
 | `birth_gradient` | `birthGradient` | $(0,0,1)$ | $g_0 = \nabla F(x_0)$，条件化的观测量 |
 | `direction` | `direction` | $(0.98481, 0, 0.17365)$ | 归一化后的 $w$ |
 | `requested_maximum_age` | `requestedMaximumAge` | `1.5` | 请求的最大飞行距离 |
@@ -337,7 +351,7 @@ $$
 
 ### 3.3 直方图自洽性检验
 
-抽取 $M$ 个指数变量，用累积光学深度做单调反演：
+用两个 mode 各自的 hazard 抽取 $M$ 个实际飞行距离，再按年龄网格分箱：
 
 $$
 \text{target} = -\ln(1-u), \quad u \sim U(0,1)
@@ -348,7 +362,7 @@ $$
 $$
 
 $$
-\text{target} \in \left[H_i, H_{i+1}\right) \;\Rightarrow\; \text{落入第 } i \text{ 格}
+\text{sampled age} \in \left[t_i, t_{i+1}\right) \;\Rightarrow\; \text{落入第 } i \text{ 格}
 $$
 
 期望质量由 §0.2 的恒等式给出：
@@ -382,7 +396,6 @@ $$
 | `formula_checkpoint_counts` | `formulaCheckpointCounts` | $\{0,1,4,8,16,32\}$ | 检查点个数 $K$ |
 | `formula_age_count` | `formulaAgeCount` | `12` | 目标年龄个数 $A$ |
 | `formula_sample_count` | `formulaSampleCount` | `8192` | 公式估计的蒙特卡洛条数 $N$ |
-| `confidence_level` | `confidenceLevel` | `0.95` | **解析后全项目无人使用**，见 §7 |
 | `max_grid_points` | `maxGridPoints` | `512` | 过滤 $M > \text{maxGridPoints}$ 的网格 |
 
 ### 4.1 蛮力参考：`sampleConditionalGPFirstHit`
@@ -480,7 +493,7 @@ $$
 | `camera_target` | `cameraTarget` | $(0,0,0)$ | 注视点 |
 | `vertical_fov_degrees` | `verticalFovDegrees` | `45` | 垂直视场角（度） |
 | `environment` | `environment` | `directional_gradient` | 环境光模型 |
-| `flight_table_cells` | `flightTableCells` | `48` | 分段 hazard 表格数，$\ge 4$ |
+| `flight_table_cells` | `flightTableCells` | `48` | 光学深度积分的初始分段提示，$\ge 4$；保留旧键名 |
 | `roulette_start_depth` | `rouletteStartDepth` | `5` | 俄罗斯轮盘起始深度 |
 | `thread_count` | `threadCount` | `0` | $0$ 表示硬件并发 |
 | — | `safetyDepthCap` | `64` | **JSON 无法设置**，见 §7 |
@@ -525,34 +538,12 @@ $$
 
 `unit_white` 会强制 `forceUnitFresnel = true` 以运行白炉测试：理想情况下每个像素应正好收敛到 1，任何偏差即能量泄漏，`render_summary.csv` 的各统计列用于定位泄漏来源。
 
-### 5.3 `flightTableCells` — 分段 hazard 表
+### 5.3 `flightTableCells` — 初始积分分段
 
-渲染不使用解析的 $T(t)$，而是把区间 $[a, b] = [\text{currentAge}, \text{maxAge}]$ 切成 $C$ 格：
-
-$$
-\text{边界}_i = a + (b - a)\frac{i}{C}, \qquad
-\Delta H_i = \int_{\text{cell}_i} h(s)\,ds
-$$
-
-抽样时先取指数目标，再找累积深度首次超过目标的格子：
-
-$$
-\text{target} = -\ln(1-u),
-\qquad
-\text{fraction} = \frac{\text{target} - \text{acc}}{\Delta H_i}
-$$
-
-$$
-\text{age} = \text{lower} + \text{fraction} \cdot \left(\text{upper} - \text{lower}\right)
-$$
-
-$$
-\log p_{\text{distance}} = \log\left(\frac{\Delta H_i}{\Delta t_i}\right) - \text{target}
-$$
-
-即**返回的是分段常数 hazard**。若 $\text{target}$ 超过总深度则逃逸，返回生存率 $e^{-\text{总深度}}$。
-
-这是明确的渲染近似：抽样与返回 PDF 使用同一张表，因此两者自洽、无偏；但表格本身的离散化误差随 $C$ 减小而增大。曲线与数学测试仍直接积分原 hazard，不经过这张表。
+conditional29 和全域 Classic 对各自的 hazard 做自适应积分与光学深度反演；窄带 Classic 使用 DDA 与 null tracking。此参数是
+初始分段提示；NVDB 插值单元边界也会加入积分节点。它不再控制一张
+分段常数 hazard 表，格内线性位置仅用于 Newton 初值。距离与 PDF 由
+积分后的实际 hazard 计算；细节见 [tracing 说明](NVDB_TRACING.md)。
 
 ### 5.4 `classicPhaseProposal` 与 `beckmannMixtureWeight`
 
@@ -571,9 +562,14 @@ q_{\text{uniform}}(n) =
 $$
 
 $$
-q_{\text{beckmann}}(n) = \frac{\cos\theta\, D(n)}{\mathbb{E}\left[(-w \cdot \nabla F)_+\right]}
-\qquad \text{（可见法线分布）}
+s=\operatorname{sign}(-\omega\cdot\hat n),\qquad
+n_l=sB^\top n,\qquad \omega_l=sB^\top\omega,
+\qquad
+q_{\text{beckmann}}(n\mid\omega) =
+\frac{(-\omega_l\cdot n_l)_+\,D_B(n_l)}{A_B(\omega_l)}
 $$
+
+每个碰撞点以 $\hat n=\nabla m/\|\nabla m\|$ 构建局部切平面；$B$ 的列是两个切向主轴和 $\hat n$。将材质梯度协方差投影到该平面并对角化。若两个切向特征值为 $\lambda_x,\lambda_y$，则传入 PBRT Beckmann 可见斜率采样器的参数为 $\alpha_i=\sqrt{2\lambda_i}/\|\nabla m\|$。光线方向、采样法线和 PDF 使用同一局部坐标变换；$s$ 处理从背面入射时的 PBRT 翻转。$\nabla m=0$ 时切平面没有唯一方向，使用确定性的 $+Z$ 备选轴。$D_B$ 是提议分布，目标 NDF 仍由 `material.ndf_family` 决定。
 
 | 值 | 行为 |
 |---|---|
@@ -589,8 +585,10 @@ $$
 
 重要性采样权重：
 
+其中 $q_{\text{target}}(n\mid\omega)=(-\omega\cdot n)_+D_{\text{target}}(n)/A_{\text{target}}(\omega)$。
+
 $$
-\text{throughputWeight} = \frac{F \cdot D(n)}{q(n)}
+\text{throughputWeight} = \frac{F \cdot q_{\text{target}}(n\mid\omega)}{q(n\mid\omega)}
 \;\equiv\; \frac{f(\omega, \omega')}{q(\omega')}
 $$
 
@@ -618,7 +616,10 @@ $$
 
 `clamp` 的上下限保证既不会必然存活，也几乎不会必然终止。
 
-`safetyDepthCap = 64` 为硬上限，超出后计入 `safetyCapTerminations` 并返回 0。该字段**无法从 JSON 配置**（见 §7）。
+classic 使用 `safetyDepthCap = 64` 硬上限；超出后计入
+`safetyCapTerminations` 并返回 0。conditional29 使用
+`transport.hard_depth_cap`：`null` 表示没有固定层数上限，正整数表示
+预览用硬上限，触发时同样计入截断统计。
 
 ### 5.6 `threadCount`
 
@@ -644,7 +645,8 @@ $$
 | `absolute_tolerance` | `absoluteTolerance` | `1e-10` | 绝对容差 |
 | `max_quadrature_subdivisions` | `maxQuadratureSubdivisions` | `4096` | 最大二分细分次数 |
 | `max_root_iterations` | `maxRootIterations` | `128` | 单调反演最大迭代次数 |
-| `higher_precision_fallback` | `allowHigherPrecisionFallback` | `true` | 精度兜底开关 |
+| `distance_absolute_tolerance` | `distanceAbsoluteTolerance` | `1e-10` | 求根的绝对距离容差 |
+| `distance_relative_tolerance` | `distanceRelativeTolerance` | `1e-8` | 求根的相对距离容差 |
 | `allow_unreported_jitter` | — | — | 传 `true` **直接抛异常** |
 | — | `covarianceRoundoffMultiplier` | `128` | **JSON 无法设置**，恒为 128 |
 
@@ -678,30 +680,28 @@ $$
 
 ---
 
-## 7. 解析但不生效 / 完全不读取的参数
+## 7. 兼容字段与当前限制
 
-以下条目在配置文件中存在或存在于结构体中，但不影响任何行为。请确认是有意保留还是实现遗漏。
+以下字段在旧配置中常见，实际行为以此表为准：
 
 | 位置 | 情况 |
 |---|---|
-| `confidence_level` | 解析进 `config.reference.confidenceLevel`，**全项目无人读取**。规格书 `macrofacet_implementation_spec.md` 第 1692 行要求 "attach confidence intervals and zero-count diagnostics"，但实现只输出 $\pm \mathrm{SE}$ 与 `unresolved_rare_event` 状态 |
-| `hard_depth_cap` | JSON 中存在该键，但代码从不解析，故 `safetyDepthCap` 恒为默认值 64 |
+| `confidence_level` | 已从配置和数据结构移除；估计器仍输出 $\pm\mathrm{SE}$ 与稀有事件状态 |
+| `transport.hard_depth_cap` | conditional29 会读取正整数或 `null`；`null` 时不设硬深度上限。classic 仍使用固定 `safetyDepthCap = 64` |
 | `covarianceRoundoffMultiplier` | 无对应 JSON 键，恒为 128 |
 | `outside_domain` | 不读取，行为固定为真空 |
-| `classic_sampler` | 不读取 |
-| `correlated_sampler` | 不读取 |
-| `next_event_estimation` | 不读取 |
+| `classic_sampler` | 兼容旧配置但不读取；窄带实际为 `dda_null_tracking`，全域实际为 `regular_tracking` |
+| `correlated_sampler` | 仅作为 `transport.conditional29.sampler` 的后备值 |
+| `next_event_estimation` | conditional29 配置为 `true` 时明确报错；当前无 NEE |
+| `higher_precision_fallback` | 已从配置和数据结构移除；当前重试只收紧 double 容差 |
 | `material.type` | 不读取（只读取 eta / kappa / force_unit_fresnel） |
 | `linear_output_format` | 不读取，恒定输出 PFM |
 | `plane_normal` | 非单位向量会被静默归一化，不报错 |
 
-此外，`GPSSField::pointPrior` 结构体带默认值，但从配置加载路径始终传入 `{}`，即恒为
-
-$$
-\text{meanF} = 0,\quad \text{varianceF} = 0,\quad \text{meanG} = 0,\quad \text{covarianceG} = 0
-$$
-
-真正的 $\text{meanG}$ 与 $\text{covarianceG}$ 由 `pointPrior(x)` 在运行时依据条件射线计算。
+`GPSSField::pointPrior(x)` 从 NVDB 均值与核计算
+$(m(x),\sigma^2,\nabla m(x),\sigma^2P)$；`MaterialConfig::materialNdf(field, x)` 可再从 `alpha`
+网格覆盖材质协方差。两者服务不同用途，参见
+[tracing 说明](NVDB_TRACING.md)。
 
 ---
 

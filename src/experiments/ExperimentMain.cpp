@@ -2,6 +2,10 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/experiments/FlightCurveExperiment.h"
 #include "macrofacet/experiments/RenderExperiment.h"
+#if defined(MACROFACET_HAS_FIELDS)
+#include "macrofacet/fields/NanoVdbMean.h"
+#include "macrofacet/fields/PrepareNanoVdbField.h"
+#endif
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -96,12 +100,19 @@ CommandLine parseCommandLine(int argc, char** argv) {
 } // namespace
 
 int main(int argc, char** argv) {
+#if defined(MACROFACET_HAS_FIELDS)
+    // Makes `"mean_type": "nanovdb"` resolvable for every command below. An
+    // explicit call, not a static initializer: nothing in this binary references
+    // macrofacet_field's translation units, so the linker would drop a static
+    // registration object. Idempotent, and cheap enough to do unconditionally.
+    mf::registerNanoVdbFieldTypes();
+#endif
     if (argc < 2) {
         std::cerr << "usage: macrofacet_experiments {curves|gp-reference|render|all} "
                      "--config <file> [--sigma <value>] [--roughness <value>] [--preserve-slope] "
                      "[--width <pixels>] [--height <pixels>] [--spp <count>] "
                      "[--flight-cells <count>] [--threads <count>] [--output <directory>]\n"
-                     "  --flight-cells: initial integration panels for conditional29; legacy table cells otherwise\n";
+                     "  --flight-cells: initial integration panels for both modes\n";
         return 2;
     }
     try {
@@ -115,6 +126,11 @@ int main(int argc, char** argv) {
         if (options.width) config.render.width = *options.width;
         if (options.height) config.render.height = *options.height;
         if (options.threadCount) config.render.threadCount = *options.threadCount;
+#if defined(MACROFACET_HAS_FIELDS)
+        mf::prepareNanoVdbField(config);
+#else
+        throw std::runtime_error("tracing requires MACROFACET_BUILD_FIELDS=ON and a NanoVDB field");
+#endif
         std::filesystem::create_directories(config.outputDirectory);
         mf::writeResolvedConfig(config, config.outputDirectory / "resolved_config.json");
         if (command == "curves" || command == "all") mf::runFlightCurves(config);

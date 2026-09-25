@@ -22,6 +22,7 @@ bool sameStatistics(const mf::RenderStatistics& a, const mf::RenderStatistics& b
 
 class ThrowingMean final : public mf::MeanField {
 public:
+    const char* typeName() const override { return "throwing_test_stub"; }
     mf::MeanJet evaluate(const mf::Point3&) const override {
         throw std::runtime_error("intentional worker failure");
     }
@@ -43,9 +44,8 @@ void testRenderingThreads(TestContext& context) {
     config.render.environment = "directional_gradient";
     config.conditional29.externalPolicy = ExternalPolicy::SampledExterior;
 
-    for (ModelMode mode : std::array<ModelMode, 3>{ModelMode::Classic,
-                                                    ModelMode::Conditional29,
-                                                    ModelMode::Midpoint}) {
+    for (ModelMode mode : std::array<ModelMode, 2>{ModelMode::Classic,
+                                                    ModelMode::Conditional29}) {
         config.render.threadCount = 1;
         const RenderedImage serial = renderAnalyticScene(mode, config);
         config.render.threadCount = 3;

@@ -7,7 +7,8 @@ namespace mf {
 class Conditional29FlightKernel final : public FlightKernel {
 public:
     Conditional29FlightKernel(const GPSSField& field, const FlightState& state,
-                              const NumericPolicy& policy = defaultNumericPolicy());
+                             const NumericPolicy& policy = defaultNumericPolicy(),
+                             ScalarFieldPtr density = nullptr);
     HazardEvaluation evaluate(double age) const override;
     HitStatistics hitStatistics(double age) const override;
     ModelMode mode() const override { return ModelMode::Conditional29; }
@@ -15,6 +16,7 @@ public:
 private:
     ConditionedRay ray_;
     NumericPolicy policy_;
+    ScalarFieldPtr density_;
 };
 
 } // namespace mf

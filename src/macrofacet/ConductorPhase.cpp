@@ -1,4 +1,5 @@
 #include "macrofacet/macrofacet/ConductorPhase.h"
+#include "macrofacet/macrofacet/BeckmannVisibleSampler.h"
 #include "macrofacet/macrofacet/GaussianNdf.h"
 #include "macrofacet/macrofacet/GgxHeightfield.h"
 #include "macrofacet/transport/CollisionGradientSampler.h"
@@ -24,29 +25,31 @@ Spectrum conductorFresnel(double cosTheta, const ConductorParameters& material) 
     return result;
 }
 
-ConductorPhase::ConductorPhase(const GPSSField& field, Point3 position,
+ConductorPhase::ConductorPhase(const GPSSField& field, const MaterialConfig& material, Point3 position,
                                double beckmannMixtureWeight, bool useTargetVndf)
-    : field_(field), position_(std::move(position)), mixtureWeight_(beckmannMixtureWeight),
-      useTargetVndf_(useTargetVndf) {
+    : material_(material), position_(std::move(position)), mixtureWeight_(beckmannMixtureWeight),
+      useTargetVndf_(useTargetVndf), targetPrior_(material.materialNdf(field, position_)),
+      targetAlpha_(material.ggxAlphaAt(position_)) {
     if (!(mixtureWeight_ >= 0.0 && mixtureWeight_ < 1.0)) {
         throw std::invalid_argument("Beckmann mixture weight must lie in [0,1)");
+    }
+    if (!useTargetVndf_ && mixtureWeight_ > 0.0) {
+        beckmannProposal_.emplace(targetPrior_.meanG, targetPrior_.covarianceG);
     }
 }
 
 double ConductorPhase::targetD(const Vector3& n) const {
-    if (field_.ndfFamily == NdfFamily::GGXBaseline) {
-        return GgxHeightfield(field_.ggxAlpha.x(), field_.ggxAlpha.y()).evaluateD(n).value;
+    if (material_.ndfFamily == NdfFamily::GGXBaseline) {
+        return GgxHeightfield(targetAlpha_.x(), targetAlpha_.y()).evaluateD(n).value;
     }
-    const PointPrior prior = field_.pointPrior(position_);
-    return GaussianNdf(prior.meanG, prior.covarianceG).evaluateD(n).value;
+    return GaussianNdf(targetPrior_.meanG, targetPrior_.covarianceG).evaluateD(n).value;
 }
 
 double ConductorPhase::targetArea(const Vector3& w) const {
-    if (field_.ndfFamily == NdfFamily::GGXBaseline) {
-        return GgxHeightfield(field_.ggxAlpha.x(), field_.ggxAlpha.y()).projectedArea(w).value;
+    if (material_.ndfFamily == NdfFamily::GGXBaseline) {
+        return GgxHeightfield(targetAlpha_.x(), targetAlpha_.y()).projectedArea(w).value;
     }
-    const PointPrior prior = field_.pointPrior(position_);
-    return GaussianNdf(prior.meanG, prior.covarianceG).projectedArea(w).value;
+    return GaussianNdf(targetPrior_.meanG, targetPrior_.covarianceG).projectedArea(w).value;
 }
 
 double ConductorPhase::targetVisiblePdf(const Vector3& n, const Vector3& w) const {
@@ -66,25 +69,20 @@ Vector3 ConductorPhase::sampleUniformFacing(const Vector3& w, Random& rng) const
 }
 
 Vector3 ConductorPhase::sampleBeckmann(const Vector3& w, Random& rng) const {
-    const double sigma = field_.kernel.sigma();
-    const Matrix3 covariance = sigma * sigma * field_.kernel.precision();
-    Gaussian<3> proposal;
-    proposal.mean = Vector3::UnitZ();
-    proposal.covariance.setZero();
-    proposal.covariance(0, 0) = covariance(0, 0);
-    proposal.covariance(1, 1) = covariance(1, 1);
-    return normalizedOrThrow(sampleFluxWeightedGradient(proposal, w, rng));
+    return beckmannProposal_->sample(w, rng);
 }
 
 Vector3 ConductorPhase::sampleTargetVisible(const Vector3& w, Random& rng) const {
-    if (field_.ndfFamily == NdfFamily::GGXBaseline) {
+    if (material_.ndfFamily == NdfFamily::GGXBaseline) {
         throw NumericError(NumericStatus::UnsupportedDegenerateNdf,
                            "target VNDF proposal requires a Gaussian NDF");
     }
-    const PointPrior prior = field_.pointPrior(position_);
+    // The target VNDF is the material NDF, so this proposal is exact and the
+    // MIS weight collapses; targetPrior_ is the same distribution targetD and
+    // targetArea use.
     Gaussian<3> gradient;
-    gradient.mean = prior.meanG;
-    gradient.covariance = prior.covarianceG;
+    gradient.mean = targetPrior_.meanG;
+    gradient.covariance = targetPrior_.covarianceG;
     return normalizedOrThrow(sampleFluxWeightedGradient(gradient, w, rng));
 }
 
@@ -92,11 +90,8 @@ double ConductorPhase::proposalNormalPdf(const Vector3& n, const Vector3& w,
                                          double mixtureWeight) const {
     if (useTargetVndf_) return targetVisiblePdf(n, w);
     const double uniform = -normalizedOrThrow(w).dot(n) > 0.0 ? 1.0 / (2.0 * kPi) : 0.0;
-    const double sigma = field_.kernel.sigma();
-    const Matrix3 covariance = sigma * sigma * field_.kernel.precision();
-    GaussianNdf beckmann(Vector3::UnitZ(),
-                         (Vector3(covariance(0, 0), covariance(1, 1), 0.0)).asDiagonal());
-    const double beckmannPdf = beckmann.visibleNormalPdf(n, w);
+    if (mixtureWeight == 0.0) return uniform;
+    const double beckmannPdf = beckmannProposal_->pdf(n, w);
     return mixtureWeight * beckmannPdf + (1.0 - mixtureWeight) * uniform;
 }
 
@@ -108,7 +103,7 @@ Spectrum ConductorPhase::evaluateEnergy(const Vector3& w, const Vector3& wNew) c
     const double cosine = std::abs(w.dot(n));
     const double area = targetArea(w);
     if (!(cosine > 0.0) || !(area > 0.0)) return Spectrum::Zero();
-    return conductorFresnel(cosine, field_.conductor) * (targetD(n) / (4.0 * area));
+    return conductorFresnel(cosine, material_.conductor) * (targetD(n) / (4.0 * area));
 }
 
 double ConductorPhase::evaluateSamplingPdf(const Vector3& w, const Vector3& wNew) const {
@@ -135,7 +130,7 @@ PhaseSample ConductorPhase::samplePhase(const Vector3& w, Random& rng) const {
     }
     const double cosine = std::abs(w.dot(n));
     const Vector3 outgoing = reflectTravelDirection(w, n);
-    const Spectrum fresnel = conductorFresnel(cosine, field_.conductor);
+    const Spectrum fresnel = conductorFresnel(cosine, material_.conductor);
     return {outgoing, fresnel * (target / (4.0 * cosine)), qn / (4.0 * cosine),
             fresnel * (target / qn), n};
 }

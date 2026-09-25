@@ -1,3 +1,0 @@
-mode,environment,width,height,spp,seconds,paths,real_collisions,escaped_paths,roulette_terminations,safety_cap_terminations,numerical_failures,mean_path_depth,hazard_evaluations,quadrature_intervals,newton_iterations,bisection_steps,maximum_optical_residual,maximum_integration_error
-conditional29,unit_white,16,16,64,4.6967492000000002,16384,20602,16375,9,0,0,1.2574462890625,42996692,2853825,56463,47,3.1245154019643451e-07,2.7896632278493231e-10
-conditional29,directional_gradient,16,16,64,5.2387141000000002,16384,20624,16346,38,0,0,1.2587890625,42981180,2852775,56582,47,3.1245154019643451e-07,2.7896632278493231e-10

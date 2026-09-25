@@ -7,10 +7,11 @@
 namespace mf {
 
 Conditional29FlightKernel::Conditional29FlightKernel(const GPSSField& field,
-                                                     const FlightState& state, const NumericPolicy& policy)
+                                                     const FlightState& state, const NumericPolicy& policy,
+                                                     ScalarFieldPtr density)
     : FlightKernel(field, state),
       ray_(field, state.birthPosition, state.birthValue, state.birthGradient, state.direction, policy),
-      policy_(policy) {
+      policy_(policy), density_(std::move(density)) {
     if (!(state.direction.dot(field.kernel.precision() * state.direction) > 0.0)) {
         throw NumericError(NumericStatus::UnsupportedSingularFlight,
                            "conditional29 requires nonzero kernel precision along the ray");
@@ -22,6 +23,13 @@ HazardEvaluation Conditional29FlightKernel::evaluate(double age) const {
         throw std::out_of_range("conditional flight age lies outside its domain interval");
     }
     if (age == 0.0) return {exactZero(), 0.0, -std::numeric_limits<double>::infinity()};
+    if (density_) {
+        const double density = density_->sample(state_.birthPosition + age * state_.direction);
+        if (!(density >= 0.0) || !std::isfinite(density)) {
+            throw NumericError(NumericStatus::InvalidInput, "invalid baked density");
+        }
+        if (density == 0.0) return {exactZero(), std::nullopt, std::nullopt};
+    }
     const Gaussian<2> fk = ray_.endpointValueSlope(age);
     const double varianceF = fk.covariance(0, 0);
     if (!(varianceF > 0.0)) {
@@ -47,7 +55,7 @@ HazardEvaluation Conditional29FlightKernel::evaluate(double age) const {
 HitStatistics Conditional29FlightKernel::hitStatistics(double age) const {
     if (!(age > 0.0 && age >= currentAge() && age <= maximumAgeInDomain()))
         throw std::out_of_range("invalid conditional collision age");
-    return {ray_.gradientGivenEndpointZero(age), std::nullopt};
+    return {ray_.gradientGivenEndpointZero(age)};
 }
 
 } // namespace mf

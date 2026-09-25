@@ -24,6 +24,10 @@ int main() {
     catch (const std::exception& e) { context.require(false, std::string("shader ball mean threw: ") + e.what()); }
     try { testMaterialRoughness(context); }
     catch (const std::exception& e) { context.require(false, std::string("material roughness threw: ") + e.what()); }
+#if defined(MACROFACET_TEST_FIELDS)
+    try { testNanoVdbField(context); }
+    catch (const std::exception& e) { context.require(false, std::string("nanovdb field threw: ") + e.what()); }
+#endif
     std::cout << "checks=" << context.checks << " failures=" << context.failures << '\n';
     return context.failures == 0 ? 0 : 1;
 }

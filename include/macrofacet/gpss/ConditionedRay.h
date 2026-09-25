@@ -14,11 +14,9 @@ public:
                    const NumericPolicy& policy = defaultNumericPolicy());
 
     Gaussian<2> endpointValueSlope(double t) const;
-    Gaussian<3> midpointValueSlope(double t) const;
     Gaussian<4> endpointValueGradient(double t) const;
     Gaussian<1> slopeGivenEndpointZero(double t) const;
     Gaussian<3> gradientGivenEndpointZero(double t) const;
-    Gaussian<5> midpointValueGradient(double t) const;
     DynamicGaussian valuesAt(const std::vector<double>& ages) const;
     DynamicGaussian checkpointValuesAndEndpointSlope(
         const std::vector<double>& interiorAges, double t) const;

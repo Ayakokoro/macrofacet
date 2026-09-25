@@ -1,8 +1,10 @@
 #pragma once
 
 #include "macrofacet/gpss/GPSSField.h"
+#include "macrofacet/macrofacet/MaterialConfig.h"
 #include "macrofacet/mathutility/NumericPolicy.h"
 #include "macrofacet/transport/FlightState.h"
+#include "macrofacet/transport/DensityMajorantGrid.h"
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -26,7 +28,6 @@ struct ReferenceConfig {
     std::vector<int> formulaCheckpointCounts{0, 1, 4, 8, 16, 32};
     int formulaAgeCount = 12;
     int formulaSampleCount = 8192;
-    double confidenceLevel = 0.95;
     int maxGridPoints = 512;
 };
 
@@ -52,8 +53,16 @@ struct Conditional29TransportConfig {
 struct ExperimentConfig {
     int schemaVersion = 1;
     std::uint64_t seed = 17429;
-    std::vector<ModelMode> modes{ModelMode::Classic, ModelMode::Conditional29, ModelMode::Midpoint};
+    std::vector<ModelMode> modes{ModelMode::Classic, ModelMode::Conditional29};
     GPSSField field;
+    // Baked density defines the transport band; null is for core-only analytic tests.
+    ScalarFieldPtr mediumDensity;
+    bool mediumSurfaceBand = false;
+    std::shared_ptr<const DensityMajorantGrid> densityMajorantGrid;
+    MaterialConfig material;
+    // Original field description, used to identify the cached analytic bake.
+    std::string sourceFieldSpec;
+    std::optional<double> bakeVoxelSize;
     // Isotropic Gaussian gradient-component standard deviation, not GGX alpha
     // or a perceptual roughness mapping. When present, ell = sigma / roughness.
     std::optional<double> materialRoughness;
@@ -68,6 +77,7 @@ struct ExperimentConfig {
 };
 
 ExperimentConfig loadExperimentConfig(const std::filesystem::path& path);
+void requireNanoVdbField(const ExperimentConfig& config);
 void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
                          std::optional<double> roughness, bool preserveSlope);
 void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::path& path);

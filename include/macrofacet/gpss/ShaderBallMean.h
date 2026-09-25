@@ -12,6 +12,7 @@ namespace mf {
 // deterministic one-sided choice.
 class ShaderBallMean final : public MeanField {
 public:
+    const char* typeName() const override { return "shader_ball"; }
     ShaderBallMean(Point3 center, double radius, Vector3 grooveAxis, double grooveRadius);
     MeanJet evaluate(const Point3& x) const override;
     BoundsSummary bounds(const Bounds3& domain) const override;

@@ -1,6 +1,5 @@
 {
   "name": "macrofacet",
   "version-string": "0.1.0",
-  "dependencies": ["eigen3", "nlohmann-json"]
+  "dependencies": ["eigen3", "nlohmann-json", "libigl", "nanovdb"]
 }
-

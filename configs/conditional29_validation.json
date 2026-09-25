@@ -18,24 +18,6 @@
       0.2,
       0.2
     ],
-    "kernel_rotation": [
-      [
-        1.0,
-        0.0,
-        0.0
-      ],
-      [
-        0.0,
-        1.0,
-        0.0
-      ],
-      [
-        0.0,
-        0.0,
-        1.0
-      ]
-    ],
-    "ndf_family": "generalized_gaussian",
     "domain_min": [
       -2.0,
       -2.0,
@@ -45,11 +27,10 @@
       2.0,
       2.0,
       0.3
-    ],
-    "outside_domain": "vacuum"
+    ]
   },
   "material": {
-    "type": "conductor",
+    "ndf_family": "generalized_gaussian",
     "eta_rgb": [
       0.2,
       0.9,
@@ -59,23 +40,13 @@
       3.9,
       2.5,
       2.2
-    ],
-    "force_unit_fresnel_for_energy_test": false
+    ]
   },
   "transport": {
-    "external_policy": "original_macrofacet",
-    "classic_sampler": "null_tracking",
-    "correlated_sampler": "optical_depth",
     "conditional29": {
-      "sampler": "regular_tracking",
-      "external_policy": "sampled_exterior",
-      "optical_depth_solver": "safeguarded_newton"
+      "external_policy": "sampled_exterior"
     },
-    "classic_phase_proposal": "uniform",
-    "beckmann_mixture_weight": 0.5,
-    "next_event_estimation": false,
-    "roulette_start_depth": 4,
-    "hard_depth_cap": null
+    "roulette_start_depth": 4
   },
   "fixed_flight": {
     "birth_position": [
@@ -111,7 +82,6 @@
     ],
     "formula_age_count": 4,
     "formula_sample_count": 1024,
-    "confidence_level": 0.95,
     "max_grid_points": 64
   },
   "numeric": {
@@ -119,8 +89,6 @@
     "absolute_tolerance": 1e-09,
     "max_quadrature_subdivisions": 2048,
     "max_root_iterations": 128,
-    "higher_precision_fallback": true,
-    "allow_unreported_jitter": false,
     "distance_absolute_tolerance": 1e-10,
     "distance_relative_tolerance": 1e-08
   },
@@ -139,8 +107,7 @@
       0.0
     ],
     "vertical_fov_degrees": 45.0,
-    "environment": "directional_gradient",
-    "linear_output_format": "pfm"
+    "environment": "directional_gradient"
   },
   "output_directory": "outputs/conditional29_validation"
 }

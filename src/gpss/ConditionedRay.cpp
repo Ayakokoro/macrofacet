@@ -176,21 +176,6 @@ Gaussian<2> ConditionedRay::endpointValueSlope(double t) const {
     return result;
 }
 
-Gaussian<3> ConditionedRay::midpointValueSlope(double t) const {
-    Gaussian<3> result;
-    const double half = 0.5 * t;
-    const auto midpointMean = conditionedValueSlopeMean(half);
-    const auto endpointMean = conditionedValueSlopeMean(t);
-    result.mean << midpointMean.first, endpointMean.first, endpointMean.second;
-    result.covariance.setZero();
-    result.covariance(0, 0) = stableValueCovariance(half, half);
-    result.covariance(0, 1) = result.covariance(1, 0) = stableValueCovariance(half, t);
-    result.covariance(0, 2) = result.covariance(2, 0) = stableValueSlopeCovariance(half, t);
-    const Gaussian<2> endpoint = endpointValueSlope(t);
-    result.covariance.template block<2, 2>(1, 1) = endpoint.covariance;
-    return result;
-}
-
 Gaussian<4> ConditionedRay::endpointValueGradient(double t) const {
     if (!(t >= 0.0) || !std::isfinite(t)) throw std::invalid_argument("invalid ray age");
     Gaussian<4> result;
@@ -251,21 +236,6 @@ Gaussian<3> ConditionedRay::gradientGivenEndpointZero(double t) const {
     result.covariance = field_.kernel.sigma() * field_.kernel.sigma() *
         (-std::expm1(-z) * (su * su.transpose() + sv * sv.transpose()) +
          zeroSlopeVarianceFraction(z) * sp * sp.transpose());
-    return result;
-}
-
-Gaussian<5> ConditionedRay::midpointValueGradient(double t) const {
-    const Point3 midpoint = x0_ + 0.5 * t * w_;
-    const Point3 endpoint = x0_ + t * w_;
-    DynamicGaussian dynamic = conditionDescriptors(
-        {{midpoint, -1}, {endpoint, -1}, {endpoint, 0}, {endpoint, 1}, {endpoint, 2}});
-    Gaussian<5> result{dynamic.mean, dynamic.covariance};
-    const Gaussian<3> stable = midpointValueSlope(t);
-    result.mean[0] = stable.mean[0];
-    result.mean[1] = stable.mean[1];
-    result.covariance(0, 0) = stable.covariance(0, 0);
-    result.covariance(0, 1) = result.covariance(1, 0) = stable.covariance(0, 1);
-    result.covariance(1, 1) = stable.covariance(1, 1);
     return result;
 }
 

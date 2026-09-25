@@ -1,8 +1,14 @@
 # Macrofacet 实现报告
 
+> 历史验证快照（2026-09-18）。当前场输入、三个 mode 的飞行采样和配置
+> 见 [NVDB 场与 tracing](NVDB_TRACING.md)。下文的旧距离表描述不再适用。
+
 报告日期：2026-09-18
 
-更新：2026-09-24 的 conditional29 连续 regular tracking / Newton 实现见 [CONDITIONAL29_IMPLEMENTATION.md](CONDITIONAL29_IMPLEMENTATION.md)。下文分格距离采样与 External 首段的描述保留为原始实现记录，不代表当前 conditional29 的全部配置能力。
+更新：2026-09-24 的 conditional29 连续 regular tracking / Newton 当时的实现见
+[历史说明](archive/CONDITIONAL29_IMPLEMENTATION.md)。下文分格距离采样与
+External 首段描述保留原始记录；当前三个 mode 均使用 NVDB 与连续反演，见
+[tracing 文档](NVDB_TRACING.md)。
 
 ## 1. 完成状态
 
@@ -135,7 +141,7 @@ py scripts\plot_experiments.py outputs\macrofacet_experiments
 
 - 这是独立解析场景实现，不含论文私有 PBRT 场景/资产，因此不声称逐像素复刻论文图片或作者运行时间。
 - 渲染器目前只有凸 AABB 活跃域、环境光和 analog camera paths；B/C 没有 NEE。
-- `paper_mixture` 的 Beckmann proposal 目前要求世界 Z 对齐的平面/核 frame；任意旋转 frame 可使用正确的 uniform proposal，旋转 Beckmann 专用采样尚未接入。
+- `paper_mixture` 的 Beckmann proposal 按每个碰撞点的平均梯度构建局部切平面，并在该平面内使用协方差主轴和 PBRT 可见斜率采样；平均梯度为零时使用确定性的世界 `+Z` 备选轴。
 - Generalized Gaussian 支持 SPD 梯度协方差；显式支持的奇异面积密度只有对齐的 Beckmann heightfield。其他 PSD 梯度可采样，但不冒充已有普通 NDF 密度。
 - Sphere mean 在球心按不可微输入报错。非平稳核、dielectric、完整路径历史条件、连续首次穿越 rare-event 求解和生产级优化不在当前范围。
 - 默认 64×64×256 发布渲染配置已提供但未在本次会话执行；实际图像预算和时间均按上节记录，没有把 CI 图冒充默认预算结果。

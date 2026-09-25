@@ -1,7 +1,8 @@
-# Analytic scene rendering
+# Scene rendering
 
-The renderer uses the sign convention `mean(x) > 0` for the exterior. The ready-to-run
-configurations are:
+The renderer uses the sign convention `mean(x) > 0` for the exterior. The
+experiment executable bakes each procedural mean to a full-domain NVDB before
+tracing; see [NVDB tracing](NVDB_TRACING.md). The ready-to-run configurations are:
 
 - `configs/render_plane.json`: `mean(x) = z`, clipped to a finite AABB.
 - `configs/render_sphere.json`: `mean(x) = length(x - center) - radius`.
@@ -30,9 +31,10 @@ object. This changes variance, not the target transport model, and is particular
 small `sigma`, where a uniform hemisphere proposal would produce mostly zero-weight samples.
 
 The commands above override the checked-in final-quality budget for quick iteration. Remove the
-`--width`, `--height`, `--spp`, and `--flight-cells` overrides to use the values from JSON. For a
-narrow sigma or close-up silhouette, 64 or 96 flight-table cells reduce collision-location
-quantization.
+`--width`, `--height`, `--spp`, and `--flight-cells` overrides to use the values from JSON.
+`--flight-cells` sets the initial integration partition, and the resolved config records the
+actual NVDB voxel size. For narrow sigma or close-up silhouettes, check both spatial resolution
+and the render's numerical diagnostics.
 
 ## Cutaway sphere
 
@@ -56,21 +58,23 @@ The two planar cut faces connect the outer sphere to the inner sphere. Keep the 
 on the positive X/positive Y side to see into the cut. All surfaces share the configured
 conductor material, including the exposed inner sphere.
 
-This field uses the exact Euclidean signed distance and analytical gradients. At sharp
+The baker samples this field's exact Euclidean signed distance. At sharp
 edges and medial-axis points, where the gradient is not unique, it selects a deterministic
-one-sided unit gradient. No VDB file or mesh conversion is needed.
+one-sided unit gradient during source evaluation. Tracing uses the cached NVDB interpolant;
+no mesh conversion is needed.
 
-The default is `sigma = 0.02` with isotropic correlation lengths 0.06. To compare a thinner
+The checked-in config uses `sigma = 0.05` with isotropic correlation lengths 0.06. To compare a thinner
 surface at the same gradient covariance, use:
 
 ```powershell
 build\Release\macrofacet_experiments.exe render --config configs\render_cutaway_sphere.json --sigma 0.01 --preserve-slope --flight-cells 256 --output outputs\cutaway_sigma_0.01
 ```
 
-The render path uses tabulated optical depth in all modes. Its within-cell collision
-location is approximate; increase `flight_table_cells` and compare results for small
-sigma or close-up cut edges. Set `modes` to `["conditional29"]` or `["midpoint"]` in a
-copy of the config to render the correlated models, using a small image first.
+The render path uses continuous optical-depth inversion for conditional29 and
+full-domain Classic fields. Surface-band Classic fields use DDA null tracking. Increase
+`flight_table_cells` only if the adaptive integration diagnostics indicate a need;
+also check the NVDB voxel size near close-up cut edges. Set `modes` to `["conditional29"]` in a
+copy of the config to render the conditional model, using a small image first.
 
 ## Shader ball
 
@@ -101,20 +105,19 @@ radius, height, and edge bevel are respectively 1.08, 0.2, and 0.04 times the ba
 its top is at `sphere_center.z - sphere_radius`. The default axis preserves the contact
 between the ball and pedestal. All parts use the same configured conductor material.
 
-The field evaluates exact distance to the exposed circular arcs of the grooved ball's
+The source field evaluates exact distance to the exposed circular arcs of the grooved ball's
 meridian profile and to the rounded pedestal. The two solids meet at most at the ball's
 bottom point, leaving both boundaries exposed, so the minimum of their signed distances
 is also exact. Analytical gradients use a
 deterministic one-sided choice at edges and equidistant points.
 
-Both configs use explicit `material.roughness` and 256 flight-table cells.
+Both configs use explicit `material.roughness` and 256 initial integration cells.
 Keep sigma small relative to the groove radius to retain the groove detail.
 With explicit roughness, `--sigma <value>` automatically keeps the gradient covariance fixed.
-The same within-cell flight-location approximation described above applies here.
-In a 16 x 16, 2 spp conditional smoke render, reducing the table to 128 cells produced
-one numerical failure per environment; the default 256-cell run had none. Keep the
-default when starting with this scene and check `render_summary.csv` after changing
-sampling settings. This smoke check is not a convergence guarantee.
+The procedural shader ball's default domain and narrow sigma can exceed the automatic
+eight-million-voxel bake budget. The program reports any increase in voxel size;
+inspect `resolved_config.json` before interpreting groove details. Check
+`render_summary.csv` after changing sampling settings.
 
 ## Threads
 
@@ -124,15 +127,15 @@ Rendering distributes rows over worker threads. The default is the machine's har
 Each pixel seeds its RNG from its own index, so the output depends only on `seed` and the pixel
 index — never on the worker count or the order rows complete in. Rendering at any thread count
 therefore produces byte-identical `.pfm` and `.bmp` files and identical path statistics; only the
-`seconds` column in `render_summary.csv` changes. Measured on a 32-core machine, a 32x32 midpoint
-render scales as 1 thread 165.2 s, 8 threads 16.5 s, 32 threads 7.7 s.
+`seconds` column in `render_summary.csv` changes.
 
 The resolved config records this layout as `rng_stream: "per_pixel_v1"`. It is deterministic
 across thread counts, but it intentionally differs from images generated by the older whole-image
 serial RNG stream even when the numeric seed is unchanged.
 
-Correlated modes (`conditional29`, `midpoint`) cost roughly 20x classic mode per path, so their
-timing is dominated by the hazard table build; `--flight-cells` is the most direct lever on it.
+Conditional29 evaluates a more involved hazard than Classic.
+Its cost also depends on the number of NVDB interpolation cells crossed and adaptive
+quadrature work; use the diagnostic columns in `render_summary.csv` to investigate it.
 
 ## What sigma changes
 
@@ -160,10 +163,10 @@ the relevant entries in an otherwise complete scene configuration:
 
 ```json
 "field": {
-  "sigma": 0.03,
-  "ndf_family": "generalized_gaussian"
+  "sigma": 0.03
 },
 "material": {
+  "ndf_family": "generalized_gaussian",
   "type": "conductor",
   "roughness": 0.3
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "macrofacet/gpss/ConditionedRay.h"
+#include "macrofacet/macrofacet/MaterialConfig.h"
 #include "macrofacet/transport/FlightState.h"
 #include <memory>
 #include <optional>
@@ -15,7 +16,6 @@ struct HazardEvaluation {
 
 struct HitStatistics {
     Gaussian<3> gradientGivenEndpointZero;
-    std::optional<Gaussian<4>> midpointAndGradientGivenEndpointZero; // (Y,Gx,Gy,Gz)
 };
 
 class FlightKernel {
@@ -36,8 +36,10 @@ protected:
 };
 
 std::unique_ptr<FlightKernel> makeFlightKernel(
-    ModelMode mode, const GPSSField& field, const FlightState& state,
+    ModelMode mode, const GPSSField& field, const MaterialConfig& material,
+    const FlightState& state,
     ExternalPolicy policy = ExternalPolicy::OriginalMacrofacet,
-    const NumericPolicy& numeric = defaultNumericPolicy());
+    const NumericPolicy& numeric = defaultNumericPolicy(),
+    ScalarFieldPtr density = nullptr);
 
 } // namespace mf

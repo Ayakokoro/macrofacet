@@ -9,27 +9,18 @@
     "groove_axis": [0.45, 0.25, 0.8573214099741123],
     "groove_radius": 0.1,
     "sigma": 0.01,
-    "ndf_family": "generalized_gaussian",
     "domain_min": [-1.6, -1.6, -1.7],
-    "domain_max": [1.6, 1.6, 1.5],
-    "outside_domain": "vacuum"
+    "domain_max": [1.6, 1.6, 1.5]
   },
   "material": {
-    "type": "conductor",
+    "ndf_family": "generalized_gaussian",
     "roughness": 0.1,
     "eta_rgb": [0.2, 0.9, 1.1],
-    "k_rgb": [3.9, 2.5, 2.2],
-    "force_unit_fresnel_for_energy_test": false
+    "k_rgb": [3.9, 2.5, 2.2]
   },
   "transport": {
-    "external_policy": "original_macrofacet",
-    "classic_sampler": "optical_depth", 
-    "correlated_sampler": "optical_depth",
     "classic_phase_proposal": "target_vndf",
-    "beckmann_mixture_weight": 0.5,
-    "next_event_estimation": false,
-    "roulette_start_depth": 5,
-    "hard_depth_cap": null
+    "roulette_start_depth": 5
   },
   "fixed_flight": {
     "birth_position": [0.0, 0.0, 1.0],
@@ -45,16 +36,13 @@
     "formula_checkpoint_counts": [0, 4],
     "formula_age_count": 4,
     "formula_sample_count": 512,
-    "confidence_level": 0.95,
     "max_grid_points": 64
   },
   "numeric": {
     "relative_tolerance": 0.0001,
     "absolute_tolerance": 1e-07,
     "max_quadrature_subdivisions": 2048,
-    "max_root_iterations": 128,
-    "higher_precision_fallback": true,
-    "allow_unreported_jitter": false
+    "max_root_iterations": 128
   },
   "render": {
     "width": 256,
@@ -64,8 +52,7 @@
     "camera_target": [0.0, 0.0, -0.1],
     "vertical_fov_degrees": 32.0,
     "environment": "directional_gradient",
-    "flight_table_cells": 256,
-    "linear_output_format": "pfm"
+    "flight_table_cells": 256
   },
   "output_directory": "outputs/render_shader_ball"
 }

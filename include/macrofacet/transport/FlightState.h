@@ -9,7 +9,7 @@ struct GPSSField;
 
 enum class BirthKind { External, Surface, ObservedExterior };
 enum class ExternalPolicy { OriginalMacrofacet, SampledExterior };
-enum class ModelMode { Classic, Conditional29, Midpoint };
+enum class ModelMode { Classic, Conditional29 };
 
 struct FlightState {
     BirthKind birthKind = BirthKind::External;

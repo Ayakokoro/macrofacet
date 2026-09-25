@@ -36,10 +36,11 @@ nlohmann::json roughnessConfig() {
         "modes": ["classic"],
         "field": {
             "mean_type": "plane", "plane_normal": [0, 0, 1], "plane_offset": 0,
-            "sigma": 0.03, "ndf_family": "generalized_gaussian",
+            "sigma": 0.03,
             "domain_min": [-2, -2, -0.3], "domain_max": [2, 2, 0.3]
         },
-        "material": {"eta_rgb": [0.2, 0.9, 1.1], "k_rgb": [3.9, 2.5, 2.2], "roughness": 0.6},
+        "material": {"eta_rgb": [0.2, 0.9, 1.1], "k_rgb": [3.9, 2.5, 2.2],
+                     "ndf_family": "generalized_gaussian", "roughness": 0.6},
         "transport": {"external_policy": "original_macrofacet"},
         "fixed_flight": {
             "birth_position": [0, 0, 0], "birth_gradient": [0, 0, 1], "direction": [0, 0, 1],
@@ -174,7 +175,7 @@ void testMaterialRoughness(TestContext& context) {
         bool rejected = false;
         try {
             ExperimentConfig config = defaultConfig();
-            config.field.ndfFamily = family;
+            config.material.ndfFamily = family;
             applyFieldOverrides(config, std::nullopt, 0.6, false);
         } catch (const std::invalid_argument&) {
             rejected = true;
@@ -197,6 +198,8 @@ void testMaterialRoughness(TestContext& context) {
     const nlohmann::json valid = roughnessConfig();
     temporary.write(valid);
     ExperimentConfig loaded = loadExperimentConfig(temporary.path);
+    context.require(loaded.material.ndfFamily == NdfFamily::GeneralizedGaussian,
+                    "NDF family is parsed from the material block");
     checkRoughness(loaded, 0.03, 0.6);
     applyFieldOverrides(loaded, 0.01, std::nullopt, false);
     checkRoughness(loaded, 0.01, 0.6);
@@ -209,6 +212,8 @@ void testMaterialRoughness(TestContext& context) {
         stream >> resolved;
         context.near(resolved.at("material").at("roughness").get<double>(), 0.9, 1e-14,
                      "resolved metadata records the override instead of the input roughness");
+        context.require(resolved.at("material").at("ndf_family") == "generalized_gaussian",
+                        "resolved metadata records the material NDF family");
         context.near(resolved.at("derived").at("isotropic_correlation_length").get<double>(),
                      0.01 / 0.9, 1e-14, "resolved metadata records effective correlation length");
         for (const auto& component : resolved.at("derived").at("gradient_stddev_xyz")) {
@@ -238,7 +243,19 @@ void testMaterialRoughness(TestContext& context) {
     }
     for (const char* family : {"ggx", "beckmann_limit"}) {
         nlohmann::json invalid = valid;
-        invalid["field"]["ndf_family"] = family;
+        invalid["material"]["ndf_family"] = family;
         rejectsJson(invalid, "JSON roughness rejects non-generalized-Gaussian families");
     }
+    nlohmann::json ggx = valid;
+    ggx["material"].erase("roughness");
+    ggx["material"]["ndf_family"] = "ggx";
+    ggx["material"]["ggx_alpha"] = {0.3, 0.5};
+    ggx["field"]["correlation_lengths"] = {0.1, 0.1, 0.1};
+    temporary.write(ggx);
+    const ExperimentConfig classicGgx = loadExperimentConfig(temporary.path);
+    context.require(classicGgx.material.ndfFamily == NdfFamily::GGXBaseline &&
+                    (classicGgx.material.ggxAlpha - Vector2(0.3, 0.5)).norm() < 1e-12,
+                    "Classic reads GGX selection and alpha from material");
+    ggx["modes"] = {"conditional29"};
+    rejectsJson(ggx, "conditional GP transport rejects a material GGX baseline");
 }

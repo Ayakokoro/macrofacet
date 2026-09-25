@@ -142,6 +142,9 @@ ScreenedFormulaEstimate estimateScreenedFirstPassageHazard(
 }
 
 void runConditionalGPReference(const ExperimentConfig& config) {
+    requireNanoVdbField(config);
+    if (!config.field.activeDomain.contains(config.fixedFlight.birthPosition, 1e-12))
+        throw std::invalid_argument("fixed-flight birth lies outside the active domain");
     std::filesystem::create_directories(config.outputDirectory);
     const FlightState state = startSurfaceFlight(config.fixedFlight.birthPosition,
                                                  config.fixedFlight.birthGradient,

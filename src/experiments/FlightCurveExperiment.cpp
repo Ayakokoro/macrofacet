@@ -1,6 +1,6 @@
 #include "macrofacet/experiments/FlightCurveExperiment.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
-#include "macrofacet/transport/FlightKernel.h"
+#include "macrofacet/transport/NarrowBandMedium.h"
 #include "macrofacet/transport/OpticalDepthSampler.h"
 #include <algorithm>
 #include <chrono>
@@ -14,10 +14,15 @@
 namespace mf {
 
 void runFlightCurves(const ExperimentConfig& config) {
+    requireNanoVdbField(config);
+    if (!config.field.activeDomain.contains(config.fixedFlight.birthPosition, 1e-12))
+        throw std::invalid_argument("fixed-flight birth lies outside the active domain");
     std::filesystem::create_directories(config.outputDirectory);
     const FlightState state = startSurfaceFlight(config.fixedFlight.birthPosition,
                                                  config.fixedFlight.birthGradient,
                                                  config.fixedFlight.direction);
+    const NarrowBandMedium medium(config.field, config.material, config.mediumDensity,
+                                  config.mediumSurfaceBand, config.densityMajorantGrid);
     std::ofstream curves(config.outputDirectory / "flight_curves.csv");
     curves << "mode,t,h,log_h,H,T_model,p_model,log_screen_probability,log_crossing_flux,"
               "integration_error,numeric_status,elapsed_microseconds\n";
@@ -25,8 +30,8 @@ void runFlightCurves(const ExperimentConfig& config) {
     histograms << "mode,bin_left,bin_right,observed_mass,expected_mass,escape_bin\n";
 
     for (ModelMode mode : config.modes) {
-        std::unique_ptr<FlightKernel> kernel = makeFlightKernel(
-            mode, config.field, state, config.conditional29.externalPolicy, config.numeric);
+        std::unique_ptr<FlightKernel> kernel = medium.beginFlight(
+            mode, state, config.conditional29.externalPolicy, config.numeric);
         const double maximumAge = std::min(config.fixedFlight.requestedMaximumAge,
                                            kernel->maximumAgeInDomain());
         const int count = config.fixedFlight.curveSampleCount;
@@ -64,22 +69,12 @@ void runFlightCurves(const ExperimentConfig& config) {
         std::vector<int> bins(static_cast<std::size_t>(count - 1), 0);
         int escapes = 0;
         Random rng(config.seed + static_cast<unsigned>(mode) * 7919ULL);
-        std::unique_ptr<OpticalDepthSampler> regular;
-        if (mode == ModelMode::Conditional29)
-            regular = std::make_unique<OpticalDepthSampler>(*kernel, config.numeric, maximumAge);
         for (int sample = 0; sample < config.fixedFlight.flightSampleCount; ++sample) {
-            if (regular) {
-                const auto flight = regular->sample(rng);
-                if (!flight.collided) { ++escapes; continue; }
-                const auto upper = std::upper_bound(ages.begin(), ages.end(), flight.age);
-                const int index = std::clamp(static_cast<int>(upper - ages.begin()) - 1, 0, count - 2);
-                ++bins[static_cast<std::size_t>(index)];
-                continue;
-            }
-            const double target = -std::log1p(-rng.openUniform01());
-            if (target >= opticalDepth.back()) { ++escapes; continue; }
-            const auto upper = std::upper_bound(opticalDepth.begin(), opticalDepth.end(), target);
-            const int index = std::clamp(static_cast<int>(upper - opticalDepth.begin()) - 1,
+            const auto flight = medium.sample(*kernel, rng, config.numeric, nullptr,
+                                              config.render.flightTableCells, maximumAge);
+            if (!flight.collided) { ++escapes; continue; }
+            const auto upper = std::upper_bound(ages.begin(), ages.end(), flight.age);
+            const int index = std::clamp(static_cast<int>(upper - ages.begin()) - 1,
                                          0, count - 2);
             ++bins[static_cast<std::size_t>(index)];
         }

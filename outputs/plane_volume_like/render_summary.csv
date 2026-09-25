@@ -1,3 +1,0 @@
-mode,environment,width,height,spp,seconds,paths,real_collisions,escaped_paths,roulette_terminations,safety_cap_terminations,numerical_failures,mean_path_depth
-classic,unit_white,64,64,8,0.72714319999999999,32768,33866,32507,261,0,0,1.03350830078125
-classic,directional_gradient,64,64,8,0.71243040000000002,32768,33866,32507,261,0,0,1.03350830078125

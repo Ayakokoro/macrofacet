@@ -40,3 +40,7 @@ void testRegularTracking(TestContext& context);
 void testCutawayMean(TestContext& context);
 void testShaderBallMean(TestContext& context);
 void testMaterialRoughness(TestContext& context);
+
+#if defined(MACROFACET_TEST_FIELDS)
+void testNanoVdbField(TestContext& context);
+#endif

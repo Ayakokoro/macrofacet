@@ -18,13 +18,19 @@ std::vector<double> integrationKnots(const FlightKernel& kernel, double a, doubl
     const double precision = w.dot(field.kernel.precision() * w);
     double step = (b - a) / initialCells;
     if (precision > 0.0) step = std::min(step, 0.25 / std::sqrt(precision));
-    const double meanScale = field.mean->bounds(field.activeDomain).maximumGradientNorm;
-    if (meanScale > 0.0) step = std::min(step, 0.5 * field.kernel.sigma() / meanScale);
+    const double voxelSize = field.mean->voxelSizeHint();
+    if (voxelSize > 0.0) {
+        step = std::min(step, voxelSize);
+    } else {
+        const double meanScale = field.mean->bounds(field.activeDomain).maximumGradientNorm;
+        if (meanScale > 0.0) step = std::min(step, 0.5 * field.kernel.sigma() / meanScale);
+    }
     const double countReal = std::ceil((b - a) / step);
     if (!std::isfinite(countReal) || countReal > policy.maxQuadratureSubdivisions)
         throw NumericError(NumericStatus::IntegrationNotConverged, "initial optical-depth partition exceeds budget");
     const int count = std::max(1, static_cast<int>(countReal));
     for (int i = 1; i <= count; ++i) knots.push_back(i == count ? b : a + (b - a) * i / count);
+    field.mean->appendRayBreakpoints(kernel.state().birthPosition, w, a, b, knots);
     const auto* conditional = dynamic_cast<const Conditional29FlightKernel*>(&kernel);
     if (conditional) {
         // Geometric panels resolve small departure slopes without discarding an
@@ -88,8 +94,7 @@ PositiveResult integrateHazard(const FlightKernel& kernel, double a, double b,
     if (!(a >= kernel.currentAge() && b >= a && b <= kernel.maximumAgeInDomain()))
         throw std::out_of_range("hazard integration interval lies outside flight domain");
     if (a == b) return exactZero();
-    const auto knots = kernel.mode() == ModelMode::Conditional29
-        ? integrationKnots(kernel, a, b, 16, policy) : std::vector<double>{a, b};
+    const auto knots = integrationKnots(kernel, a, b, 16, policy);
     double sum = 0.0, error = 0.0;
     for (std::size_t i = 1; i < knots.size(); ++i) {
         NumericPolicy local = policy;
@@ -182,12 +187,13 @@ FlightSample OpticalDepthSampler::invert(double target) {
 }
 
 FlightSample sampleFlight(const FlightKernel& kernel, Random& rng, const NumericPolicy& policy,
-                          TrackingDiagnostics* diagnostics, int initialCells) {
+                          TrackingDiagnostics* diagnostics, int initialCells,
+                          double maximumAge) {
     const double target = -std::log1p(-rng.openUniform01());
     NumericPolicy working = policy;
     for (int attempt = 0; ; ++attempt) {
         try {
-            OpticalDepthSampler sampler(kernel, working, -1.0, initialCells, diagnostics);
+            OpticalDepthSampler sampler(kernel, working, maximumAge, initialCells, diagnostics);
             return sampler.invert(target);
         } catch (const NumericError& error) {
             if (attempt == 2 || (error.status() != NumericStatus::NeedHigherPrecision &&
