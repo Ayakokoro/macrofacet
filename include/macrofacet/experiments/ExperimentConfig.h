@@ -9,26 +9,15 @@
 #include <filesystem>
 #include <optional>
 #include <string>
-#include <vector>
 
 namespace mf {
 
 struct FixedFlightConfig {
     Point3 birthPosition = Point3::Zero();
-    Vector3 birthGradient = Vector3::UnitZ();
     Vector3 direction = Vector3(0.984807753012208, 0.0, 0.17364817766693033);
     double requestedMaximumAge = 1.5;
     int curveSampleCount = 65;
     int flightSampleCount = 20000;
-};
-
-struct ReferenceConfig {
-    int pathSampleCount = 4096;
-    std::vector<int> nestedGridIntervals{64, 128, 256};
-    std::vector<int> formulaCheckpointCounts{0, 1, 4, 8, 16, 32};
-    int formulaAgeCount = 12;
-    int formulaSampleCount = 8192;
-    int maxGridPoints = 512;
 };
 
 struct RenderConfig {
@@ -45,15 +34,9 @@ struct RenderConfig {
     int threadCount = 0;  // 0 selects the hardware concurrency
 };
 
-struct Conditional29TransportConfig {
-    ExternalPolicy externalPolicy = ExternalPolicy::OriginalMacrofacet;
-    std::optional<int> hardDepthCap; // null: escape and roulette only
-};
-
 struct ExperimentConfig {
     int schemaVersion = 1;
     std::uint64_t seed = 17429;
-    std::vector<ModelMode> modes{ModelMode::Classic, ModelMode::Conditional29};
     GPSSField field;
     // Baked density defines the transport band; null is for core-only analytic tests.
     ScalarFieldPtr mediumDensity;
@@ -67,10 +50,8 @@ struct ExperimentConfig {
     // or a perceptual roughness mapping. When present, ell = sigma / roughness.
     std::optional<double> materialRoughness;
     FixedFlightConfig fixedFlight;
-    ReferenceConfig reference;
     RenderConfig render;
     NumericPolicy numeric;
-    Conditional29TransportConfig conditional29;
     std::filesystem::path outputDirectory = "outputs/macrofacet_experiments";
     double beckmannMixtureWeight = 0.5;
     std::string classicPhaseProposal = "uniform";
@@ -81,7 +62,6 @@ void requireNanoVdbField(const ExperimentConfig& config);
 void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
                          std::optional<double> roughness, bool preserveSlope);
 void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::path& path);
-std::string modelModeName(ModelMode mode);
 GPSSField buildDefaultField();
 
 } // namespace mf

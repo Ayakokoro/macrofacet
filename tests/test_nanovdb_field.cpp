@@ -463,7 +463,6 @@ struct RestoreNumericPolicy {
 // because one it ignores would imply a contract it does not have.
 nlohmann::json bakedConfigJson() {
     return nlohmann::json::parse(R"json({
-        "modes": ["classic"],
         "field": {
             "mean_type": "nanovdb",
             "use_alpha_grid": true,
@@ -472,15 +471,10 @@ nlohmann::json bakedConfigJson() {
             "ndf_family": "generalized_gaussian"
         },
         "material": {"eta_rgb": [0.2, 0.9, 1.1], "k_rgb": [3.9, 2.5, 2.2]},
-        "transport": {"external_policy": "original_macrofacet"},
+        "transport": {},
         "fixed_flight": {
-            "birth_position": [0, 0, 1], "birth_gradient": [0, 0, 1], "direction": [0, 0, 1],
+            "birth_position": [0, 0, 1], "direction": [0, 0, 1],
             "requested_maximum_age": 0.3, "curve_sample_count": 3, "flight_sample_count": 4
-        },
-        "reference": {
-            "path_sample_count": 4, "nested_grid_intervals": [4, 8],
-            "formula_checkpoint_counts": [0, 1], "formula_age_count": 2,
-            "formula_sample_count": 4, "confidence_level": 0.95, "max_grid_points": 16
         },
         "numeric": {
             "relative_tolerance": 0.0001, "absolute_tolerance": 0.0000001,
@@ -1052,16 +1046,13 @@ void testAnalyticFullDomainBake(TestContext& context) {
     catch (const std::invalid_argument&) { rejectedProceduralTrace = true; }
     context.require(rejectedProceduralTrace,
                     "experiment tracing rejects an unbaked procedural mean");
-    const FlightState state = startSurfaceFlight(Point3(0.5, 0.0, 0.0),
-                                                 Vector3::UnitX(), Vector3::UnitX());
-    for (ModelMode mode : {ModelMode::Classic, ModelMode::Conditional29}) {
-        const auto flight = makeFlightKernel(mode, field, experiment.material, state,
-                                             ExternalPolicy::OriginalMacrofacet,
-                                             defaultNumericPolicy());
-        const auto hazard = flight->evaluate(0.1).hazard.value;
-        context.require(std::isfinite(hazard) && hazard >= 0.0,
-                        "both modes evaluate a shared baked field");
-    }
+    const FlightState state = startExternalFlight(Point3(0.5, 0.0, 0.0),
+                                                   Vector3::UnitX());
+    NarrowBandMedium medium(field, experiment.material);
+    const auto flight = medium.beginFlight(state);
+    const auto hazard = flight->evaluate(0.1).hazard.value;
+    context.require(std::isfinite(hazard) && hazard >= 0.0,
+                    "Classic evaluates the baked field");
 }
 
 void testMeshFullDomainBake(TestContext& context) {
@@ -1121,27 +1112,12 @@ void testNarrowBandTransport(TestContext& context) {
     }
     context.require(sawVacuum && sawBandAfterVacuum,
                     "DDA skips vacuum macrocells and re-enters the far surface band");
-    const auto classic = medium.beginFlight(ModelMode::Classic, external,
-                                            ExternalPolicy::OriginalMacrofacet,
-                                            defaultNumericPolicy());
+    const auto classic = medium.beginFlight(external);
     context.require(classic->evaluate(0.5).hazard.value > 0.0 &&
                     classic->evaluate(1.5).hazard.value == 0.0 &&
                     classic->evaluate(2.5).hazard.value > 0.0,
                     "classic flight crosses a vacuum core and re-enters the surface band");
-    const FlightState surface = startSurfaceFlight(Point3(-1.0, 0.0, 0.0), w, w);
-    const auto conditional = medium.beginFlight(ModelMode::Conditional29, surface,
-                                                ExternalPolicy::OriginalMacrofacet,
-                                                defaultNumericPolicy());
-    context.require(conditional->evaluate(1.0).hazard.value == 0.0 &&
-                    conditional->evaluate(2.0).hazard.value > 0.0,
-                    "conditional29 retains its birth observation across the vacuum core");
     Random rng(4821);
-    bool rejected = false;
-    try {
-        (void)medium.startExternal(ModelMode::Conditional29, ExternalPolicy::SampledExterior,
-                                   Point3(-1.5, 0.0, 0.0), w, rng, defaultNumericPolicy());
-    } catch (const std::invalid_argument&) { rejected = true; }
-    context.require(rejected, "narrow-band sampled exterior rejects a vacuum starting point");
     for (int sample = 0; sample < 32; ++sample) {
         const FlightSample result = medium.sample(*classic, rng, defaultNumericPolicy(), nullptr, 16);
         context.require(result.age >= 0.0 && result.age <= classic->maximumAgeInDomain(),
@@ -1152,12 +1128,6 @@ void testNarrowBandTransport(TestContext& context) {
                                                   nullptr, 16, 1.0);
         context.require(result.age <= 1.0 && (result.collided || result.age == 1.0),
                         "narrow-band medium respects a truncated flight interval");
-    }
-    for (int sample = 0; sample < 4; ++sample) {
-        const FlightSample result = medium.sample(*conditional, rng, defaultNumericPolicy(),
-                                                  nullptr, 16, 2.2);
-        context.require(result.age > 0.0 && result.age <= 2.2,
-                        "conditional29 samples across the vacuum core in the same medium");
     }
 }
 

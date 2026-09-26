@@ -1,8 +1,6 @@
 #include "TestHarness.h"
-#include "macrofacet/mathutility/BivariateGaussian.h"
 #include "macrofacet/mathutility/Gaussian1D.h"
 #include "macrofacet/mathutility/GaussianMoments1D.h"
-#include "macrofacet/mathutility/GaussianScreenIntegral.h"
 #include "macrofacet/mathutility/Quadrature.h"
 #include "macrofacet/mathutility/SmallGaussian.h"
 
@@ -49,21 +47,5 @@ void testGaussianMath(TestContext& context) {
     context.near(conditioned.mean[0], 3.0, 1e-12, "Gaussian conditional mean");
     context.near(conditioned.covariance(0, 0), 3.0, 1e-12, "Gaussian conditional variance");
 
-    context.near(standardBivariateNormalCdf(0.0, 0.0, 0.0).value, 0.25, 1e-12,
-                 "independent bivariate probability");
-    context.near(standardBivariateNormalCdf(0.0, 0.0, 1.0).value, 0.5, 1e-12,
-                 "perfectly correlated bivariate probability");
-    context.near(standardBivariateNormalCdf(0.0, 0.0, -1.0).value, 0.0, 1e-12,
-                 "anti-correlated bivariate probability");
-    context.near(standardBivariateNormalCdf(0.0, 0.0, 0.5).value,
-                 1.0 / 4.0 + std::asin(0.5) / (2.0 * kPi), 2e-7,
-                 "known bivariate quadrant probability");
-
-    const PositiveResult screened = negativeFluxTimesCdf(-0.2, 0.7, 0.4, -0.8, policy);
-    const PositiveResult maximum = negativePartMean(-0.2, 0.7, policy);
-    context.require(screened.value >= 0.0 && screened.value <= maximum.value,
-                    "screened flux bounds");
-    context.relative(negativeFluxTimesCdf(-0.2, 0.7, 0.4, 0.0, policy).value,
-                     maximum.value * normalCdf(0.4), 2e-7, "constant screen identity");
 }
 

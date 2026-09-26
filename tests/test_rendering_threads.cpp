@@ -1,7 +1,6 @@
 #include "TestHarness.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
-#include <array>
 #include <memory>
 #include <stdexcept>
 
@@ -42,14 +41,11 @@ void testRenderingThreads(TestContext& context) {
     config.render.samplesPerPixel = 1;
     config.render.flightTableCells = 4;
     config.render.environment = "directional_gradient";
-    config.conditional29.externalPolicy = ExternalPolicy::SampledExterior;
-
-    for (ModelMode mode : std::array<ModelMode, 2>{ModelMode::Classic,
-                                                    ModelMode::Conditional29}) {
+    {
         config.render.threadCount = 1;
-        const RenderedImage serial = renderAnalyticScene(mode, config);
+        const RenderedImage serial = renderAnalyticScene(config);
         config.render.threadCount = 3;
-        const RenderedImage parallel = renderAnalyticScene(mode, config);
+        const RenderedImage parallel = renderAnalyticScene(config);
         context.require(serial.pixels.size() == parallel.pixels.size(),
                         "threaded render pixel count");
         bool pixelsEqual = serial.pixels.size() == parallel.pixels.size();
@@ -65,7 +61,7 @@ void testRenderingThreads(TestContext& context) {
     config.render.threadCount = 3;
     bool propagated = false;
     try {
-        (void)renderAnalyticScene(ModelMode::Classic, config);
+        (void)renderAnalyticScene(config);
     } catch (const std::runtime_error&) {
         propagated = true;
     }

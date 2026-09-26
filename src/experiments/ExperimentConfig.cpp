@@ -74,11 +74,6 @@ GPSSField buildDefaultField() {
     return field;
 }
 
-std::string modelModeName(ModelMode mode) {
-    if (mode == ModelMode::Classic) return "classic";
-    return "conditional29";
-}
-
 void requireNanoVdbField(const ExperimentConfig& config) {
     if (!config.mediumDensity || !config.field.mean ||
         std::string(config.field.mean->typeName()) != "nanovdb" ||
@@ -140,13 +135,8 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.schemaVersion = root.value("schema_version", 1);
     if (config.schemaVersion != 1) throw std::invalid_argument("unsupported config schema version");
     config.seed = root.value("seed", config.seed);
-    config.modes.clear();
-    for (const auto& modeValue : root.at("modes")) {
-        const std::string mode = modeValue.get<std::string>();
-        if (mode == "classic") config.modes.push_back(ModelMode::Classic);
-        else if (mode == "conditional29") config.modes.push_back(ModelMode::Conditional29);
-        else throw std::invalid_argument("unknown model mode: " + mode);
-    }
+    if (root.contains("modes") || root.contains("reference"))
+        throw std::invalid_argument("obsolete modes/reference configuration is unsupported; Classic is the only mode");
 
     const auto& fieldJson = root.at("field");
     config.sourceFieldSpec = fieldJson.dump();
@@ -234,27 +224,11 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.material.conductor.forceUnitFresnel =
         material.value("force_unit_fresnel_for_energy_test", false);
     const auto& transport = root.at("transport");
-    const auto conditional = transport.value("conditional29", nlohmann::json::object());
-    if (!conditional.is_object()) throw std::invalid_argument("conditional29 transport must be an object");
-    const std::string sampler = conditional.value("sampler", transport.value("correlated_sampler", "optical_depth"));
-    if (sampler != "regular_tracking" && sampler != "optical_depth")
-        throw std::invalid_argument("conditional29 supports only regular_tracking (optical_depth alias)");
-    if (conditional.value("optical_depth_solver", "safeguarded_newton") != "safeguarded_newton")
-        throw std::invalid_argument("conditional29 requires safeguarded_newton");
-    const std::string commonExternal = transport.value("external_policy", "original_macrofacet");
-    if (commonExternal != "original_macrofacet" && commonExternal != "sampled_exterior")
-        throw std::invalid_argument("unknown external policy");
-    const std::string external = conditional.value("external_policy", commonExternal);
-    if (external == "original_macrofacet") config.conditional29.externalPolicy = ExternalPolicy::OriginalMacrofacet;
-    else if (external == "sampled_exterior") config.conditional29.externalPolicy = ExternalPolicy::SampledExterior;
-    else throw std::invalid_argument("unknown conditional29 external policy");
-    if (transport.contains("hard_depth_cap") && !transport["hard_depth_cap"].is_null()) {
-        config.conditional29.hardDepthCap = transport["hard_depth_cap"].get<int>();
-        if (*config.conditional29.hardDepthCap < 1) throw std::invalid_argument("hard_depth_cap must be positive or null");
+    for (const char* obsolete : {"conditional29", "correlated_sampler", "external_policy",
+                                 "hard_depth_cap", "next_event_estimation"}) {
+        if (transport.contains(obsolete))
+            throw std::invalid_argument(std::string("obsolete transport setting: ") + obsolete);
     }
-    if (transport.value("next_event_estimation", false) &&
-        std::find(config.modes.begin(), config.modes.end(), ModelMode::Conditional29) != config.modes.end())
-        throw std::invalid_argument("conditional29 NEE requires an extended gradient-state light sampler and is not implemented");
     config.beckmannMixtureWeight = transport.value("beckmann_mixture_weight", 0.5);
     config.classicPhaseProposal = transport.value("classic_phase_proposal", "uniform");
     if (config.classicPhaseProposal != "uniform" &&
@@ -270,20 +244,12 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
 
     const auto& flight = root.at("fixed_flight");
     config.fixedFlight.birthPosition = vector3(flight.at("birth_position"));
-    config.fixedFlight.birthGradient = vector3(flight.at("birth_gradient"));
+    if (flight.contains("birth_gradient"))
+        throw std::invalid_argument("obsolete fixed_flight.birth_gradient setting");
     config.fixedFlight.direction = normalizedOrThrow(vector3(flight.at("direction")));
     config.fixedFlight.requestedMaximumAge = flight.at("requested_maximum_age").get<double>();
     config.fixedFlight.curveSampleCount = flight.at("curve_sample_count").get<int>();
     config.fixedFlight.flightSampleCount = flight.at("flight_sample_count").get<int>();
-
-    const auto& reference = root.at("reference");
-    config.reference.pathSampleCount = reference.at("path_sample_count").get<int>();
-    config.reference.nestedGridIntervals = reference.at("nested_grid_intervals").get<std::vector<int>>();
-    config.reference.formulaCheckpointCounts =
-        reference.at("formula_checkpoint_counts").get<std::vector<int>>();
-    config.reference.formulaAgeCount = reference.at("formula_age_count").get<int>();
-    config.reference.formulaSampleCount = reference.at("formula_sample_count").get<int>();
-    config.reference.maxGridPoints = reference.at("max_grid_points").get<int>();
 
     const auto& numeric = root.at("numeric");
     config.numeric.relativeTolerance = numeric.at("relative_tolerance").get<double>();
@@ -308,9 +274,6 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.render.threadCount = render.value("thread_count", 0);
     config.outputDirectory = root.at("output_directory").get<std::string>();
 
-    if (config.fixedFlight.direction.dot(config.fixedFlight.birthGradient) <= 0.0) {
-        throw std::invalid_argument("fixed-flight direction must depart along the exterior gradient");
-    }
     if (config.fixedFlight.curveSampleCount < 2 || config.fixedFlight.flightSampleCount < 1 ||
         config.render.width < 1 || config.render.height < 1 || config.render.samplesPerPixel < 1 ||
         config.render.flightTableCells < 4 || config.render.threadCount < 0 ||
@@ -323,11 +286,6 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     if (!std::isfinite(config.numeric.relativeTolerance) || !std::isfinite(config.numeric.absoluteTolerance) ||
         !std::isfinite(config.numeric.distanceAbsoluteTolerance) || !std::isfinite(config.numeric.distanceRelativeTolerance))
         throw std::invalid_argument("numerical tolerances must be finite");
-    if (config.material.ndfFamily == NdfFamily::GGXBaseline) {
-        for (ModelMode mode : config.modes) if (mode != ModelMode::Classic) {
-            throw std::invalid_argument("GGX is supported only by classic mode");
-        }
-    }
     config.field.validate();
     config.material.validate(config.field.activeDomain);
     defaultNumericPolicy() = config.numeric;
@@ -338,7 +296,6 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
     nlohmann::json result;
     result["schema_version"] = config.schemaVersion;
     result["seed"] = config.seed;
-    for (ModelMode mode : config.modes) result["modes"].push_back(modelModeName(mode));
     if (const auto* cutaway = dynamic_cast<const CutawaySphereMean*>(config.field.mean.get())) {
         result["field"] = {{"mean_type", "cutaway_sphere"},
                            {"sphere_center", toArray(cutaway->center())},
@@ -382,21 +339,12 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
             config.field.kernel.sigma() / *config.materialRoughness;
     }
     result["budgets"] = {{"flight_samples", config.fixedFlight.flightSampleCount},
-                          {"reference_path_samples", config.reference.pathSampleCount},
-                          {"formula_samples", config.reference.formulaSampleCount},
                           {"render_width", config.render.width},
                           {"render_height", config.render.height},
                           {"render_spp", config.render.samplesPerPixel},
                           {"flight_table_cells", config.render.flightTableCells},
                           {"render_threads", config.render.threadCount}};
     result["classic_phase_proposal"] = config.classicPhaseProposal;
-    result["transport"]["conditional29"] = {
-        {"sampler", "regular_tracking"}, {"optical_depth_solver", "safeguarded_newton"},
-        {"external_policy", config.conditional29.externalPolicy == ExternalPolicy::SampledExterior
-            ? "sampled_exterior" : "original_macrofacet"},
-        {"hard_depth_cap", config.conditional29.hardDepthCap
-            ? nlohmann::json(*config.conditional29.hardDepthCap) : nlohmann::json(nullptr)},
-        {"initial_integration_cells", config.render.flightTableCells}};
     result["transport"]["classic"]["sampler"] = config.mediumSurfaceBand
         ? "dda_null_tracking" : "regular_tracking";
     result["numeric"] = {{"relative_tolerance", config.numeric.relativeTolerance},

@@ -1,6 +1,5 @@
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
 #include "macrofacet/macrofacet/ConductorPhase.h"
-#include "macrofacet/transport/CollisionGradientSampler.h"
 #include "macrofacet/transport/FlightKernel.h"
 #include "macrofacet/transport/OpticalDepthSampler.h"
 #include "macrofacet/transport/NarrowBandMedium.h"
@@ -11,7 +10,6 @@
 #include <exception>
 #include <fstream>
 #include <limits>
-#include <sstream>
 #include <thread>
 
 namespace mf {
@@ -32,7 +30,7 @@ int resolveWorkerCount(int requested, int rows) {
 
 } // namespace
 
-Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
+Spectrum traceCameraPath(const Ray& initialRay,
                          const ExperimentConfig& config, Random& rng,
                          RenderStatistics& statistics) {
     const Vector3 initialDirection = normalizedOrThrow(initialRay.direction);
@@ -45,16 +43,12 @@ Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
     const Point3 entry = initialRay.origin + firstInterval.entry * initialDirection;
     const NarrowBandMedium medium(config.field, config.material, config.mediumDensity,
                                   config.mediumSurfaceBand, config.densityMajorantGrid);
-    FlightState state = medium.startExternal(mode, config.conditional29.externalPolicy,
-                                              entry, initialDirection, rng, config.numeric);
+    FlightState state = medium.startExternal(entry, initialDirection);
     Spectrum throughput = Spectrum::Ones();
     int depth = 0;
-    for (; mode == ModelMode::Conditional29
-             ? (!config.conditional29.hardDepthCap || depth < *config.conditional29.hardDepthCap)
-             : depth < config.render.safetyDepthCap; ++depth) {
+    for (; depth < config.render.safetyDepthCap; ++depth) {
         try {
-            std::unique_ptr<FlightKernel> kernel = medium.beginFlight(
-                mode, state, config.conditional29.externalPolicy, config.numeric);
+            std::unique_ptr<FlightKernel> kernel = medium.beginFlight(state);
             const FlightSample flight = medium.sample(*kernel, rng, config.numeric,
                                                        &statistics.tracking,
                                                        config.render.flightTableCells);
@@ -66,24 +60,13 @@ Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
             }
             const Point3 hit = state.birthPosition + flight.age * state.direction;
             ++statistics.realCollisions;
-            if (mode == ModelMode::Classic) {
-                const double mixture = config.classicPhaseProposal == "paper_mixture"
-                    ? config.beckmannMixtureWeight : 0.0;
-                const bool useTargetVndf = config.classicPhaseProposal == "target_vndf";
-                ConductorPhase phase(config.field, config.material, hit, mixture, useTargetVndf);
-                const PhaseSample sample = phase.samplePhase(state.direction, rng);
-                throughput = throughput.cwiseProduct(sample.throughputWeight);
-                state = startClassicCollisionFlight(hit, sample.direction);
-            } else {
-                const Vector3 gradient = sampleCollisionGradient(*kernel, flight.age, rng,
-                                                                 config.numeric);
-                const Vector3 normal = normalizedOrThrow(gradient);
-                const Vector3 outgoing = reflectTravelDirection(state.direction, normal);
-                throughput = throughput.cwiseProduct(
-                    conductorFresnel(-state.direction.dot(normal),
-                                     config.material.conductor));
-                state = startSurfaceFlight(hit, gradient, outgoing);
-            }
+            const double mixture = config.classicPhaseProposal == "paper_mixture"
+                ? config.beckmannMixtureWeight : 0.0;
+            const bool useTargetVndf = config.classicPhaseProposal == "target_vndf";
+            ConductorPhase phase(config.field, config.material, hit, mixture, useTargetVndf);
+            const PhaseSample sample = phase.samplePhase(state.direction, rng);
+            throughput = throughput.cwiseProduct(sample.throughputWeight);
+            state = startClassicCollisionFlight(hit, sample.direction);
             if (depth + 1 >= config.render.rouletteStartDepth) {
                 const double continuation = std::clamp(throughput.maxCoeff(), 0.05, 0.95);
                 if (rng.openUniform01() >= continuation) {
@@ -93,16 +76,9 @@ Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
                 }
                 throughput /= continuation;
             }
-        } catch (const NumericError& error) {
+        } catch (const NumericError&) {
             ++statistics.numericalFailures;
             statistics.accumulatedPathDepth += depth;
-            if (mode == ModelMode::Conditional29) {
-                std::ostringstream message;
-                message << "conditional29 " << toString(error.status()) << ": " << error.what()
-                        << "; depth=" << depth << "; birth=" << state.birthPosition.transpose()
-                        << "; direction=" << state.direction.transpose() << "; age=" << state.age;
-                throw NumericError(error.status(), message.str());
-            }
             return Spectrum::Zero();
         }
     }
@@ -111,7 +87,7 @@ Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
     return Spectrum::Zero();
 }
 
-RenderedImage renderAnalyticScene(ModelMode mode, const ExperimentConfig& config) {
+RenderedImage renderAnalyticScene(const ExperimentConfig& config) {
     RenderedImage result;
     result.width = config.render.width;
     result.height = config.render.height;
@@ -134,15 +110,14 @@ RenderedImage renderAnalyticScene(ModelMode mode, const ExperimentConfig& config
         for (int x = 0; x < result.width; ++x) {
             Spectrum sum = Spectrum::Zero();
             const std::uint64_t pixelIndex = static_cast<std::uint64_t>(y * result.width + x);
-            Random rng(config.seed + 0x9e3779b97f4a7c15ULL * (pixelIndex + 1) +
-                       104729ULL * static_cast<unsigned>(mode));
+            Random rng(config.seed + 0x9e3779b97f4a7c15ULL * (pixelIndex + 1));
             for (int sample = 0; sample < config.render.samplesPerPixel; ++sample) {
                 const double px = (2.0 * ((x + rng.openUniform01()) / result.width) - 1.0) *
                                   aspect * scale;
                 const double py = (1.0 - 2.0 * ((y + rng.openUniform01()) / result.height)) * scale;
                 const Vector3 direction = normalizedOrThrow(forward + px * right + py * up);
                 ++statistics.paths;
-                sum += traceCameraPath({config.render.cameraPosition, direction}, mode,
+                sum += traceCameraPath({config.render.cameraPosition, direction},
                                        config, rng, statistics);
             }
             result.pixels[static_cast<std::size_t>(y * result.width + x)] =
@@ -151,7 +126,7 @@ RenderedImage renderAnalyticScene(ModelMode mode, const ExperimentConfig& config
     };
 
     // Dynamic row assignment: cost per row varies by orders of magnitude across a
-    // correlated-mode image, so static chunks would leave workers idle.
+    // image, so static chunks would leave workers idle.
     const auto drainRows = [&](int worker) {
         for (;;) {
             const int y = nextRow.fetch_add(1, std::memory_order_relaxed);

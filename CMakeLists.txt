@@ -12,14 +12,11 @@ find_package(Threads REQUIRED)
 add_library(macrofacet
     src/mathutility/Gaussian1D.cpp
     src/mathutility/GaussianMoments1D.cpp
-    src/mathutility/BivariateGaussian.cpp
-    src/mathutility/GaussianScreenIntegral.cpp
     src/fields/MeanFactory.cpp
     src/gpss/MeanField.cpp
     src/gpss/ShaderBallMean.cpp
     src/gpss/SquaredExponentialKernel.cpp
     src/gpss/GPSSField.cpp
-    src/gpss/ConditionedRay.cpp
     src/macrofacet/GaussianNdf.cpp
     src/macrofacet/GgxHeightfield.cpp
     src/macrofacet/MaterialConfig.cpp
@@ -29,7 +26,6 @@ add_library(macrofacet
     src/transport/FlightState.cpp
     src/transport/FlightKernel.cpp
     src/transport/ClassicFlightKernel.cpp
-    src/transport/Conditional29FlightKernel.cpp
     src/transport/OpticalDepthSampler.cpp
     src/transport/ClassicNullTracking.cpp
     src/transport/DensityMajorantGrid.cpp
@@ -38,7 +34,6 @@ add_library(macrofacet
     src/integrator/MacrofacetPathTracer.cpp
     src/experiments/ExperimentConfig.cpp
     src/experiments/FlightCurveExperiment.cpp
-    src/experiments/ConditionalGPReference.cpp
     src/experiments/RenderExperiment.cpp)
 
 target_include_directories(macrofacet PUBLIC include)

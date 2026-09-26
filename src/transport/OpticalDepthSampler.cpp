@@ -1,5 +1,4 @@
 #include "macrofacet/transport/OpticalDepthSampler.h"
-#include "macrofacet/transport/Conditional29FlightKernel.h"
 #include "macrofacet/mathutility/Quadrature.h"
 #include "macrofacet/mathutility/RootFinding.h"
 #include <algorithm>
@@ -31,41 +30,6 @@ std::vector<double> integrationKnots(const FlightKernel& kernel, double a, doubl
     const int count = std::max(1, static_cast<int>(countReal));
     for (int i = 1; i <= count; ++i) knots.push_back(i == count ? b : a + (b - a) * i / count);
     field.mean->appendRayBreakpoints(kernel.state().birthPosition, w, a, b, knots);
-    const auto* conditional = dynamic_cast<const Conditional29FlightKernel*>(&kernel);
-    if (conditional) {
-        // Geometric panels resolve small departure slopes without discarding an
-        // epsilon interval. Panels do not change the model or the birth state.
-        double near = knots[1];
-        for (int i = 0; i < 40; ++i) {
-            near *= 0.5;
-            if (near > a && near < b) knots.push_back(near);
-        }
-        std::sort(knots.begin(), knots.end());
-        const auto base = knots;
-        const auto& ray = conditional->conditionedRay();
-        // A positive source with an inward slope can have a very narrow first
-        // crossing. Resolve its conditional mean zero and stochastic width.
-        for (std::size_t i = 1; i < base.size(); ++i) {
-            double lo = base[i - 1], hi = base[i];
-            const double ml = ray.endpointValueSlope(lo).mean[0];
-            const double mh = ray.endpointValueSlope(hi).mean[0];
-            if (!((ml > 0.0 && mh <= 0.0) || (ml < 0.0 && mh >= 0.0))) continue;
-            for (int n = 0; n < 52; ++n) {
-                const double mid = lo + 0.5 * (hi - lo);
-                if (mid == lo || mid == hi) break;
-                if ((ray.endpointValueSlope(mid).mean[0] > 0.0) == (ml > 0.0)) lo = mid;
-                else hi = mid;
-            }
-            const double center = lo + 0.5 * (hi - lo);
-            const auto fk = ray.endpointValueSlope(center);
-            const double width = std::abs(fk.mean[1]) > 0.0
-                ? std::sqrt(fk.covariance(0, 0)) / std::abs(fk.mean[1]) : 0.0;
-            for (double offset : {-8.0, -4.0, -1.0, -0.25, 0.0, 0.25, 1.0, 4.0, 8.0}) {
-                const double point = center + offset * width;
-                if (point > a && point < b) knots.push_back(point);
-            }
-        }
-    }
     std::sort(knots.begin(), knots.end());
     knots.erase(std::unique(knots.begin(), knots.end()), knots.end());
     return knots;

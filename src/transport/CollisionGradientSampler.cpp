@@ -44,7 +44,7 @@ Vector3 sampleFluxWeightedGradient(const Gaussian<3>& gradient, const Vector3& w
 Vector3 sampleCollisionGradient(const FlightKernel& kernel, double age, Random& rng,
                                 const NumericPolicy& policy) {
     const HitStatistics statistics = kernel.hitStatistics(age);
-    return sampleFluxWeightedGradient(statistics.gradientGivenEndpointZero,
+    return sampleFluxWeightedGradient(statistics.collisionGradient,
                                       kernel.state().direction, rng, policy);
 }
 

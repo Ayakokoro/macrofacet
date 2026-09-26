@@ -11,21 +11,19 @@ HazardEvaluation ClassicFlightKernel::evaluate(double age) const {
     }
     const Point3 point = state_.birthPosition + age * state_.direction;
     if (!density_) {
-        return {evaluateClassic(field_, material_, point, state_.direction).extinction,
-                std::nullopt, std::nullopt};
+        return {evaluateClassic(field_, material_, point, state_.direction).extinction};
     }
     const double density = density_->sample(point);
     if (!(density >= 0.0) || !std::isfinite(density)) {
         throw NumericError(NumericStatus::InvalidInput, "invalid baked density");
     }
     if (density == 0.0) {
-        return {exactZero(), std::nullopt, std::nullopt};
+        return {exactZero()};
     }
     const PositiveResult area = classicProjectedArea(field_, material_, point, state_.direction);
     if (area.status == NumericStatus::ExactZero)
-        return {exactZero(), std::nullopt, std::nullopt};
-    return {positiveFromLog(std::log(density) + area.logValue),
-            std::nullopt, std::nullopt};
+        return {exactZero()};
+    return {positiveFromLog(std::log(density) + area.logValue)};
 }
 
 HitStatistics ClassicFlightKernel::hitStatistics(double age) const {

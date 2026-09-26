@@ -42,10 +42,10 @@ struct RenderedImage {
     RenderStatistics statistics;
 };
 
-Spectrum traceCameraPath(const Ray& initialRay, ModelMode mode,
+Spectrum traceCameraPath(const Ray& initialRay,
                          const ExperimentConfig& config, Random& rng,
                          RenderStatistics& statistics);
-RenderedImage renderAnalyticScene(ModelMode mode, const ExperimentConfig& config);
+RenderedImage renderAnalyticScene(const ExperimentConfig& config);
 void writePfm(const std::filesystem::path& path, const RenderedImage& image);
 void writeBmpPreview(const std::filesystem::path& path, const RenderedImage& image);
 

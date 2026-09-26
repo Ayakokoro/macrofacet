@@ -1,42 +1,64 @@
 {
   "schema_version": 1,
   "seed": 17429,
-  "modes": ["classic"],
   "field": {
     "mean_type": "shader_ball",
-    "sphere_center": [0.0, 0.0, 0.0],
+    "sphere_center": [
+      0.0,
+      0.0,
+      0.0
+    ],
     "sphere_radius": 1.0,
-    "groove_axis": [0.45, 0.25, 0.8573214099741123],
+    "groove_axis": [
+      0.45,
+      0.25,
+      0.8573214099741123
+    ],
     "groove_radius": 0.1,
     "sigma": 0.01,
-    "domain_min": [-1.6, -1.6, -1.7],
-    "domain_max": [1.6, 1.6, 1.5]
+    "domain_min": [
+      -1.6,
+      -1.6,
+      -1.7
+    ],
+    "domain_max": [
+      1.6,
+      1.6,
+      1.5
+    ]
   },
   "material": {
     "ndf_family": "generalized_gaussian",
     "roughness": 0.1,
-    "eta_rgb": [0.2, 0.9, 1.1],
-    "k_rgb": [3.9, 2.5, 2.2]
+    "eta_rgb": [
+      0.2,
+      0.9,
+      1.1
+    ],
+    "k_rgb": [
+      3.9,
+      2.5,
+      2.2
+    ]
   },
   "transport": {
     "classic_phase_proposal": "target_vndf",
     "roulette_start_depth": 5
   },
   "fixed_flight": {
-    "birth_position": [0.0, 0.0, 1.0],
-    "birth_gradient": [0.0, 0.0, 1.0],
-    "direction": [0.0, 0.0, 1.0],
+    "birth_position": [
+      0.0,
+      0.0,
+      1.0
+    ],
+    "direction": [
+      0.0,
+      0.0,
+      1.0
+    ],
     "requested_maximum_age": 1.0,
     "curve_sample_count": 17,
     "flight_sample_count": 1000
-  },
-  "reference": {
-    "path_sample_count": 256,
-    "nested_grid_intervals": [16, 32],
-    "formula_checkpoint_counts": [0, 4],
-    "formula_age_count": 4,
-    "formula_sample_count": 512,
-    "max_grid_points": 64
   },
   "numeric": {
     "relative_tolerance": 0.0001,
@@ -48,8 +70,16 @@
     "width": 256,
     "height": 256,
     "samples_per_pixel": 8,
-    "camera_position": [3.0, -4.0, 2.5],
-    "camera_target": [0.0, 0.0, -0.1],
+    "camera_position": [
+      3.0,
+      -4.0,
+      2.5
+    ],
+    "camera_target": [
+      0.0,
+      0.0,
+      -0.1
+    ],
     "vertical_fov_degrees": 32.0,
     "environment": "directional_gradient",
     "flight_table_cells": 256

@@ -9,7 +9,7 @@
 namespace mf {
 
 // A transport model whose baked density grid defines the active band. The GP
-// prior is used only for in-band projected areas and conditional statistics.
+// prior is used for in-band projected areas.
 // A null density field retains the analytic fallback used by core-only tests.
 class NarrowBandMedium {
 public:
@@ -17,12 +17,8 @@ public:
                      ScalarFieldPtr density = nullptr, bool surfaceBand = false,
                      std::shared_ptr<const DensityMajorantGrid> majorantGrid = nullptr);
 
-    FlightState startExternal(ModelMode mode, ExternalPolicy policy,
-                              const Point3& entry, const Vector3& direction,
-                              Random& rng, const NumericPolicy& numeric) const;
-    std::unique_ptr<FlightKernel> beginFlight(ModelMode mode, const FlightState& state,
-                                               ExternalPolicy policy,
-                                               const NumericPolicy& numeric) const;
+    FlightState startExternal(const Point3& entry, const Vector3& direction) const;
+    std::unique_ptr<FlightKernel> beginFlight(const FlightState& state) const;
     FlightSample sample(const FlightKernel& flight, Random& rng,
                         const NumericPolicy& numeric, TrackingDiagnostics* diagnostics,
                         int initialCells, double maximumAge = -1.0) const;

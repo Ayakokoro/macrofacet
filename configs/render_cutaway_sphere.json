@@ -1,44 +1,66 @@
 {
   "schema_version": 1,
   "seed": 17429,
-  "modes": ["conditional29"],
   "field": {
     "mean_type": "cutaway_sphere",
-    "sphere_center": [0.0, 0.0, 0.0],
+    "sphere_center": [
+      0.0,
+      0.0,
+      0.0
+    ],
     "inner_radius": 0.45,
     "outer_radius": 1.0,
     "sigma": 0.05,
-    "correlation_lengths": [0.06, 0.06, 0.06],
-    "domain_min": [-1.6, -1.6, -1.6],
-    "domain_max": [1.6, 1.6, 1.6]
+    "correlation_lengths": [
+      0.06,
+      0.06,
+      0.06
+    ],
+    "domain_min": [
+      -1.6,
+      -1.6,
+      -1.6
+    ],
+    "domain_max": [
+      1.6,
+      1.6,
+      1.6
+    ]
   },
   "material": {
     "ndf_family": "generalized_gaussian",
-    "eta_rgb": [0.2, 0.9, 1.1],
-    "k_rgb": [3.9, 2.5, 2.2]
+    "eta_rgb": [
+      0.2,
+      0.9,
+      1.1
+    ],
+    "k_rgb": [
+      3.9,
+      2.5,
+      2.2
+    ]
   },
   "transport": {
     "roulette_start_depth": 5
   },
   "fixed_flight": {
-    "birth_position": [0.27, 0.36, 0.0],
-    "birth_gradient": [0.6, 0.8, 0.0],
-    "direction": [0.6, 0.8, 0.0],
+    "birth_position": [
+      0.27,
+      0.36,
+      0.0
+    ],
+    "direction": [
+      0.6,
+      0.8,
+      0.0
+    ],
     "requested_maximum_age": 1.0,
     "curve_sample_count": 17,
     "flight_sample_count": 1000
   },
-  "reference": {
-    "path_sample_count": 256,
-    "nested_grid_intervals": [16, 32],
-    "formula_checkpoint_counts": [0, 4],
-    "formula_age_count": 4,
-    "formula_sample_count": 512,
-    "max_grid_points": 64
-  },
   "numeric": {
-    "relative_tolerance": 1e-4,
-    "absolute_tolerance": 1e-7,
+    "relative_tolerance": 0.0001,
+    "absolute_tolerance": 1e-07,
     "max_quadrature_subdivisions": 2048,
     "max_root_iterations": 128
   },
@@ -46,11 +68,19 @@
     "width": 256,
     "height": 256,
     "samples_per_pixel": 16,
-    "camera_position": [2.7, 3.6, 2.1],
-    "camera_target": [0.0, 0.0, 0.0],
+    "camera_position": [
+      2.7,
+      3.6,
+      2.1
+    ],
+    "camera_target": [
+      0.0,
+      0.0,
+      0.0
+    ],
     "vertical_fov_degrees": 32.0,
     "environment": "directional_gradient",
     "flight_table_cells": 128
   },
-  "output_directory": "outputs/render_cutaway_sphere_conditional"
+  "output_directory": "outputs/render_cutaway_sphere"
 }

@@ -33,7 +33,6 @@ struct RestoreNumericPolicy {
 
 nlohmann::json roughnessConfig() {
     return nlohmann::json::parse(R"json({
-        "modes": ["classic"],
         "field": {
             "mean_type": "plane", "plane_normal": [0, 0, 1], "plane_offset": 0,
             "sigma": 0.03,
@@ -41,15 +40,10 @@ nlohmann::json roughnessConfig() {
         },
         "material": {"eta_rgb": [0.2, 0.9, 1.1], "k_rgb": [3.9, 2.5, 2.2],
                      "ndf_family": "generalized_gaussian", "roughness": 0.6},
-        "transport": {"external_policy": "original_macrofacet"},
+        "transport": {},
         "fixed_flight": {
-            "birth_position": [0, 0, 0], "birth_gradient": [0, 0, 1], "direction": [0, 0, 1],
+            "birth_position": [0, 0, 0], "direction": [0, 0, 1],
             "requested_maximum_age": 0.3, "curve_sample_count": 3, "flight_sample_count": 4
-        },
-        "reference": {
-            "path_sample_count": 4, "nested_grid_intervals": [4, 8],
-            "formula_checkpoint_counts": [0, 1], "formula_age_count": 2,
-            "formula_sample_count": 4, "confidence_level": 0.95, "max_grid_points": 16
         },
         "numeric": {
             "relative_tolerance": 0.0001, "absolute_tolerance": 0.0000001,
@@ -257,5 +251,8 @@ void testMaterialRoughness(TestContext& context) {
                     (classicGgx.material.ggxAlpha - Vector2(0.3, 0.5)).norm() < 1e-12,
                     "Classic reads GGX selection and alpha from material");
     ggx["modes"] = {"conditional29"};
-    rejectsJson(ggx, "conditional GP transport rejects a material GGX baseline");
+    rejectsJson(ggx, "obsolete mode selection is rejected");
+    ggx.erase("modes");
+    ggx["transport"]["conditional29"] = {{"sampler", "regular_tracking"}};
+    rejectsJson(ggx, "obsolete conditional transport settings are rejected");
 }

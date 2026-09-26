@@ -1,4 +1,3 @@
-#include "macrofacet/experiments/ConditionalGPReference.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/experiments/FlightCurveExperiment.h"
 #include "macrofacet/experiments/RenderExperiment.h"
@@ -61,6 +60,8 @@ CommandLine parseCommandLine(int argc, char** argv) {
     if (argc < 2) throw std::invalid_argument("missing command");
     CommandLine options;
     options.command = argv[1];
+    if (options.command != "curves" && options.command != "render" && options.command != "all")
+        throw std::invalid_argument("unknown command: " + options.command);
     for (int i = 2; i < argc; ++i) {
         const std::string argument = argv[i];
         if (argument == "--preserve-slope") {
@@ -108,11 +109,11 @@ int main(int argc, char** argv) {
     mf::registerNanoVdbFieldTypes();
 #endif
     if (argc < 2) {
-        std::cerr << "usage: macrofacet_experiments {curves|gp-reference|render|all} "
+        std::cerr << "usage: macrofacet_experiments {curves|render|all} "
                      "--config <file> [--sigma <value>] [--roughness <value>] [--preserve-slope] "
                      "[--width <pixels>] [--height <pixels>] [--spp <count>] "
                      "[--flight-cells <count>] [--threads <count>] [--output <directory>]\n"
-                     "  --flight-cells: initial integration panels for both modes\n";
+                     "  --flight-cells: initial optical-depth integration panels\n";
         return 2;
     }
     try {
@@ -134,12 +135,7 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(config.outputDirectory);
         mf::writeResolvedConfig(config, config.outputDirectory / "resolved_config.json");
         if (command == "curves" || command == "all") mf::runFlightCurves(config);
-        if (command == "gp-reference" || command == "all") mf::runConditionalGPReference(config);
         if (command == "render" || command == "all") mf::runRenderExperiments(config);
-        if (command != "curves" && command != "gp-reference" && command != "render" &&
-            command != "all") {
-            throw std::invalid_argument("unknown command: " + command);
-        }
         std::ofstream summary(config.outputDirectory / "run_summary.json");
         summary << "{\n  \"success\": true,\n  \"command\": \"" << command
                 << "\",\n  \"seed\": " << config.seed

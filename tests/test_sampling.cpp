@@ -2,7 +2,7 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/mathutility/GaussianMoments1D.h"
 #include "macrofacet/transport/CollisionGradientSampler.h"
-#include "macrofacet/transport/Conditional29FlightKernel.h"
+#include "macrofacet/transport/ClassicFlightKernel.h"
 #include "macrofacet/transport/DensityMajorantGrid.h"
 #include "macrofacet/transport/FlightState.h"
 #include "macrofacet/transport/NarrowBandMedium.h"
@@ -41,9 +41,7 @@ void testPrecomputedDdaBounds(TestContext& context) {
     for (int i = 0; i < 8; ++i) {
         const FlightState state = startExternalFlight(Point3(0.0, 0.0, 0.2),
                                                       -Vector3::UnitZ());
-        const auto flight = medium.beginFlight(ModelMode::Classic, state,
-                                               ExternalPolicy::OriginalMacrofacet,
-                                               defaultNumericPolicy());
+        const auto flight = medium.beginFlight(state);
         (void)medium.sample(*flight, rng, defaultNumericPolicy(), nullptr, 8);
     }
     context.require(density->boundsCalls == 4 * 4 * 4,
@@ -57,9 +55,7 @@ void testPrecomputedDdaBounds(TestContext& context) {
     for (int i = 0; i < 8; ++i) {
         const FlightState state = startExternalFlight(Point3(0.0, 0.0, 0.2),
                                                       -Vector3::UnitZ());
-        const auto flight = fallback.beginFlight(ModelMode::Classic, state,
-                                                 ExternalPolicy::OriginalMacrofacet,
-                                                 defaultNumericPolicy());
+        const auto flight = fallback.beginFlight(state);
         (void)fallback.sample(*flight, rng, defaultNumericPolicy(), nullptr, 8);
     }
     context.require(fallbackDensity->boundsCalls == 1,
@@ -122,24 +118,23 @@ void testSampling(TestContext& context) {
 
     GPSSField field = buildDefaultField();
     const Vector3 direction = normalizedOrThrow(Vector3(0.9, 0.0, 0.435889894));
-    FlightState state = startSurfaceFlight(Point3::Zero(), Vector3::UnitZ(), direction);
-    Conditional29FlightKernel kernel(field, state);
+    FlightState state = startExternalFlight(Point3::Zero(), direction);
+    MaterialConfig material;
+    ClassicFlightKernel kernel(field, material, state);
     for (int i = 0; i < 500; ++i) {
         const Vector3 g = sampleCollisionGradient(kernel, 0.12, rng);
-        context.require(direction.dot(g) < 0.0, "conditional collision gradient crosses inward");
+        context.require(direction.dot(g) < 0.0, "classic collision gradient crosses inward");
         const Vector3 reflected = reflectTravelDirection(direction, normalizedOrThrow(g));
         context.require(reflected.dot(g) > 0.0, "reflection departs along sampled full gradient");
     }
 
     const Point3 originalBirth = state.birthPosition;
-    const Vector3 originalGradient = state.birthGradient;
     onNullCollision(state, 0.2);
     context.require((state.birthPosition - originalBirth).norm() == 0.0 &&
-                    (state.birthGradient - originalGradient).norm() == 0.0 && state.age == 0.2,
-                    "null collision preserves statistical birth state");
-    const FlightState reset = onRealSurfaceBounce(Point3(1.0, 0.0, 0.0), Vector3::UnitX(),
-                                                  Vector3::UnitX());
-    context.require(reset.age == 0.0 && reset.hasFullGradient &&
-                    (reset.birthGradient - Vector3::UnitX()).norm() == 0.0,
-                    "real bounce resets age and stores full gradient");
+                    state.age == 0.2, "null collision preserves birth position");
+    const FlightState reset = startClassicCollisionFlight(Point3(1.0, 0.0, 0.0),
+                                                            Vector3::UnitX());
+    context.require(reset.age == 0.0 &&
+                    (reset.birthPosition - Vector3::UnitX()).norm() == 0.0,
+                    "classic bounce resets flight age and origin");
 }

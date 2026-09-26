@@ -18,20 +18,17 @@ void runFlightCurves(const ExperimentConfig& config) {
     if (!config.field.activeDomain.contains(config.fixedFlight.birthPosition, 1e-12))
         throw std::invalid_argument("fixed-flight birth lies outside the active domain");
     std::filesystem::create_directories(config.outputDirectory);
-    const FlightState state = startSurfaceFlight(config.fixedFlight.birthPosition,
-                                                 config.fixedFlight.birthGradient,
-                                                 config.fixedFlight.direction);
+    const FlightState state = startExternalFlight(config.fixedFlight.birthPosition,
+                                                  config.fixedFlight.direction);
     const NarrowBandMedium medium(config.field, config.material, config.mediumDensity,
                                   config.mediumSurfaceBand, config.densityMajorantGrid);
     std::ofstream curves(config.outputDirectory / "flight_curves.csv");
-    curves << "mode,t,h,log_h,H,T_model,p_model,log_screen_probability,log_crossing_flux,"
-              "integration_error,numeric_status,elapsed_microseconds\n";
+    curves << "mode,t,h,log_h,H,T_model,p_model,integration_error,numeric_status,elapsed_microseconds\n";
     std::ofstream histograms(config.outputDirectory / "flight_histograms.csv");
     histograms << "mode,bin_left,bin_right,observed_mass,expected_mass,escape_bin\n";
 
-    for (ModelMode mode : config.modes) {
-        std::unique_ptr<FlightKernel> kernel = medium.beginFlight(
-            mode, state, config.conditional29.externalPolicy, config.numeric);
+    {
+        std::unique_ptr<FlightKernel> kernel = medium.beginFlight(state);
         const double maximumAge = std::min(config.fixedFlight.requestedMaximumAge,
                                            kernel->maximumAgeInDomain());
         const int count = config.fixedFlight.curveSampleCount;
@@ -55,20 +52,17 @@ void runFlightCurves(const ExperimentConfig& config) {
             const double survival = std::exp(-opticalDepth[static_cast<std::size_t>(i)]);
             const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - started).count();
-            curves << modelModeName(mode) << ',' << std::setprecision(17)
+            curves << "classic" << ',' << std::setprecision(17)
                    << ages[static_cast<std::size_t>(i)] << ',' << evaluation.hazard.value << ','
                    << evaluation.hazard.logValue << ',' << opticalDepth[static_cast<std::size_t>(i)]
-                   << ',' << survival << ',' << evaluation.hazard.value * survival << ',';
-            if (evaluation.logExteriorScreenProbability) curves << *evaluation.logExteriorScreenProbability;
-            curves << ',';
-            if (evaluation.logCrossingFlux) curves << *evaluation.logCrossingFlux;
-            curves << ',' << integrated.absError << ',' << toString(evaluation.hazard.status) << ','
+                   << ',' << survival << ',' << evaluation.hazard.value * survival << ','
+                   << integrated.absError << ',' << toString(evaluation.hazard.status) << ','
                    << elapsed << '\n';
         }
 
         std::vector<int> bins(static_cast<std::size_t>(count - 1), 0);
         int escapes = 0;
-        Random rng(config.seed + static_cast<unsigned>(mode) * 7919ULL);
+        Random rng(config.seed);
         for (int sample = 0; sample < config.fixedFlight.flightSampleCount; ++sample) {
             const auto flight = medium.sample(*kernel, rng, config.numeric, nullptr,
                                               config.render.flightTableCells, maximumAge);
@@ -81,14 +75,14 @@ void runFlightCurves(const ExperimentConfig& config) {
         for (int i = 0; i < count - 1; ++i) {
             const double expected = std::exp(-opticalDepth[static_cast<std::size_t>(i)]) -
                                     std::exp(-opticalDepth[static_cast<std::size_t>(i + 1)]);
-            histograms << modelModeName(mode) << ',' << std::setprecision(17)
+            histograms << "classic" << ',' << std::setprecision(17)
                        << ages[static_cast<std::size_t>(i)] << ','
                        << ages[static_cast<std::size_t>(i + 1)] << ','
                        << static_cast<double>(bins[static_cast<std::size_t>(i)]) /
                               config.fixedFlight.flightSampleCount
                        << ',' << expected << ",0\n";
         }
-        histograms << modelModeName(mode) << ',' << maximumAge << ',' << maximumAge << ','
+        histograms << "classic" << ',' << maximumAge << ',' << maximumAge << ','
                    << static_cast<double>(escapes) / config.fixedFlight.flightSampleCount << ','
                    << std::exp(-opticalDepth.back()) << ",1\n";
     }

@@ -16,7 +16,7 @@ namespace mf {
 //
 //  - Outside the grid, and at inactive voxels inside it, evaluate() returns the
 //    grid's background (+6 sigma) with a zero gradient. It must not throw:
-//    ConditionedRay evaluates the mean at the ray's birth point during
+//    The flight kernel evaluates the mean at the ray's birth point during
 //    construction, and that point lies on the config's active domain, which is
 //    larger than the baked grid.
 //  - bounds() reports the grid's global extremes for every domain. That is

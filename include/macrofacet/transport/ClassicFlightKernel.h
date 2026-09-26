@@ -12,7 +12,6 @@ public:
         : FlightKernel(field, state), material_(material), density_(std::move(density)) {}
     HazardEvaluation evaluate(double age) const override;
     HitStatistics hitStatistics(double age) const override;
-    ModelMode mode() const override { return ModelMode::Classic; }
 private:
     MaterialConfig material_;
     ScalarFieldPtr density_;

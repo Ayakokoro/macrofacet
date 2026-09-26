@@ -24,30 +24,20 @@ NarrowBandMedium::NarrowBandMedium(
     }
 }
 
-FlightState NarrowBandMedium::startExternal(ModelMode mode, ExternalPolicy policy,
-                                            const Point3& entry, const Vector3& direction,
-                                            Random& rng, const NumericPolicy& numeric) const {
-    if (mode == ModelMode::Conditional29 && policy == ExternalPolicy::SampledExterior) {
-        if (surfaceBand_ && density_ && !(density_->sample(entry) > 0.0)) {
-            throw std::invalid_argument(
-                "sampled_exterior starts outside the transport band; use original_macrofacet");
-        }
-        return sampleExteriorFlight(field_, entry, direction, rng, numeric);
-    }
+FlightState NarrowBandMedium::startExternal(const Point3& entry,
+                                            const Vector3& direction) const {
     return startExternalFlight(entry, direction);
 }
 
-std::unique_ptr<FlightKernel> NarrowBandMedium::beginFlight(
-    ModelMode mode, const FlightState& state, ExternalPolicy policy,
-    const NumericPolicy& numeric) const {
-    return makeFlightKernel(mode, field_, material_, state, policy, numeric, density_);
+std::unique_ptr<FlightKernel> NarrowBandMedium::beginFlight(const FlightState& state) const {
+    return std::make_unique<ClassicFlightKernel>(field_, material_, state, density_);
 }
 
 FlightSample NarrowBandMedium::sample(const FlightKernel& flight, Random& rng,
                                       const NumericPolicy& numeric,
                                       TrackingDiagnostics* diagnostics, int initialCells,
                                       double maximumAge) const {
-    if (surfaceBand_ && density_ && flight.mode() == ModelMode::Classic) {
+    if (surfaceBand_ && density_) {
         const auto& classic = static_cast<const ClassicFlightKernel&>(flight);
         const double area = classicAreaMajorant(field_, material_, field_.activeDomain,
                                                  flight.state().direction, numeric);

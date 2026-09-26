@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 
 
-COLORS = {"classic": "#2563eb", "conditional29": "#dc2626", "midpoint": "#059669"}
+COLORS = {"classic": "#2563eb", "classic expected": "#059669"}
 
 
 def load(path):
@@ -68,7 +68,7 @@ def plot_flights(directory):
     combined.update(expected)
     panel(svg, "Flight-bin mass: observed and expected", combined, 70, 600, 960, 190)
     x, y = 75, 30
-    for mode in ("classic", "conditional29", "midpoint"):
+    for mode in ("classic", "classic expected"):
         svg.append(f'<line x1="{x}" y1="{y}" x2="{x+28}" y2="{y}" stroke="{COLORS[mode]}" stroke-width="3"/>')
         svg.append(f'<text x="{x+34}" y="{y+4}" font-size="13" font-family="sans-serif">{mode}</text>')
         x += 190
@@ -76,37 +76,11 @@ def plot_flights(directory):
     (directory / "flight_curves.svg").write_text("\n".join(svg), encoding="utf-8")
 
 
-def plot_reference(directory):
-    path_rows = load(directory / "gp_reference_paths.csv")
-    formula_rows = load(directory / "screened_formula.csv")
-    survival = {}
-    for row in path_rows:
-        name = "grid " + row["grid_intervals"]
-        survival.setdefault(name, []).append((float(row["age"]), float(row["survival"])))
-    # Give reference grids a separate palette.
-    for index, name in enumerate(survival):
-        COLORS[name] = ("#7c3aed", "#ea580c", "#0891b2", "#334155")[index % 4]
-    hazards = {}
-    for row in formula_rows:
-        count = row["checkpoint_count"]
-        hazards.setdefault("N=" + count, []).append((float(row["age"]), float(row["h_N"])))
-    palette = ("#2563eb", "#dc2626", "#059669", "#7c3aed", "#ea580c", "#0891b2")
-    for index, name in enumerate(hazards):
-        COLORS[name] = palette[index % len(palette)]
-    svg = ['<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620">',
-           '<rect width="100%" height="100%" fill="#f8fafc"/>']
-    panel(svg, "Joint-GP prefix-positive survival", survival, 70, 70, 960, 190)
-    panel(svg, "Finite-checkpoint screened formula h_N", hazards, 70, 350, 960, 190)
-    svg.append('</svg>')
-    (directory / "gp_reference.svg").write_text("\n".join(svg), encoding="utf-8")
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
     args = parser.parse_args()
     plot_flights(args.directory)
-    plot_reference(args.directory)
 
 
 if __name__ == "__main__":

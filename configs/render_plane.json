@@ -1,20 +1,43 @@
 {
   "schema_version": 1,
   "seed": 17429,
-  "modes": ["classic"],
   "field": {
     "mean_type": "plane",
-    "plane_normal": [0.0, 0.0, 1.0],
+    "plane_normal": [
+      0.0,
+      0.0,
+      1.0
+    ],
     "plane_offset": 0.0,
     "sigma": 0.05,
-    "correlation_lengths": [0.25, 0.25, 0.25],
-    "domain_min": [-2.0, -2.0, -0.8],
-    "domain_max": [2.0, 2.0, 0.8]
+    "correlation_lengths": [
+      0.25,
+      0.25,
+      0.25
+    ],
+    "domain_min": [
+      -2.0,
+      -2.0,
+      -0.8
+    ],
+    "domain_max": [
+      2.0,
+      2.0,
+      0.8
+    ]
   },
   "material": {
     "ndf_family": "generalized_gaussian",
-    "eta_rgb": [0.2, 0.9, 1.1],
-    "k_rgb": [3.9, 2.5, 2.2]
+    "eta_rgb": [
+      0.2,
+      0.9,
+      1.1
+    ],
+    "k_rgb": [
+      3.9,
+      2.5,
+      2.2
+    ]
   },
   "transport": {
     "classic_phase_proposal": "paper_mixture",
@@ -22,24 +45,23 @@
     "roulette_start_depth": 5
   },
   "fixed_flight": {
-    "birth_position": [0.0, 0.0, 0.0],
-    "birth_gradient": [0.0, 0.0, 1.0],
-    "direction": [0.7071067811865476, 0.0, 0.7071067811865476],
+    "birth_position": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "direction": [
+      0.7071067811865476,
+      0.0,
+      0.7071067811865476
+    ],
     "requested_maximum_age": 1.0,
     "curve_sample_count": 17,
     "flight_sample_count": 1000
   },
-  "reference": {
-    "path_sample_count": 256,
-    "nested_grid_intervals": [16, 32],
-    "formula_checkpoint_counts": [0, 4],
-    "formula_age_count": 4,
-    "formula_sample_count": 512,
-    "max_grid_points": 64
-  },
   "numeric": {
-    "relative_tolerance": 1e-4,
-    "absolute_tolerance": 1e-7,
+    "relative_tolerance": 0.0001,
+    "absolute_tolerance": 1e-07,
     "max_quadrature_subdivisions": 2048,
     "max_root_iterations": 128
   },
@@ -47,8 +69,16 @@
     "width": 512,
     "height": 512,
     "samples_per_pixel": 4,
-    "camera_position": [1.7, -2.5, 1.4],
-    "camera_target": [0.0, 0.0, 0.0],
+    "camera_position": [
+      1.7,
+      -2.5,
+      1.4
+    ],
+    "camera_target": [
+      0.0,
+      0.0,
+      0.0
+    ],
     "vertical_fov_degrees": 42.0,
     "environment": "directional_gradient",
     "flight_table_cells": 64
