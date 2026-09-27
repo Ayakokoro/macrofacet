@@ -4,6 +4,7 @@
 #include "fieldgen/VdbBaker.h"
 #include "macrofacet/fields/NanoVdbMean.h"
 #include "macrofacet/fields/NanoVdbSampledField.h"
+#include "macrofacet/macrofacet/ClassicCoefficients.h"
 
 #include <cstdint>
 #include <cmath>
@@ -42,12 +43,11 @@ void prepareNanoVdbField(ExperimentConfig& config) {
         config.field.activeDomain.maximum = config.field.activeDomain.maximum.cwiseMax(
             density->gridBounds().maximum + margin);
         config.field.validate();
-        const auto sidecar = readSidecar(baked->gridFile());
-        config.mediumSurfaceBand = !sidecar || !sidecar->fullDomain;
-        if (config.mediumSurfaceBand) {
-            config.densityMajorantGrid = std::make_shared<DensityMajorantGrid>(
-                *config.mediumDensity, config.field.activeDomain);
-        }
+        config.densityMajorantGrid = std::make_shared<DensityMajorantGrid>(
+            *config.mediumDensity, config.field.activeDomain);
+        config.preparedAreaMajorant = classicAreaMajorant(
+            config.field, config.material, config.field.activeDomain,
+            Vector3::UnitZ(), config.numeric);
         return;
     }
     if (config.sourceFieldSpec.empty()) {
@@ -102,8 +102,11 @@ void prepareNanoVdbField(ExperimentConfig& config) {
     }
     config.field.mean = NanoVdbMean::open(path, sigma);
     config.mediumDensity = NanoVdbSampledField::open(path, "density");
-    config.mediumSurfaceBand = false;
-    config.densityMajorantGrid.reset();
+    config.densityMajorantGrid = std::make_shared<DensityMajorantGrid>(
+        *config.mediumDensity, config.field.activeDomain);
+    config.preparedAreaMajorant = classicAreaMajorant(
+        config.field, config.material, config.field.activeDomain,
+        Vector3::UnitZ(), config.numeric);
     // Procedural fields have no alpha grid. Preserve their existing material
     // NDF instead of silently replacing it with the file's constant alpha.
     config.field.validate();

@@ -45,6 +45,7 @@ private:
     // covarianceG to read, so it takes alpha directly.
     PointPrior targetPrior_;
     Vector2 targetAlpha_;
+    Matrix3 targetFrame_ = Matrix3::Identity();
     std::optional<LocalBeckmannVisibleSampler> beckmannProposal_;
 };
 

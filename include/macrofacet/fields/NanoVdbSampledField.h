@@ -9,8 +9,7 @@
 namespace mf {
 
 // The `alpha` grid of a baked .nvdb, exposed as a per-point scalar field. It
-// drives the material NDF (per-point roughness), never the transport
-// statistics -- see docs/archive/PLAN_NANOVDB_FIELD.md 1.3.
+// drives the local material NDF and its projected area in transport.
 //
 // Sampling is trilinear. Outside the grid the grid's background is returned,
 // which the generator sets to the same constant alpha it writes inside the

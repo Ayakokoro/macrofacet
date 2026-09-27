@@ -1,5 +1,4 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
-#include "macrofacet/experiments/FlightCurveExperiment.h"
 #include "macrofacet/experiments/RenderExperiment.h"
 #if defined(MACROFACET_HAS_FIELDS)
 #include "macrofacet/fields/NanoVdbMean.h"
@@ -22,7 +21,6 @@ struct CommandLine {
     std::optional<double> roughness;
     std::optional<std::filesystem::path> outputDirectory;
     std::optional<int> samplesPerPixel;
-    std::optional<int> flightTableCells;
     std::optional<int> width;
     std::optional<int> height;
     std::optional<int> threadCount;
@@ -60,7 +58,7 @@ CommandLine parseCommandLine(int argc, char** argv) {
     if (argc < 2) throw std::invalid_argument("missing command");
     CommandLine options;
     options.command = argv[1];
-    if (options.command != "curves" && options.command != "render" && options.command != "all")
+    if (options.command != "render")
         throw std::invalid_argument("unknown command: " + options.command);
     for (int i = 2; i < argc; ++i) {
         const std::string argument = argv[i];
@@ -78,11 +76,6 @@ CommandLine parseCommandLine(int argc, char** argv) {
         } else if (argument == "--output") options.outputDirectory = value;
         else if (argument == "--spp") {
             options.samplesPerPixel = parsePositiveInteger(argument, value);
-        } else if (argument == "--flight-cells") {
-            options.flightTableCells = parsePositiveInteger(argument, value);
-            if (*options.flightTableCells < 4) {
-                throw std::invalid_argument("--flight-cells must be at least 4");
-            }
         } else if (argument == "--width") {
             options.width = parsePositiveInteger(argument, value);
         } else if (argument == "--height") {
@@ -109,11 +102,10 @@ int main(int argc, char** argv) {
     mf::registerNanoVdbFieldTypes();
 #endif
     if (argc < 2) {
-        std::cerr << "usage: macrofacet_experiments {curves|render|all} "
+        std::cerr << "usage: macrofacet_experiments render "
                      "--config <file> [--sigma <value>] [--roughness <value>] [--preserve-slope] "
                      "[--width <pixels>] [--height <pixels>] [--spp <count>] "
-                     "[--flight-cells <count>] [--threads <count>] [--output <directory>]\n"
-                     "  --flight-cells: initial optical-depth integration panels\n";
+                     "[--threads <count>] [--output <directory>]\n";
         return 2;
     }
     try {
@@ -123,7 +115,6 @@ int main(int argc, char** argv) {
         mf::applyFieldOverrides(config, options.sigma, options.roughness, options.preserveSlope);
         if (options.outputDirectory) config.outputDirectory = *options.outputDirectory;
         if (options.samplesPerPixel) config.render.samplesPerPixel = *options.samplesPerPixel;
-        if (options.flightTableCells) config.render.flightTableCells = *options.flightTableCells;
         if (options.width) config.render.width = *options.width;
         if (options.height) config.render.height = *options.height;
         if (options.threadCount) config.render.threadCount = *options.threadCount;
@@ -134,8 +125,7 @@ int main(int argc, char** argv) {
 #endif
         std::filesystem::create_directories(config.outputDirectory);
         mf::writeResolvedConfig(config, config.outputDirectory / "resolved_config.json");
-        if (command == "curves" || command == "all") mf::runFlightCurves(config);
-        if (command == "render" || command == "all") mf::runRenderExperiments(config);
+        mf::runRenderExperiments(config);
         std::ofstream summary(config.outputDirectory / "run_summary.json");
         summary << "{\n  \"success\": true,\n  \"command\": \"" << command
                 << "\",\n  \"seed\": " << config.seed

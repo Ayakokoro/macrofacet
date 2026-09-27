@@ -6,9 +6,6 @@
 #include "macrofacet/macrofacet/GaussianNdf.h"
 #include "macrofacet/macrofacet/GgxHeightfield.h"
 #include "macrofacet/mathutility/Gaussian1D.h"
-#include "macrofacet/transport/ClassicFlightKernel.h"
-#include "macrofacet/transport/ClassicNullTracking.h"
-#include "macrofacet/transport/OpticalDepthSampler.h"
 
 namespace {
 
@@ -233,28 +230,4 @@ void testMacrofacetBaseline(TestContext& context) {
         context.near(normalFresnel[i], expected, 2e-14, "normal-incidence conductor Fresnel");
     }
 
-    const FlightState external = startExternalFlight(Point3(0.0, 0.0, 0.2),
-                                                     normalizedOrThrow(Vector3(0.6, 0.0, -0.8)));
-    ClassicFlightKernel kernel(field, unitMaterial, external);
-    const double end = std::min(0.3, kernel.maximumAgeInDomain());
-    const double numerical = integrateHazard(kernel, 0.0, end).value;
-    const double area = ndf.projectedArea(external.direction).value;
-    const double d0 = 0.2;
-    const double wz = external.direction.z();
-    const double analytic = area / wz *
-        (normalLogCdf((d0 + wz * end) / field.kernel.sigma()) -
-         normalLogCdf(d0 / field.kernel.sigma()));
-    context.relative(numerical, analytic, 2e-6, "analytic plane optical depth");
-
-    const double majorant = classicMajorant(field, unitMaterial, field.activeDomain, external.direction);
-    Random rng(8871);
-    int escaped = 0;
-    constexpr int flightSamples = 5000;
-    for (int i = 0; i < flightSamples; ++i) {
-        if (!sampleClassicNullTracking(kernel, majorant, rng).collided) ++escaped;
-    }
-    const double expectedEscape = std::exp(-integrateHazard(
-        kernel, kernel.currentAge(), kernel.maximumAgeInDomain()).value);
-    context.near(static_cast<double>(escaped) / flightSamples, expectedEscape, 0.025,
-                 "null tracking escape frequency");
 }

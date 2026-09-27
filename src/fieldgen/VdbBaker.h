@@ -14,7 +14,7 @@ namespace mf {
 
 struct BakeSettings {
     double sigma = 0.05;   // standard deviation of the surface position
-    double alpha = 0.5;    // material NDF parameter written to the alpha grid
+    double alpha = 0.5;    // Beckmann alpha written unchanged to the material grid
     std::array<int, 3> resolution{32, 32, 32};  // voxels per axis over the unexpanded bbox
     double bandSigmas = 3.0;         // the grids are written only inside +-bandSigmas
     double backgroundSigmas = 6.0;   // the sdf grid's background value, in sigma

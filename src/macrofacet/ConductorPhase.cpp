@@ -2,6 +2,7 @@
 #include "macrofacet/macrofacet/BeckmannVisibleSampler.h"
 #include "macrofacet/macrofacet/GaussianNdf.h"
 #include "macrofacet/macrofacet/GgxHeightfield.h"
+#include "macrofacet/macrofacet/LocalFrame.h"
 #include "macrofacet/transport/CollisionGradientSampler.h"
 #include <algorithm>
 #include <complex>
@@ -29,7 +30,8 @@ ConductorPhase::ConductorPhase(const GPSSField& field, const MaterialConfig& mat
                                double beckmannMixtureWeight, bool useTargetVndf)
     : material_(material), position_(std::move(position)), mixtureWeight_(beckmannMixtureWeight),
       useTargetVndf_(useTargetVndf), targetPrior_(material.materialNdf(field, position_)),
-      targetAlpha_(material.ggxAlphaAt(position_)) {
+      targetAlpha_(material.ggxAlphaAt(position_)),
+      targetFrame_(tangentFrame(targetPrior_.meanG)) {
     if (!(mixtureWeight_ >= 0.0 && mixtureWeight_ < 1.0)) {
         throw std::invalid_argument("Beckmann mixture weight must lie in [0,1)");
     }
@@ -40,14 +42,16 @@ ConductorPhase::ConductorPhase(const GPSSField& field, const MaterialConfig& mat
 
 double ConductorPhase::targetD(const Vector3& n) const {
     if (material_.ndfFamily == NdfFamily::GGXBaseline) {
-        return GgxHeightfield(targetAlpha_.x(), targetAlpha_.y()).evaluateD(n).value;
+        return GgxHeightfield(targetAlpha_.x(), targetAlpha_.y()).evaluateD(
+            targetFrame_.transpose() * n).value;
     }
     return GaussianNdf(targetPrior_.meanG, targetPrior_.covarianceG).evaluateD(n).value;
 }
 
 double ConductorPhase::targetArea(const Vector3& w) const {
     if (material_.ndfFamily == NdfFamily::GGXBaseline) {
-        return GgxHeightfield(targetAlpha_.x(), targetAlpha_.y()).projectedArea(w).value;
+        return GgxHeightfield(targetAlpha_.x(), targetAlpha_.y()).projectedArea(
+            targetFrame_.transpose() * w).value;
     }
     return GaussianNdf(targetPrior_.meanG, targetPrior_.covarianceG).projectedArea(w).value;
 }

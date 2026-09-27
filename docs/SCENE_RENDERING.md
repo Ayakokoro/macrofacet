@@ -14,11 +14,11 @@ tracing; see [NVDB tracing](NVDB_TRACING.md). The ready-to-run configurations ar
 Build once, then render a sharp surface and a broad, volume-like stochastic shell:
 
 ```powershell
-build\Release\macrofacet_experiments.exe render --config configs\render_plane.json --sigma 0.03 --preserve-slope --width 64 --height 64 --spp 8 --flight-cells 32 --output outputs\plane_surface
-build\Release\macrofacet_experiments.exe render --config configs\render_plane.json --sigma 0.25 --preserve-slope --width 64 --height 64 --spp 8 --flight-cells 32 --output outputs\plane_volume_like
+build\Release\macrofacet_experiments.exe render --config configs\render_plane.json --sigma 0.03 --preserve-slope --width 64 --height 64 --spp 8 --output outputs\plane_surface
+build\Release\macrofacet_experiments.exe render --config configs\render_plane.json --sigma 0.25 --preserve-slope --width 64 --height 64 --spp 8 --output outputs\plane_volume_like
 
-build\Release\macrofacet_experiments.exe render --config configs\render_sphere.json --sigma 0.03 --preserve-slope --width 64 --height 64 --spp 8 --flight-cells 32 --output outputs\sphere_surface
-build\Release\macrofacet_experiments.exe render --config configs\render_sphere.json --sigma 0.25 --preserve-slope --width 64 --height 64 --spp 8 --flight-cells 32 --output outputs\sphere_volume_like
+build\Release\macrofacet_experiments.exe render --config configs\render_sphere.json --sigma 0.03 --preserve-slope --width 64 --height 64 --spp 8 --output outputs\sphere_surface
+build\Release\macrofacet_experiments.exe render --config configs\render_sphere.json --sigma 0.25 --preserve-slope --width 64 --height 64 --spp 8 --output outputs\sphere_volume_like
 ```
 
 Each run writes a linear-radiance `.pfm`, an sRGB `.bmp` preview, `resolved_config.json`, and
@@ -31,8 +31,8 @@ object. This changes variance, not the target transport model, and is particular
 small `sigma`, where a uniform hemisphere proposal would produce mostly zero-weight samples.
 
 The commands above override the checked-in final-quality budget for quick iteration. Remove the
-`--width`, `--height`, `--spp`, and `--flight-cells` overrides to use the values from JSON.
-`--flight-cells` sets the initial integration partition, and the resolved config records the
+`--width`, `--height`, and `--spp` overrides to use the values from JSON.
+The resolved config records the
 actual NVDB voxel size. For narrow sigma or close-up silhouettes, check both spatial resolution
 and the render's numerical diagnostics.
 
@@ -67,10 +67,10 @@ The checked-in config uses `sigma = 0.05` with isotropic correlation lengths 0.0
 surface at the same gradient covariance, use:
 
 ```powershell
-build\Release\macrofacet_experiments.exe render --config configs\render_cutaway_sphere.json --sigma 0.01 --preserve-slope --flight-cells 256 --output outputs\cutaway_sigma_0.01
+build\Release\macrofacet_experiments.exe render --config configs\render_cutaway_sphere.json --sigma 0.01 --preserve-slope --output outputs\cutaway_sigma_0.01
 ```
 
-The render path uses continuous optical-depth inversion for full-domain Classic fields. Surface-band Classic fields use DDA null tracking. Increase `flight_table_cells` only if the adaptive integration diagnostics indicate a need; also check the NVDB voxel size near close-up cut edges.
+The render path uses DDA null tracking for both full-domain and surface-band NanoVDB fields. Check the baked voxel size near close-up cut edges.
 
 ## Shader ball
 
@@ -164,21 +164,25 @@ the relevant entries in an otherwise complete scene configuration:
 }
 ```
 
-Here roughness `r` means the standard deviation of **each GP gradient perturbation
-component**. The renderer constructs the full consistent kernel with
-`gradient_covariance = r^2 * I` and isotropic correlation length `ell = sigma / r`.
-It does not change the NDF separately from the field statistics. For signed-distance
-means, larger `r` broadens the local normal distribution. This is a GP parameterization,
-not GGX/Disney perceptual roughness, and it is not an exact normal-angle or slope standard
-deviation. Values greater than 1 are permitted; zero (a perfect-mirror limit) is unsupported.
+Here roughness is Beckmann alpha `a`: the standard deviation of each slope component
+is `a / sqrt(2)` in the Beckmann limit. The renderer constructs the full consistent
+SE kernel with `gradient_covariance = a^2 / 2 * I` and isotropic correlation length
+`ell = sqrt(2) * sigma / a`. For signed-distance means, larger `a` broadens the
+local normal distribution. At each material point, the local GP has a tangent-plane
+mean: its value mean is zero and its gradient mean is the unit SDF normal. Without
+an alpha grid it uses the configured SE gradient covariance; with a grid it uses
+`alpha(x)^2 / 2 * I` instead. The generalized Gaussian NDF still has a random gradient
+component along the mean normal and is therefore not exactly Beckmann. This is not
+GGX/Disney perceptual roughness. Values greater than 1 are permitted; zero (a
+perfect-mirror limit) is unsupported.
 
 At `sigma = 0.03`, example values are:
 
 | Roughness | Derived correlation length |
 | --- | --- |
-| 0.15 | 0.20 |
-| 0.30 | 0.10 |
-| 0.75 | 0.04 |
+| 0.15 | 0.2828 |
+| 0.30 | 0.1414 |
+| 0.75 | 0.0566 |
 
 Use either `material.roughness` **or** `field.correlation_lengths` in JSON; specifying both
 is an error. Roughness mode does not require `kernel_rotation`, since its covariance is
@@ -198,8 +202,14 @@ changing sigma in JSON or via `--sigma` automatically derives a new `ell`, so
 their existing sigma/`--preserve-slope` behavior.
 
 At a fixed point, holding roughness fixed keeps the prior normal distribution fixed.
-Changing sigma still changes the spatial correlation length, the stochastic layer's
-thickness, and potentially the final image, particularly in correlated transport modes.
+Changing sigma still changes the spatial correlation length and the local height
+density, so it can change the stochastic layer's thickness and the final image.
 Sigma, roughness and correlation length are not three independent parameters in this kernel.
 `resolved_config.json` records the explicit roughness, its definition, derived isotropic
 correlation length and gradient component standard deviations.
+
+For NanoVDB fields, values in the optional `alpha` grid follow the same Beckmann-alpha
+convention: the local Gaussian material GP uses `alpha(x)^2 / 2 * I`. The grid changes
+both the local projected area used for extinction and the scattering NDF. The baked
+density still supplies the signed-distance height factor. Existing alpha grids baked under the former gradient-standard-deviation
+convention must be baked again with the desired Beckmann-alpha values.

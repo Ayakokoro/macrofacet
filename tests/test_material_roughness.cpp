@@ -1,5 +1,6 @@
 #include "TestHarness.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
+#include "macrofacet/macrofacet/GaussianNdf.h"
 #include <nlohmann/json.hpp>
 #include <array>
 #include <chrono>
@@ -41,10 +42,6 @@ nlohmann::json roughnessConfig() {
         "material": {"eta_rgb": [0.2, 0.9, 1.1], "k_rgb": [3.9, 2.5, 2.2],
                      "ndf_family": "generalized_gaussian", "roughness": 0.6},
         "transport": {},
-        "fixed_flight": {
-            "birth_position": [0, 0, 0], "direction": [0, 0, 1],
-            "requested_maximum_age": 0.3, "curve_sample_count": 3, "flight_sample_count": 4
-        },
         "numeric": {
             "relative_tolerance": 0.0001, "absolute_tolerance": 0.0000001,
             "max_quadrature_subdivisions": 128, "max_root_iterations": 64
@@ -72,14 +69,29 @@ void testMaterialRoughness(TestContext& context) {
         const PointPrior prior = config.field.pointPrior(Point3::Zero());
         context.near(prior.varianceF, sigma * sigma, 1e-14,
                      "material roughness keeps the requested field amplitude");
-        context.require((prior.covarianceG - roughness * roughness * Matrix3::Identity()).norm() < 1e-12,
-                        "material roughness is the isotropic gradient standard deviation");
-        const double correlationLength = sigma / roughness;
+        context.require((prior.covarianceG - 0.5 * roughness * roughness * Matrix3::Identity()).norm() < 1e-12,
+                        "material roughness is Beckmann alpha, so gradient covariance is alpha squared over two");
+        context.near(std::sqrt(2.0 * prior.covarianceG(0, 0)), roughness, 1e-12,
+                     "the NDF's transverse variance recovers the requested Beckmann alpha");
+        context.require(!GaussianNdf(prior.meanG, prior.covarianceG).isBeckmannLimit(),
+                        "a finite longitudinal variance keeps the generalized Gaussian distinct from Beckmann");
+        const Point3 offSurface(0.0, 0.0, 0.1);
+        const PointPrior global = config.field.pointPrior(offSurface);
+        const PointPrior local = config.material.materialNdf(config.field, offSurface);
+        context.near(local.meanF, 0.0, 1e-14,
+                     "the local material GP is centred on the tangent plane");
+        context.require((local.meanG - Vector3::UnitZ()).norm() < 1e-14,
+                        "the local material GP has a unit normal mean gradient");
+        context.near(local.varianceF, global.varianceF, 1e-14,
+                     "the local material GP uses the prescribed sigma");
+        context.require((local.covarianceG - global.covarianceG).norm() < 1e-12,
+                        "without an alpha field the local roughness equals the global GP roughness");
+        const double correlationLength = sigma / (roughness / std::sqrt(2.0));
         for (int axis = 0; axis < 3; ++axis) {
             const KernelJet jet = config.field.kernel.evaluate(
                 Point3::Zero(), correlationLength * Vector3::Unit(axis));
             context.near(jet.valueValue / prior.varianceF, std::exp(-0.5), 1e-12,
-                         "material roughness gives correlation length sigma / roughness");
+                         "material roughness gives correlation length sqrt(2) sigma / alpha");
             context.require(jet.gradientXValueY.allFinite() && jet.valueXGradientY.allFinite() &&
                                 jet.gradientXGradientY.allFinite(),
                             "roughness-derived kernel has finite covariance derivatives");
@@ -209,9 +221,10 @@ void testMaterialRoughness(TestContext& context) {
         context.require(resolved.at("material").at("ndf_family") == "generalized_gaussian",
                         "resolved metadata records the material NDF family");
         context.near(resolved.at("derived").at("isotropic_correlation_length").get<double>(),
-                     0.01 / 0.9, 1e-14, "resolved metadata records effective correlation length");
+                     0.01 / (0.9 / std::sqrt(2.0)), 1e-14,
+                     "resolved metadata records effective correlation length");
         for (const auto& component : resolved.at("derived").at("gradient_stddev_xyz")) {
-            context.near(component.get<double>(), 0.9, 1e-14,
+            context.near(component.get<double>(), 0.9 / std::sqrt(2.0), 1e-14,
                          "resolved metadata agrees with effective isotropic gradient statistics");
         }
     }

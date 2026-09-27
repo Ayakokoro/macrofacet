@@ -13,10 +13,8 @@ bool sameStatistics(const mf::RenderStatistics& a, const mf::RenderStatistics& b
            a.safetyCapTerminations == b.safetyCapTerminations &&
            a.numericalFailures == b.numericalFailures &&
            a.accumulatedPathDepth == b.accumulatedPathDepth &&
-           a.tracking.hazardEvaluations == b.tracking.hazardEvaluations &&
-           a.tracking.newtonIterations == b.tracking.newtonIterations &&
-           a.tracking.bisectionSteps == b.tracking.bisectionSteps &&
-           a.tracking.maximumResidual == b.tracking.maximumResidual;
+           a.tracking.candidates == b.tracking.candidates &&
+           a.tracking.nullCollisions == b.tracking.nullCollisions;
 }
 
 class ThrowingMean final : public mf::MeanField {
@@ -30,6 +28,22 @@ public:
     }
 };
 
+class UnitDensity final : public mf::ScalarField {
+public:
+    double sample(const mf::Point3&) const override { return 1.0; }
+    mf::ScalarBounds bounds(const mf::Bounds3&) const override { return {1.0, 1.0, true}; }
+};
+
+class CountedAlpha final : public mf::ScalarField {
+public:
+    double sample(const mf::Point3&) const override { return 0.5; }
+    mf::ScalarBounds bounds(const mf::Bounds3&) const override {
+        ++boundsCalls;
+        return {0.5, 0.5, true};
+    }
+    mutable int boundsCalls = 0;
+};
+
 } // namespace
 
 void testRenderingThreads(TestContext& context) {
@@ -39,13 +53,21 @@ void testRenderingThreads(TestContext& context) {
     config.render.width = 3;
     config.render.height = 3;
     config.render.samplesPerPixel = 1;
-    config.render.flightTableCells = 4;
+    config.mediumDensity = std::make_shared<UnitDensity>();
+    config.densityMajorantGrid = std::make_shared<DensityMajorantGrid>(
+        *config.mediumDensity, config.field.activeDomain, 4);
+    auto alpha = std::make_shared<CountedAlpha>();
+    config.material.alphaField = alpha;
     config.render.environment = "directional_gradient";
     {
         config.render.threadCount = 1;
         const RenderedImage serial = renderAnalyticScene(config);
+        context.require(alpha->boundsCalls == 1,
+                        "serial render bakes the alpha area bound once for all paths");
         config.render.threadCount = 3;
         const RenderedImage parallel = renderAnalyticScene(config);
+        context.require(alpha->boundsCalls == 2,
+                        "parallel render shares one baked area bound across workers");
         context.require(serial.pixels.size() == parallel.pixels.size(),
                         "threaded render pixel count");
         bool pixelsEqual = serial.pixels.size() == parallel.pixels.size();
@@ -55,6 +77,11 @@ void testRenderingThreads(TestContext& context) {
         context.require(pixelsEqual, "render pixels are independent of worker count");
         context.require(sameStatistics(serial.statistics, parallel.statistics),
                         "render statistics are independent of worker count");
+        config.preparedAreaMajorant = 2.0;
+        (void)renderAnalyticScene(config);
+        context.require(alpha->boundsCalls == 2,
+                        "a prepared render reuses the baked alpha bound without scanning the field");
+        config.preparedAreaMajorant.reset();
     }
 
     config.field.mean = std::make_shared<ThrowingMean>();

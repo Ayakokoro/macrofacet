@@ -15,7 +15,8 @@ struct ScalarBounds {
 
 // A per-point scalar grid, used for transport density and material alpha.
 // Neither quantity is the GP mean field: density defines the active transport
-// band, while alpha is evaluated by the material at collision points.
+// band, while alpha is evaluated by the local material model at candidates and
+// collision points.
 class ScalarField {
 public:
     virtual ~ScalarField() = default;

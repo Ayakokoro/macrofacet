@@ -26,14 +26,12 @@ add_library(macrofacet
     src/transport/FlightState.cpp
     src/transport/FlightKernel.cpp
     src/transport/ClassicFlightKernel.cpp
-    src/transport/OpticalDepthSampler.cpp
     src/transport/ClassicNullTracking.cpp
     src/transport/DensityMajorantGrid.cpp
     src/transport/NarrowBandMedium.cpp
     src/transport/CollisionGradientSampler.cpp
     src/integrator/MacrofacetPathTracer.cpp
     src/experiments/ExperimentConfig.cpp
-    src/experiments/FlightCurveExperiment.cpp
     src/experiments/RenderExperiment.cpp)
 
 target_include_directories(macrofacet PUBLIC include)
@@ -110,7 +108,6 @@ set(MACROFACET_TEST_SOURCES
     tests/test_macrofacet_baseline.cpp
     tests/test_flight_kernels.cpp
     tests/test_sampling.cpp
-    tests/test_regular_tracking.cpp
     tests/test_cutaway_mean.cpp
     tests/test_shader_ball_mean.cpp
     tests/test_material_roughness.cpp

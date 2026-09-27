@@ -44,21 +44,24 @@ SquaredExponentialKernel roughnessKernel(double sigma, double roughness, NdfFami
         throw std::invalid_argument("material roughness requires the generalized_gaussian NDF family");
     }
     const double valueVariance = sigma * sigma;
-    const double gradientVariance = roughness * roughness;
-    const double correlationLength = sigma / roughness;
+    // Beckmann alpha is sqrt(2) times the standard deviation of each slope
+    // component when the mean height gradient has unit length.
+    const double gradientStddev = roughness / std::sqrt(2.0);
+    const double gradientVariance = gradientStddev * gradientStddev;
+    const double correlationLength = sigma / gradientStddev;
     if (!(valueVariance > 0.0) || !std::isfinite(valueVariance) ||
         !(gradientVariance > 0.0) || !std::isfinite(gradientVariance) ||
         !(correlationLength > 0.0) || !std::isfinite(correlationLength)) {
         throw std::invalid_argument(
             "roughness and sigma must yield finite positive variances and correlation length");
     }
-    const double inverseLength = roughness / sigma;
+    const double inverseLength = gradientStddev / sigma;
     const double precision = inverseLength * inverseLength;
     const double actualGradientVariance = valueVariance * precision;
     if (!(precision > 0.0) || !std::isfinite(precision) ||
         !(actualGradientVariance > 0.0) || !std::isfinite(actualGradientVariance)) {
         throw std::invalid_argument(
-            "roughness / sigma must yield finite positive kernel precision and gradient covariance");
+            "roughness / (sqrt(2) * sigma) must yield finite positive kernel precision and gradient covariance");
     }
     return SquaredExponentialKernel(sigma, precision * Matrix3::Identity());
 }
@@ -75,7 +78,7 @@ GPSSField buildDefaultField() {
 }
 
 void requireNanoVdbField(const ExperimentConfig& config) {
-    if (!config.mediumDensity || !config.field.mean ||
+    if (!config.mediumDensity || !config.densityMajorantGrid || !config.field.mean ||
         std::string(config.field.mean->typeName()) != "nanovdb" ||
         !(config.field.mean->voxelSizeHint() > 0.0)) {
         throw std::invalid_argument("experiment tracing requires a prepared NanoVDB field");
@@ -84,6 +87,7 @@ void requireNanoVdbField(const ExperimentConfig& config) {
 
 void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
                          std::optional<double> roughness, bool preserveSlope) {
+    config.preparedAreaMajorant.reset();
     if (sigma) requirePositiveFinite(*sigma, "sigma");
     // The CLI is the other way a sigma can reach a baked field, so it obeys the
     // same rule as the config key: sigma is part of the data, not a knob.
@@ -135,8 +139,10 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.schemaVersion = root.value("schema_version", 1);
     if (config.schemaVersion != 1) throw std::invalid_argument("unsupported config schema version");
     config.seed = root.value("seed", config.seed);
-    if (root.contains("modes") || root.contains("reference"))
-        throw std::invalid_argument("obsolete modes/reference configuration is unsupported; Classic is the only mode");
+    for (const char* obsolete : {"modes", "reference", "fixed_flight"}) {
+        if (root.contains(obsolete))
+            throw std::invalid_argument(std::string("obsolete configuration block: ") + obsolete);
+    }
 
     const auto& fieldJson = root.at("field");
     config.sourceFieldSpec = fieldJson.dump();
@@ -242,15 +248,6 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     }
     config.render.rouletteStartDepth = transport.value("roulette_start_depth", 5);
 
-    const auto& flight = root.at("fixed_flight");
-    config.fixedFlight.birthPosition = vector3(flight.at("birth_position"));
-    if (flight.contains("birth_gradient"))
-        throw std::invalid_argument("obsolete fixed_flight.birth_gradient setting");
-    config.fixedFlight.direction = normalizedOrThrow(vector3(flight.at("direction")));
-    config.fixedFlight.requestedMaximumAge = flight.at("requested_maximum_age").get<double>();
-    config.fixedFlight.curveSampleCount = flight.at("curve_sample_count").get<int>();
-    config.fixedFlight.flightSampleCount = flight.at("flight_sample_count").get<int>();
-
     const auto& numeric = root.at("numeric");
     config.numeric.relativeTolerance = numeric.at("relative_tolerance").get<double>();
     config.numeric.absoluteTolerance = numeric.at("absolute_tolerance").get<double>();
@@ -270,13 +267,13 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.render.cameraTarget = vector3(render.at("camera_target"));
     config.render.verticalFovDegrees = render.at("vertical_fov_degrees").get<double>();
     config.render.environment = render.at("environment").get<std::string>();
-    config.render.flightTableCells = render.value("flight_table_cells", 48);
+    if (render.contains("flight_table_cells"))
+        throw std::invalid_argument("obsolete render.flight_table_cells setting");
     config.render.threadCount = render.value("thread_count", 0);
     config.outputDirectory = root.at("output_directory").get<std::string>();
 
-    if (config.fixedFlight.curveSampleCount < 2 || config.fixedFlight.flightSampleCount < 1 ||
-        config.render.width < 1 || config.render.height < 1 || config.render.samplesPerPixel < 1 ||
-        config.render.flightTableCells < 4 || config.render.threadCount < 0 ||
+    if (config.render.width < 1 || config.render.height < 1 || config.render.samplesPerPixel < 1 ||
+        config.render.threadCount < 0 ||
         config.render.rouletteStartDepth < 1 || config.numeric.maxRootIterations < 1 ||
         config.numeric.maxQuadratureSubdivisions < 1 ||
         !(config.numeric.distanceAbsoluteTolerance > 0.0) || !(config.numeric.distanceRelativeTolerance > 0.0) ||
@@ -319,12 +316,13 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                               {config.field.kernel.precision()(1,0), config.field.kernel.precision()(1,1), config.field.kernel.precision()(1,2)},
                               {config.field.kernel.precision()(2,0), config.field.kernel.precision()(2,1), config.field.kernel.precision()(2,2)}}},
         {"domain_min", toArray(config.field.activeDomain.minimum)},
-        {"domain_max", toArray(config.field.activeDomain.maximum)},
-        {"fixed_direction", toArray(config.fixedFlight.direction)}};
+        {"domain_max", toArray(config.field.activeDomain.maximum)}};
     const double fieldVariance = config.field.kernel.sigma() * config.field.kernel.sigma();
     const Vector3 gradientStddev =
         (fieldVariance * config.field.kernel.precision().diagonal()).cwiseMax(0.0).cwiseSqrt();
     result["derived"]["gradient_stddev_xyz"] = toArray(gradientStddev);
+    if (config.preparedAreaMajorant)
+        result["derived"]["local_area_majorant"] = *config.preparedAreaMajorant;
     result["material"]["ndf_family"] = config.material.ndfFamily == NdfFamily::GGXBaseline
         ? "ggx" : config.material.ndfFamily == NdfFamily::BeckmannLimit
             ? "beckmann_limit" : "generalized_gaussian";
@@ -333,20 +331,17 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
     if (config.materialRoughness) {
         result["material"]["roughness"] = *config.materialRoughness;
         result["material"]["roughness_definition"] =
-            "standard deviation of each isotropic generalized_gaussian gradient component; "
-            "Sigma_G = roughness^2 I; correlation length = sigma / roughness";
+            "Beckmann alpha convention for the isotropic generalized_gaussian gradient; "
+            "Sigma_G = roughness^2 / 2 I; correlation length = sqrt(2) * sigma / roughness";
         result["derived"]["isotropic_correlation_length"] =
-            config.field.kernel.sigma() / *config.materialRoughness;
+            config.field.kernel.sigma() / (*config.materialRoughness / std::sqrt(2.0));
     }
-    result["budgets"] = {{"flight_samples", config.fixedFlight.flightSampleCount},
-                          {"render_width", config.render.width},
+    result["budgets"] = {{"render_width", config.render.width},
                           {"render_height", config.render.height},
                           {"render_spp", config.render.samplesPerPixel},
-                          {"flight_table_cells", config.render.flightTableCells},
                           {"render_threads", config.render.threadCount}};
     result["classic_phase_proposal"] = config.classicPhaseProposal;
-    result["transport"]["classic"]["sampler"] = config.mediumSurfaceBand
-        ? "dda_null_tracking" : "regular_tracking";
+    result["transport"]["classic"]["sampler"] = "dda_null_tracking";
     result["numeric"] = {{"relative_tolerance", config.numeric.relativeTolerance},
         {"absolute_tolerance", config.numeric.absoluteTolerance},
         {"distance_absolute_tolerance", config.numeric.distanceAbsoluteTolerance},

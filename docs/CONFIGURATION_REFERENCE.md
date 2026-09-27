@@ -1,39 +1,15 @@
 # Configuration reference
 
-The executable runs Classic transport only. Configs under `configs/*.json` no longer contain `modes` or Conditional29 settings. Old `modes`, `reference`, `fixed_flight.birth_gradient`, `transport.conditional29`, `correlated_sampler`, `external_policy`, `hard_depth_cap`, and `next_event_estimation` settings are rejected.
+The renderer uses Classic DDA null tracking only. The only executable command is `render`. Old `fixed_flight`, `modes`, `reference`, `render.flight_table_cells`, and Conditional29 transport settings are rejected.
 
-## Top-level blocks
+A config contains `schema_version`, `seed`, `field`, `material`, `transport`, `numeric`, `render`, and `output_directory`. See `configs/macrofacet_ci.json` for a complete small example.
 
-- `schema_version`: currently `1`.
-- `seed`: base random seed.
-- `field`: procedural mean or imported NanoVDB field, covariance and domain settings.
-- `material`: NDF family, conductor `eta_rgb` and `k_rgb`, and optional roughness.
-- `transport`: Classic phase proposal, Beckmann mixture weight, and roulette start depth.
-- `fixed_flight`: birth position, direction, curve range, and sample counts.
-- `numeric`: quadrature and root solver tolerances and limits.
-- `render`: camera, image size, samples per pixel, environment, and thread count.
-- `output_directory`: output path.
+`field.mean_type` selects a procedural mean (`plane`, `sphere`, `cutaway_sphere`, or `shader_ball`) or `nanovdb` with `grid_file`. Procedural fields specify `sigma`, `domain_min`, and `domain_max`. Imported NanoVDB fields derive domain and sigma from the file. `field.correlation_lengths` has three components and may include `null` for an infinite length. `field.kernel_rotation` optionally rotates the covariance. A generalized Gaussian material may instead specify positive scalar `material.roughness` as the default local GP's Beckmann alpha: its isotropic gradient covariance is `roughness^2 / 2 * I` and correlation length is `sqrt(2) * sigma / roughness`. It is mutually exclusive with `correlation_lengths`. At each point, the local material GP is centred on the tangent plane. Without an alpha grid it inherits the configured gradient covariance; the NanoVDB `alpha` grid overrides it using `alpha(x)^2 / 2 * I` for a Gaussian material NDF. Extinction and scattering both use this local gradient distribution. With a GGX NDF, the grid value is used directly as GGX alpha.
 
-`render`, `curves`, and `all` share one config loader, so these blocks currently remain required. See `configs/macrofacet_ci.json` for a small complete example.
+`material.ndf_family` accepts `generalized_gaussian`, `beckmann_limit`, or `ggx`. GGX uses `material.ggx_alpha`. Conductors use `eta_rgb` and `k_rgb`. `transport.classic_phase_proposal` accepts `uniform`, `paper_mixture`, or `target_vndf`; `beckmann_mixture_weight` applies to the paper mixture. `roulette_start_depth` starts path roulette.
 
-## Field and material
-
-`field.mean_type` selects a procedural mean such as `plane`, `sphere`, `cutaway_sphere`, or `shader_ball`, or `nanovdb` with `grid_file`. Procedural fields specify `sigma`, `domain_min`, and `domain_max`. Imported NanoVDB fields derive domain and sigma from the file. `field.correlation_lengths` has three components and may include `null` for an infinite length. `field.kernel_rotation` optionally rotates that covariance. A generalized Gaussian material may instead specify a positive scalar `material.roughness`; it is the standard deviation of each isotropic gradient component, giving correlation length `sigma / roughness`. `roughness` and `correlation_lengths` are mutually exclusive.
-
-`material.ndf_family` accepts `generalized_gaussian`, `beckmann_limit`, or `ggx`. GGX uses `material.ggx_alpha`. The conductor uses `eta_rgb`, `k_rgb`, and optional `force_unit_fresnel_for_energy_test`.
-
-## Transport and numeric settings
-
-`transport.classic_phase_proposal` accepts `uniform`, `paper_mixture`, or `target_vndf`; `transport.beckmann_mixture_weight` is used by the paper mixture. `transport.roulette_start_depth` starts path roulette. Classic has a fixed safety depth cap in the renderer.
-
-`numeric.relative_tolerance`, `absolute_tolerance`, `max_quadrature_subdivisions`, and `max_root_iterations` govern optical-depth inversion. `distance_absolute_tolerance` and `distance_relative_tolerance` govern root distances. `render.flight_table_cells` is the initial integration partition. For narrow-band fields, Classic uses DDA null tracking instead.
-
-## Commands
+`numeric` retains tolerances and budgets used by Gaussian moment and phase sampling. `render` specifies image size, samples per pixel, camera, environment, and optional thread count. The CLI supports `--sigma`, `--roughness`, `--preserve-slope`, `--width`, `--height`, `--spp`, `--threads`, and `--output`. For imported baked fields, `--sigma` must match the file.
 
 ```powershell
-build\Release\macrofacet_experiments.exe curves --config configs\macrofacet_ci.json
-build\Release\macrofacet_experiments.exe render --config configs\render_sphere.json --width 64 --height 64 --spp 4
-build\Release\macrofacet_experiments.exe all --config configs\macrofacet_ci.json
+build\Release\macrofacet_experiments.exe render --config configs\macrofacet_ci.json
 ```
-
-The CLI also supports `--sigma`, `--roughness`, `--preserve-slope`, `--flight-cells`, `--threads`, and `--output`. For imported baked fields, `--sigma` must match the file. `resolved_config.json` records effective parameters.

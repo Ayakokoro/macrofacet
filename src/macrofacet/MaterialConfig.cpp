@@ -5,9 +5,22 @@ namespace mf {
 
 PointPrior MaterialConfig::materialNdf(const GPSSField& field, const Point3& x) const {
     PointPrior prior = field.pointPrior(x);
+    // The material GP is centred on the tangent plane at x. Its local mean is
+    // m_local(u) = u_z, so at the local origin meanF = 0 and meanG = e_z.
+    // Convert that unit gradient back to world space. A constant mean has no
+    // tangent frame and retains its zero-gradient isotropic-medium model.
+    const double meanGradientLength = prior.meanG.norm();
+    if (meanGradientLength > 0.0) {
+        prior.meanF = 0.0;
+        prior.meanG /= meanGradientLength;
+    }
     if (alphaField) {
         const double alpha = alphaField->sample(x);
-        prior.covarianceG = (alpha * alpha) * Matrix3::Identity();
+        // The local isotropic SE model has ell = sqrt(2) * sigma / alpha.
+        // Its gradient covariance, including the local normal component, is
+        // sigma^2 / ell^2 I = alpha^2 / 2 I. Without a grid, the configured
+        // global roughness supplies this same covariance through field.kernel.
+        prior.covarianceG = (0.5 * alpha * alpha) * Matrix3::Identity();
     }
     return prior;
 }

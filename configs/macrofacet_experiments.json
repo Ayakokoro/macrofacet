@@ -42,21 +42,6 @@
   "transport": {
     "roulette_start_depth": 5
   },
-  "fixed_flight": {
-    "birth_position": [
-      0.0,
-      0.0,
-      0.0
-    ],
-    "direction": [
-      0.984807753012208,
-      0.0,
-      0.17364817766693033
-    ],
-    "requested_maximum_age": 1.5,
-    "curve_sample_count": 65,
-    "flight_sample_count": 20000
-  },
   "numeric": {
     "relative_tolerance": 1e-07,
     "absolute_tolerance": 1e-10,

@@ -1,7 +1,6 @@
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
 #include "macrofacet/macrofacet/ConductorPhase.h"
 #include "macrofacet/transport/FlightKernel.h"
-#include "macrofacet/transport/OpticalDepthSampler.h"
 #include "macrofacet/transport/NarrowBandMedium.h"
 #include <algorithm>
 #include <atomic>
@@ -33,6 +32,14 @@ int resolveWorkerCount(int requested, int rows) {
 Spectrum traceCameraPath(const Ray& initialRay,
                          const ExperimentConfig& config, Random& rng,
                          RenderStatistics& statistics) {
+    const NarrowBandMedium medium(config.field, config.material, config.mediumDensity,
+                                  config.densityMajorantGrid, config.preparedAreaMajorant);
+    return traceCameraPath(initialRay, config, medium, rng, statistics);
+}
+
+Spectrum traceCameraPath(const Ray& initialRay,
+                         const ExperimentConfig& config, const NarrowBandMedium& medium,
+                         Random& rng, RenderStatistics& statistics) {
     const Vector3 initialDirection = normalizedOrThrow(initialRay.direction);
     const DomainInterval firstInterval = config.field.activeDomain.intersect(
         {initialRay.origin, initialDirection});
@@ -41,17 +48,14 @@ Spectrum traceCameraPath(const Ray& initialRay,
         return environmentEmission(initialDirection, config.render.environment);
     }
     const Point3 entry = initialRay.origin + firstInterval.entry * initialDirection;
-    const NarrowBandMedium medium(config.field, config.material, config.mediumDensity,
-                                  config.mediumSurfaceBand, config.densityMajorantGrid);
     FlightState state = medium.startExternal(entry, initialDirection);
     Spectrum throughput = Spectrum::Ones();
     int depth = 0;
     for (; depth < config.render.safetyDepthCap; ++depth) {
         try {
-            std::unique_ptr<FlightKernel> kernel = medium.beginFlight(state);
-            const FlightSample flight = medium.sample(*kernel, rng, config.numeric,
-                                                       &statistics.tracking,
-                                                       config.render.flightTableCells);
+            const ClassicFlightKernel kernel = medium.beginFlight(state);
+            const FlightSample flight = medium.sample(kernel, rng, config.numeric,
+                                                       &statistics.tracking);
             if (!flight.collided) {
                 ++statistics.escapedPaths;
                 statistics.accumulatedPathDepth += depth;
@@ -88,6 +92,10 @@ Spectrum traceCameraPath(const Ray& initialRay,
 }
 
 RenderedImage renderAnalyticScene(const ExperimentConfig& config) {
+    // Prepare the local extinction bound before tracing any paths. All worker
+    // threads share this immutable medium and its baked DDA majorant.
+    const NarrowBandMedium medium(config.field, config.material, config.mediumDensity,
+                                  config.densityMajorantGrid, config.preparedAreaMajorant);
     RenderedImage result;
     result.width = config.render.width;
     result.height = config.render.height;
@@ -118,7 +126,7 @@ RenderedImage renderAnalyticScene(const ExperimentConfig& config) {
                 const Vector3 direction = normalizedOrThrow(forward + px * right + py * up);
                 ++statistics.paths;
                 sum += traceCameraPath({config.render.cameraPosition, direction},
-                                       config, rng, statistics);
+                                       config, medium, rng, statistics);
             }
             result.pixels[static_cast<std::size_t>(y * result.width + x)] =
                 sum / config.render.samplesPerPixel;

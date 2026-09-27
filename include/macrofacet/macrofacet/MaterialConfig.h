@@ -15,11 +15,16 @@ struct ConductorParameters {
 
 struct MaterialConfig {
     ConductorParameters conductor;
-    // Classic's NDF choice. Correlated GP flights use the field's Gaussian prior.
+    // Classic's local NDF choice for extinction and scattering.
     NdfFamily ndfFamily = NdfFamily::GeneralizedGaussian;
     Vector2 ggxAlpha = Vector2(0.5, 0.5);
+    // Spatial Beckmann alpha. For the Gaussian material NDF each gradient
+    // component has variance alpha(x)^2 / 2; GGX reads alpha(x) directly.
     ScalarFieldPtr alphaField;
 
+    // Local tangent-plane material prior. Its mean at the origin is zero with
+    // unit normal gradient; the field kernel supplies covariance unless alpha
+    // is overridden per point by alphaField.
     PointPrior materialNdf(const GPSSField& field, const Point3& x) const;
     Vector2 ggxAlphaAt(const Point3& x) const;
     void validate(const Bounds3& domain) const;

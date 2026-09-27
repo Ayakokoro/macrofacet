@@ -11,6 +11,5 @@ struct FlightState {
 
 FlightState startExternalFlight(const Point3& x, const Vector3& w);
 FlightState startClassicCollisionFlight(const Point3& x, const Vector3& w);
-void onNullCollision(FlightState& state, double delta);
 
 } // namespace mf

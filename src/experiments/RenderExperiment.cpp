@@ -14,8 +14,7 @@ void runRenderExperiments(const ExperimentConfig& config) {
     std::ofstream summary(config.outputDirectory / "render_summary.csv");
     summary << "mode,environment,width,height,spp,seconds,paths,real_collisions,escaped_paths,"
                "roulette_terminations,safety_cap_terminations,numerical_failures,mean_path_depth,"
-               "hazard_evaluations,quadrature_intervals,newton_iterations,bisection_steps,"
-               "maximum_optical_residual,maximum_integration_error\n";
+               "dda_candidates,null_collisions\n";
     {
         std::vector<std::string> environments{"unit_white"};
         if (config.render.environment != "unit_white") environments.push_back(config.render.environment);
@@ -42,12 +41,8 @@ void runRenderExperiments(const ExperimentConfig& config) {
                     << image.statistics.rouletteTerminations << ','
                     << image.statistics.safetyCapTerminations << ','
                     << image.statistics.numericalFailures << ',' << meanDepth << ','
-                    << image.statistics.tracking.hazardEvaluations << ','
-                    << image.statistics.tracking.quadratureIntervals << ','
-                    << image.statistics.tracking.newtonIterations << ','
-                    << image.statistics.tracking.bisectionSteps << ','
-                    << image.statistics.tracking.maximumResidual << ','
-                    << image.statistics.tracking.maximumIntegrationError << '\n';
+                    << image.statistics.tracking.candidates << ','
+                    << image.statistics.tracking.nullCollisions << '\n';
         }
     }
 }

@@ -1,5 +1,6 @@
 #include "TestHarness.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
+#include "macrofacet/macrofacet/ClassicCoefficients.h"
 #include "macrofacet/mathutility/GaussianMoments1D.h"
 #include "macrofacet/transport/CollisionGradientSampler.h"
 #include "macrofacet/transport/ClassicFlightKernel.h"
@@ -27,6 +28,18 @@ public:
     bool forbidBounds = false;
 };
 
+class CountedAlpha final : public mf::ScalarField {
+public:
+    double sample(const mf::Point3&) const override { return 0.5; }
+    mf::ScalarBounds bounds(const mf::Bounds3&) const override {
+        if (forbidBounds) throw std::runtime_error("unexpected alpha bounds query during flight");
+        ++boundsCalls;
+        return {0.5, 0.5, true};
+    }
+    mutable int boundsCalls = 0;
+    bool forbidBounds = false;
+};
+
 void testPrecomputedDdaBounds(TestContext& context) {
     using namespace mf;
     GPSSField field = buildDefaultField();
@@ -36,30 +49,25 @@ void testPrecomputedDdaBounds(TestContext& context) {
                     "DDA density bounds are certified during grid construction");
     density->forbidBounds = true;
     MaterialConfig material;
-    NarrowBandMedium medium(field, material, density, true, grid);
+    auto alpha = std::make_shared<CountedAlpha>();
+    material.alphaField = alpha;
+    NarrowBandMedium medium(field, material, density, grid);
+    context.require(alpha->boundsCalls == 1,
+                    "local area bound is baked once when the medium is prepared");
+    alpha->forbidBounds = true;
     Random rng(419);
     for (int i = 0; i < 8; ++i) {
         const FlightState state = startExternalFlight(Point3(0.0, 0.0, 0.2),
                                                       -Vector3::UnitZ());
         const auto flight = medium.beginFlight(state);
-        (void)medium.sample(*flight, rng, defaultNumericPolicy(), nullptr, 8);
+        (void)medium.sample(flight, rng, defaultNumericPolicy());
     }
     context.require(density->boundsCalls == 4 * 4 * 4,
                     "DDA flights reuse precomputed density bounds");
+    context.require(alpha->boundsCalls == 1,
+                    "DDA flights reuse the precomputed local area bound");
 
-    auto fallbackDensity = std::make_shared<CountedDensity>();
-    NarrowBandMedium fallback(field, material, fallbackDensity, true);
-    context.require(fallbackDensity->boundsCalls == 1,
-                    "fallback density bound is certified during medium construction");
-    fallbackDensity->forbidBounds = true;
-    for (int i = 0; i < 8; ++i) {
-        const FlightState state = startExternalFlight(Point3(0.0, 0.0, 0.2),
-                                                      -Vector3::UnitZ());
-        const auto flight = fallback.beginFlight(state);
-        (void)fallback.sample(*flight, rng, defaultNumericPolicy(), nullptr, 8);
-    }
-    context.require(fallbackDensity->boundsCalls == 1,
-                    "fallback flights reuse the cached density bound");
+
 }
 
 void testDdaBoundaryExit(TestContext& context) {
@@ -85,12 +93,42 @@ void testDdaBoundaryExit(TestContext& context) {
     }
 }
 
+void testDdaFlightMass(TestContext& context) {
+    using namespace mf;
+    GPSSField field = buildDefaultField();
+    MaterialConfig material;
+    auto density = std::make_shared<UnitDensity>();
+    auto grid = std::make_shared<DensityMajorantGrid>(*density, field.activeDomain, 8);
+    NarrowBandMedium medium(field, material, density, grid);
+    const FlightState state = startExternalFlight(Point3::Zero(), Vector3::UnitX());
+    const ClassicFlightKernel flight = medium.beginFlight(state);
+    const double hazard = classicProjectedArea(field, material, Point3::Zero(),
+                                               Vector3::UnitX()).value;
+    const double expectedEscape = std::exp(-hazard);
+    Random rng(881);
+    DdaTrackingDiagnostics diagnostics;
+    int escapes = 0;
+    constexpr int samples = 5000;
+    for (int i = 0; i < samples; ++i) {
+        const FlightSample result = medium.sample(flight, rng, defaultNumericPolicy(),
+                                                  &diagnostics, 1.0);
+        if (!result.collided) ++escapes;
+        context.require(result.age >= 0.0 && result.age <= 1.0,
+                        "DDA flight remains in its interval");
+    }
+    context.near(double(escapes) / samples, expectedEscape, 0.025,
+                 "DDA collision and escape probabilities normalize");
+    context.require(diagnostics.candidates >= static_cast<std::uint64_t>(samples - escapes),
+                    "DDA diagnostics count collision candidates");
+}
+
 } // namespace
 
 void testSampling(TestContext& context) {
     using namespace mf;
     testDdaBoundaryExit(context);
     testPrecomputedDdaBounds(context);
+    testDdaFlightMass(context);
     Random rng(1337);
     constexpr int sampleCount = 12000;
     double sampledMean = 0.0;
@@ -128,13 +166,10 @@ void testSampling(TestContext& context) {
         context.require(reflected.dot(g) > 0.0, "reflection departs along sampled full gradient");
     }
 
-    const Point3 originalBirth = state.birthPosition;
-    onNullCollision(state, 0.2);
-    context.require((state.birthPosition - originalBirth).norm() == 0.0 &&
-                    state.age == 0.2, "null collision preserves birth position");
     const FlightState reset = startClassicCollisionFlight(Point3(1.0, 0.0, 0.0),
                                                             Vector3::UnitX());
     context.require(reset.age == 0.0 &&
                     (reset.birthPosition - Vector3::UnitX()).norm() == 0.0,
                     "classic bounce resets flight age and origin");
+
 }

@@ -10,6 +10,7 @@
 #include "macrofacet/fields/PrepareNanoVdbField.h"
 #include "macrofacet/gpss/GPSSField.h"
 #include "macrofacet/macrofacet/ClassicCoefficients.h"
+#include "macrofacet/macrofacet/GaussianNdf.h"
 #include "macrofacet/transport/FlightKernel.h"
 #include "macrofacet/transport/NarrowBandMedium.h"
 
@@ -269,8 +270,7 @@ void testGradientMatchesCentralDifference(TestContext& context) {
                         std::to_string(worst) + ")");
 }
 
-// classicMajorant and the optical-depth sampler both call bounds() per flight,
-// so it must be cheap and must never under-estimate.
+// Classic DDA majorants rely on certified bounds that never under-estimate.
 void testBoundsAreConservative(TestContext& context) {
     const BakedSphere& baked = sphereField();
     auto mean = mf::NanoVdbMean::open(baked.path);
@@ -472,10 +472,6 @@ nlohmann::json bakedConfigJson() {
         },
         "material": {"eta_rgb": [0.2, 0.9, 1.1], "k_rgb": [3.9, 2.5, 2.2]},
         "transport": {},
-        "fixed_flight": {
-            "birth_position": [0, 0, 1], "direction": [0, 0, 1],
-            "requested_maximum_age": 0.3, "curve_sample_count": 3, "flight_sample_count": 4
-        },
         "numeric": {
             "relative_tolerance": 0.0001, "absolute_tolerance": 0.0000001,
             "max_quadrature_subdivisions": 128, "max_root_iterations": 64
@@ -716,18 +712,17 @@ void testOffCentreMesh(TestContext& context) {
 mf::GPSSField bakedRenderField(const BakedSphere& baked) {
     mf::GPSSField field;
     field.mean = mf::NanoVdbMean::open(baked.path);
-    // The same precision the procedural configs use: P = (roughness/sigma)^2 with
-    // roughness = sigma, i.e. the identity.
+    // An identity precision gives gradient covariance sigma^2 I. The equivalent
+    // material.roughness under the Beckmann-alpha convention is sqrt(2) sigma.
     field.kernel = mf::SquaredExponentialKernel(baked.settings.sigma, mf::Matrix3::Identity());
     field.activeDomain.minimum = mf::Point3::Constant(-1.6);
     field.activeDomain.maximum = mf::Point3::Constant(1.6);
     return field;
 }
 
-// materialNdf() is the split between the two roles covarianceG carries. With an
-// alpha grid the material covariance is alpha^2 I and the transport covariance
-// must be untouched; with no alpha grid the two must be the same object's worth
-// of numbers, which is what keeps every procedural config bit-identical.
+// materialNdf() constructs a tangent-plane GP at x. Extinction and scattering
+// must both use it; the global point prior only supplies the SDF distance and
+// the default covariance when there is no alpha grid.
 void testMaterialNdfRoleSeparation(TestContext& context) {
     const BakedSphere& baked = sphereField();
     const double sigma = baked.settings.sigma;
@@ -743,22 +738,36 @@ void testMaterialNdfRoleSeparation(TestContext& context) {
     const mf::PointPrior transport = field.pointPrior(x);
     const mf::PointPrior material = materialWithAlpha.materialNdf(field, x);
 
-    const mf::Matrix3 expected = (alpha * alpha) * mf::Matrix3::Identity();
+    const mf::Matrix3 expected = (0.5 * alpha * alpha) * mf::Matrix3::Identity();
     context.require((material.covarianceG - expected).norm() <= 1e-9,
-                    "materialNdf carries alpha^2 I as the material covariance");
+                    "materialNdf converts Beckmann alpha to alpha^2 / 2 I material covariance");
 
-    // The transport covariance must NOT have been replaced. Without this the
-    // alpha grid would silently rewrite the GP statistics.
+    // The SDF field itself still carries its configured kernel statistics.
     const mf::Matrix3 transportExpected = sigma * sigma * field.kernel.precision();
     context.require((transport.covarianceG - transportExpected).norm() <= 1e-9,
                     "pointPrior still carries sigma^2 P under an alpha grid");
 
-    // The observation components pass through untouched, because
-    // evaluateClassic reads meanF for the density term from the same prior.
-    context.near(material.meanF, transport.meanF, 1e-12,
-                 "materialNdf leaves the mean value alone");
-    context.require((material.meanG - transport.meanG).norm() <= 1e-12,
-                    "materialNdf leaves the mean gradient alone");
+    context.near(material.meanF, 0.0, 1e-12,
+                 "the local material GP has zero mean value at its origin");
+    context.require((material.meanG - transport.meanG.normalized()).norm() <= 1e-12,
+                    "the local material GP has a unit mean gradient along the SDF normal");
+    context.near(material.varianceF, transport.varianceF, 1e-12,
+                 "the local material GP retains the baked sigma");
+
+    const mf::Vector3 tangent = mf::Vector3::UnitX();
+    const double localArea = mf::GaussianNdf(material.meanG, material.covarianceG)
+                                 .projectedArea(tangent).value;
+    const double globalArea = mf::GaussianNdf(transport.meanG, transport.covarianceG)
+                                  .projectedArea(tangent).value;
+    const mf::ClassicEvaluation classic = mf::evaluateClassic(
+        field, materialWithAlpha, x, tangent);
+    context.near(classic.projectedArea.value, localArea, 1e-9,
+                 "Classic extinction uses the local alpha-dependent gradient distribution");
+    context.require(std::abs(classic.projectedArea.value - globalArea) > 0.02,
+                    "local alpha changes extinction relative to the global kernel");
+    context.near(classic.extinction.value,
+                 classic.density.value * classic.projectedArea.value, 1e-9,
+                 "local extinction is density times local projected area");
 
     // ggxAlphaAt is the GGX family's route to the same grid: scalar lifted to
     // isotropic. Without a grid it must hand back the config's anisotropy
@@ -771,24 +780,32 @@ void testMaterialNdfRoleSeparation(TestContext& context) {
     context.require((ggxOnly.ggxAlphaAt(x) - anisotropic).norm() == 0.0,
                     "ggxAlphaAt returns the config's anisotropic alpha when there is no grid");
 
-    // No alpha grid: pointPrior verbatim, which is the no-regression guarantee.
+    // No alpha grid: local mean plane, with the global GP's roughness.
     const mf::PointPrior plainTransport = field.pointPrior(x);
     const mf::PointPrior plainMaterial = materialWithout.materialNdf(field, x);
-    context.near(plainMaterial.meanF, plainTransport.meanF, 1e-15,
-                 "without an alpha grid materialNdf equals pointPrior (meanF)");
+    context.near(plainMaterial.meanF, 0.0, 1e-15,
+                 "without an alpha grid the local mean value is zero");
     context.require((plainMaterial.covarianceG - plainTransport.covarianceG).norm() == 0.0,
-                    "without an alpha grid materialNdf equals pointPrior (covarianceG)");
-    context.require((plainMaterial.meanG - plainTransport.meanG).norm() == 0.0,
-                    "without an alpha grid materialNdf equals pointPrior (meanG)");
+                    "without an alpha grid local and global gradient covariance agree");
+    context.require((plainMaterial.meanG - plainTransport.meanG.normalized()).norm() <= 1e-12,
+                    "without an alpha grid the local mean gradient is unit length");
+
+    mf::GPSSField curved;
+    curved.mean = std::make_shared<mf::SphereMean>(mf::Point3::Zero(), 1.0);
+    curved.kernel = mf::SquaredExponentialKernel(0.05, mf::Matrix3::Identity());
+    mf::MaterialConfig ggx;
+    ggx.ndfFamily = mf::NdfFamily::GGXBaseline;
+    ggx.ggxAlpha = mf::Vector2::Constant(0.3);
+    context.near(mf::classicProjectedArea(curved, ggx, mf::Point3::UnitX(),
+                                          -mf::Vector3::UnitX()).value,
+                 1.0, 1e-12,
+                 "GGX extinction follows the local normal of a curved mean surface");
 }
 
-// classicMajorant's contract: for every point in the domain, evaluateClassic's
-// extinction must not exceed it. This is not a conservativeness nicety -- the
-// tracker bounds the hazard by the majorant, so one that sits below the true
-// value drops real collisions and renders as missing geometry.
+// The DDA projected-area bound must cover every local material NDF. A bound
+// below the true area drops accepted collisions and renders missing geometry.
 //
-// Alpha reaches the extinction only through the GGX family, and there the
-// projected-area formula grows with alpha. A majorant built from the config's
+// In GGX the projected-area formula grows with alpha. A majorant built from the config's
 // ggxAlpha therefore goes below the true value wherever alpha(x) exceeds it.
 // This is the one assertion in the suite that fails if the majorant reads
 // ggxAlpha instead of the grid's domain maximum.
@@ -809,7 +826,7 @@ void testMajorantCoversAlphaField(TestContext& context) {
     field.mean = std::make_shared<mf::ConstantMean>(0.0);
 
     const mf::Vector3 w = mf::Vector3(0.3, -0.5, 0.8).normalized();
-    const double majorant = mf::classicMajorant(field, material, field.activeDomain, w);
+    const double majorant = mf::classicAreaMajorant(field, material, field.activeDomain, w);
     context.require(majorant > 0.0 && std::isfinite(majorant), "the majorant is positive");
 
     double worstRatio = 0.0;
@@ -817,10 +834,10 @@ void testMajorantCoversAlphaField(TestContext& context) {
     for (int i = 0; i <= 16; ++i) {
         for (int j = 0; j <= 16; ++j) {
             const mf::Point3 x(-1.0 + 2.0 * i / 16.0, -1.0 + 2.0 * j / 16.0, 0.5);
-            const mf::ClassicEvaluation value = mf::evaluateClassic(field, material, x, w);
-            if (value.extinction.status != mf::NumericStatus::Ok) continue;
+            const mf::PositiveResult value = mf::classicProjectedArea(field, material, x, w);
+            if (value.status != mf::NumericStatus::Ok) continue;
             ++checked;
-            worstRatio = std::max(worstRatio, value.extinction.value / majorant);
+            worstRatio = std::max(worstRatio, value.value / majorant);
         }
     }
     context.require(checked > 0, "the majorant sweep actually evaluated points");
@@ -830,9 +847,7 @@ void testMajorantCoversAlphaField(TestContext& context) {
                     "the GGX majorant bounds the extinction under an alpha grid (worst ratio " +
                         std::to_string(worstRatio) + ")");
 
-    // And the config's own ggxAlpha would NOT have covered the same sweep --
-    // that is exactly the bug the domain maximum exists to prevent. Rebuild the
-    // bound from the config alpha, changing nothing else.
+    // The config alpha alone cannot describe the grid's local GGX area.
     const mf::Vector3 wn = w.normalized();
     const auto ggxArea = [&wn](double a) {
         return 0.5 * (std::sqrt(wn.z() * wn.z() + a * a * wn.x() * wn.x() +
@@ -844,13 +859,8 @@ void testMajorantCoversAlphaField(TestContext& context) {
     context.require(configArea > 0.0 && configArea < gridArea,
                     "the config alpha is below the grid alpha, so this sweep is a real test");
 
-    const double gridMajorant = majorant;
-    const double configMajorant = gridMajorant * (configArea / gridArea);
-    const double worstValue = worstRatio * gridMajorant;
-    context.require(configMajorant < worstValue,
-                    "the config-alpha bound is exceeded (" + std::to_string(configMajorant) +
-                        " < " + std::to_string(worstValue) +
-                        "), so the domain maximum is what makes the GGX majorant valid");
+    context.require(configArea < worstRatio * majorant,
+                    "the config alpha underestimates the local GGX area");
 }
 
 // The same contract on the production path: the baked field the renderer actually
@@ -863,8 +873,10 @@ void testMajorantCoversBakedField(TestContext& context) {
     mf::MaterialConfig material;
     material.alphaField = mf::NanoVdbSampledField::open(baked.path, "alpha");
     const mf::Vector3 w = mf::Vector3(0.3, -0.5, 0.8).normalized();
-    const double majorant = mf::classicMajorant(field, material, field.activeDomain, w);
-    context.require(majorant > 0.0 && std::isfinite(majorant), "the baked majorant is positive");
+    const auto density = mf::NanoVdbSampledField::open(baked.path, "density");
+    const double majorant = density->bounds(field.activeDomain).maximumValue *
+        mf::classicAreaMajorant(field, material, field.activeDomain, w);
+    context.require(majorant > 0.0 && std::isfinite(majorant), "the baked DDA majorant is positive");
 
     double worstRatio = 0.0;
     int checked = 0;
@@ -875,11 +887,11 @@ void testMajorantCoversBakedField(TestContext& context) {
             const double rho = x.norm();
             if (!(rho > 0.0)) continue;
             for (double radius : {baked.radius, baked.radius - 2.0 * sigma}) {
-                const mf::ClassicEvaluation value =
-                    mf::evaluateClassic(field, material, mf::Point3(x * (radius / rho)), w);
-                if (value.extinction.status != mf::NumericStatus::Ok) continue;
+                const mf::Point3 point = x * (radius / rho);
+                const mf::PositiveResult area = mf::classicProjectedArea(field, material, point, w);
+                if (area.status != mf::NumericStatus::Ok) continue;
                 ++checked;
-                worstRatio = std::max(worstRatio, value.extinction.value / majorant);
+                worstRatio = std::max(worstRatio, density->sample(point) * area.value / majorant);
             }
         }
     }
@@ -994,18 +1006,18 @@ void testAnalyticFullDomainBake(TestContext& context) {
     writeFieldFile(path, grids, settings, "<analytic sphere>");
     nlohmann::json autoDomainConfig = bakedConfigJson();
     autoDomainConfig["field"]["grid_file"] = path.string();
-    autoDomainConfig["fixed_flight"]["birth_position"] = {0.0, 0.0, 5.0};
     const std::filesystem::path configPath = tempFieldPath("auto_domain_config.json");
     {
         std::ofstream stream(configPath);
         stream << autoDomainConfig.dump();
     }
     ExperimentConfig prepared = loadExperimentConfig(configPath);
-    context.require(!prepared.field.activeDomain.contains(prepared.fixedFlight.birthPosition),
-                    "render config can load when its unused fixed-flight birth is outside the grid");
     prepareNanoVdbField(prepared);
-    context.require(!prepared.mediumSurfaceBand,
-                    "full-domain NVDB retains its coverage after automatic domain resolution");
+    context.require(prepared.densityMajorantGrid != nullptr,
+                    "full-domain NVDB builds a DDA majorant grid");
+    context.require(prepared.preparedAreaMajorant.has_value() &&
+                    *prepared.preparedAreaMajorant > 0.0,
+                    "field preparation bakes a local projected-area majorant");
     const auto density = NanoVdbSampledField::open(path, "density");
     const Vector3 densityMargin = Vector3::Constant(density->voxelSize());
     context.require(prepared.field.activeDomain.contains(
@@ -1039,6 +1051,8 @@ void testAnalyticFullDomainBake(TestContext& context) {
     ExperimentConfig experiment;
     experiment.field = field;
     experiment.mediumDensity = NanoVdbSampledField::open(path, "density");
+    experiment.densityMajorantGrid = std::make_shared<DensityMajorantGrid>(
+        *experiment.mediumDensity, field.activeDomain, 4);
     requireNanoVdbField(experiment);
     experiment.field.mean = std::make_shared<SphereMean>(Point3::Zero(), 0.5);
     bool rejectedProceduralTrace = false;
@@ -1048,9 +1062,10 @@ void testAnalyticFullDomainBake(TestContext& context) {
                     "experiment tracing rejects an unbaked procedural mean");
     const FlightState state = startExternalFlight(Point3(0.5, 0.0, 0.0),
                                                    Vector3::UnitX());
-    NarrowBandMedium medium(field, experiment.material);
+    NarrowBandMedium medium(field, experiment.material,
+                            experiment.mediumDensity, experiment.densityMajorantGrid);
     const auto flight = medium.beginFlight(state);
-    const auto hazard = flight->evaluate(0.1).hazard.value;
+    const auto hazard = flight.evaluate(0.1).hazard.value;
     context.require(std::isfinite(hazard) && hazard >= 0.0,
                     "Classic evaluates the baked field");
 }
@@ -1078,7 +1093,6 @@ void testNarrowBandTransport(TestContext& context) {
     const BakedSphere& baked = sphereField();
     nlohmann::json importConfig = bakedConfigJson();
     importConfig["field"]["grid_file"] = baked.path.string();
-    importConfig["fixed_flight"]["birth_position"] = {0.0, 0.0, 5.0};
     const std::filesystem::path configPath = tempFieldPath("auto_narrow_domain.json");
     {
         std::ofstream stream(configPath);
@@ -1086,8 +1100,8 @@ void testNarrowBandTransport(TestContext& context) {
     }
     ExperimentConfig prepared = loadExperimentConfig(configPath);
     prepareNanoVdbField(prepared);
-    context.require(prepared.mediumSurfaceBand && prepared.densityMajorantGrid != nullptr,
-                    "automatic narrow-band domain builds its DDA majorant grid");
+    context.require(prepared.densityMajorantGrid != nullptr,
+                    "narrow-band field builds its DDA majorant grid");
     const auto importedDensity = NanoVdbSampledField::open(baked.path, "density");
     const Vector3 margin = Vector3::Constant(importedDensity->voxelSize());
     context.require(prepared.field.activeDomain.contains(
@@ -1101,7 +1115,7 @@ void testNarrowBandTransport(TestContext& context) {
     const ScalarFieldPtr density = NanoVdbSampledField::open(baked.path, "density");
     const auto majorants = std::make_shared<DensityMajorantGrid>(
         *density, field.activeDomain, 16);
-    NarrowBandMedium medium(field, material, density, true, majorants);
+    NarrowBandMedium medium(field, material, density, majorants);
     const Vector3 w = Vector3::UnitX();
     const FlightState external = startExternalFlight(Point3(-1.5, 0.0, 0.0), w);
     const auto segments = majorants->segments({external.birthPosition, w}, 0.0, 3.1);
@@ -1113,19 +1127,19 @@ void testNarrowBandTransport(TestContext& context) {
     context.require(sawVacuum && sawBandAfterVacuum,
                     "DDA skips vacuum macrocells and re-enters the far surface band");
     const auto classic = medium.beginFlight(external);
-    context.require(classic->evaluate(0.5).hazard.value > 0.0 &&
-                    classic->evaluate(1.5).hazard.value == 0.0 &&
-                    classic->evaluate(2.5).hazard.value > 0.0,
+    context.require(classic.evaluate(0.5).hazard.value > 0.0 &&
+                    classic.evaluate(1.5).hazard.value == 0.0 &&
+                    classic.evaluate(2.5).hazard.value > 0.0,
                     "classic flight crosses a vacuum core and re-enters the surface band");
     Random rng(4821);
     for (int sample = 0; sample < 32; ++sample) {
-        const FlightSample result = medium.sample(*classic, rng, defaultNumericPolicy(), nullptr, 16);
-        context.require(result.age >= 0.0 && result.age <= classic->maximumAgeInDomain(),
+        const FlightSample result = medium.sample(classic, rng, defaultNumericPolicy());
+        context.require(result.age >= 0.0 && result.age <= classic.maximumAgeInDomain(),
                         "null tracking stays in the flight domain");
     }
     for (int sample = 0; sample < 16; ++sample) {
-        const FlightSample result = medium.sample(*classic, rng, defaultNumericPolicy(),
-                                                  nullptr, 16, 1.0);
+        const FlightSample result = medium.sample(classic, rng, defaultNumericPolicy(),
+                                                  nullptr, 1.0);
         context.require(result.age <= 1.0 && (result.collided || result.age == 1.0),
                         "narrow-band medium respects a truncated flight interval");
     }

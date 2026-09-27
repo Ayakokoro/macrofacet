@@ -1,6 +1,7 @@
 #include "macrofacet/macrofacet/ClassicCoefficients.h"
 #include "macrofacet/macrofacet/GaussianNdf.h"
 #include "macrofacet/macrofacet/GgxHeightfield.h"
+#include "macrofacet/macrofacet/LocalFrame.h"
 #include "macrofacet/mathutility/Gaussian1D.h"
 #include "macrofacet/mathutility/GaussianMoments1D.h"
 #include <algorithm>
@@ -10,13 +11,8 @@
 namespace mf {
 namespace {
 
-PositiveResult projectedArea(const PointPrior& prior, const MaterialConfig& material,
-                             const Point3& x, const Vector3& w,
+PositiveResult projectedArea(const PointPrior& prior, const Vector3& w,
                              const NumericPolicy& policy) {
-    if (material.ndfFamily == NdfFamily::GGXBaseline) {
-        const Vector2 alpha = material.ggxAlphaAt(x);
-        return GgxHeightfield(alpha.x(), alpha.y()).projectedArea(w);
-    }
     const Vector3 direction = normalizedOrThrow(w);
     const double meanProjection = direction.dot(prior.meanG);
     const double varianceProjection = validateNonnegative(
@@ -29,22 +25,27 @@ PositiveResult projectedArea(const PointPrior& prior, const MaterialConfig& mate
 PositiveResult classicProjectedArea(const GPSSField& field, const MaterialConfig& material,
                                     const Point3& x, const Vector3& w,
                                     const NumericPolicy& policy) {
-    return projectedArea(field.pointPrior(x), material, x, w, policy);
+    if (material.ndfFamily == NdfFamily::GGXBaseline) {
+        const Vector2 alpha = material.ggxAlphaAt(x);
+        const Vector3 normal = field.mean->evaluate(x).gradient;
+        return GgxHeightfield(alpha.x(), alpha.y()).projectedArea(
+            tangentFrame(normal).transpose() * w);
+    }
+    return projectedArea(material.materialNdf(field, x), w, policy);
 }
 
 ClassicEvaluation evaluateClassic(const GPSSField& field, const MaterialConfig& material,
                                   const Point3& x, const Vector3& w,
                                   const NumericPolicy& policy) {
-    // Role 1 throughout. The projected area below is the transport quantity --
-    // the collision-gradient distribution -- not the shading NDF, so it must not
-    // read the alpha grid. Alpha reaches the extinction only through the GGX
-    // branch (docs/archive/PLAN_NANOVDB_FIELD.md 1.4 A/D).
-    const PointPrior prior = field.pointPrior(x);
+    // The signed distance is the local height above the tangent plane anchored
+    // on the mean surface. The gradient distribution is the local material GP,
+    // shared by extinction and collision scattering.
+    const double distance = field.mean->evaluate(x).value;
     const double sigma = field.kernel.sigma();
-    const double z = prior.meanF / sigma;
+    const double z = distance / sigma;
     const PositiveResult density = positiveFromLog(
         normalLogPdf(z) - std::log(sigma) - normalLogCdf(z));
-    const PositiveResult area = projectedArea(prior, material, x, w, policy);
+    const PositiveResult area = classicProjectedArea(field, material, x, w, policy);
     PositiveResult extinction;
     if (density.status == NumericStatus::ExactZero || area.status == NumericStatus::ExactZero) {
         extinction = exactZero();
@@ -59,20 +60,10 @@ double classicAreaMajorant(const GPSSField& field, const MaterialConfig& materia
                            const Bounds3& domain, const Vector3& w,
                            const NumericPolicy& policy) {
     (void)policy;
-    const BoundsSummary bounds = field.mean->bounds(domain);
-    if (!bounds.certified) {
-        throw NumericError(NumericStatus::InvalidInput, "mean field has no certified bounds");
-    }
-    const double sigma = field.kernel.sigma();
+    (void)w;
     double areaMaximum = 0.0;
     if (material.ndfFamily == NdfFamily::GGXBaseline) {
-        // GGX is the only family whose extinction reads the alpha grid, and it
-        // reads it per point via ggxAlphaAt(). The projected-area formula below
-        // increases with alpha, so the domain needs the *maximum* alpha: a
-        // majorant built from the config's ggxAlpha goes below the true value
-        // wherever alpha(x) exceeds it, and the tracker then drops real
-        // collisions. This is the one place in the whole integration where
-        // getting the bound wrong changes the rendered result.
+        // Bound the GGX projected area for every tangent-frame orientation.
         Vector2 alpha = material.ggxAlpha;
         if (material.alphaField) {
             const ScalarBounds alphaBounds = material.alphaField->bounds(domain);
@@ -83,32 +74,23 @@ double classicAreaMajorant(const GPSSField& field, const MaterialConfig& materia
             // Scalar lifted to isotropic, matching ggxAlphaAt().
             alpha = Vector2::Constant(std::max(0.0, alphaBounds.maximumValue));
         }
-        const Vector3 wn = normalizedOrThrow(w);
-        areaMaximum = 0.5 * (std::sqrt(wn.z() * wn.z() +
-            alpha.x() * alpha.x() * wn.x() * wn.x() +
-            alpha.y() * alpha.y() * wn.y() * wn.y()) - wn.z());
+        areaMaximum = 0.5 * (1.0 + std::max({1.0, alpha.x(), alpha.y()}));
     } else {
-        // The Gaussian family's projected area is role 1 and reads no alpha, so
-        // the constant covariance is still the right bound here.
-        const Matrix3 covariance = sigma * sigma * field.kernel.precision();
-        areaMaximum = std::sqrt(bounds.maximumGradientNorm * bounds.maximumGradientNorm +
-                                covariance.trace());
+        // E[(-w.G)+] <= E[||G||] <= sqrt(E[||G||^2]). The local mean
+        // gradient has length at most one, including constant-mean fields.
+        double trace = (field.kernel.sigma() * field.kernel.sigma() *
+                        field.kernel.precision()).trace();
+        if (material.alphaField) {
+            const ScalarBounds alphaBounds = material.alphaField->bounds(domain);
+            if (!alphaBounds.certified) {
+                throw NumericError(NumericStatus::InvalidInput,
+                                   "alpha field has no certified bounds");
+            }
+            trace = 1.5 * alphaBounds.maximumValue * alphaBounds.maximumValue;
+        }
+        areaMaximum = std::sqrt(1.0 + trace);
     }
     return std::nextafter(areaMaximum, std::numeric_limits<double>::infinity());
-}
-
-double classicMajorant(const GPSSField& field, const MaterialConfig& material,
-                       const Bounds3& domain, const Vector3& w,
-                       const NumericPolicy& policy) {
-    const BoundsSummary bounds = field.mean->bounds(domain);
-    if (!bounds.certified) {
-        throw NumericError(NumericStatus::InvalidInput, "mean field has no certified bounds");
-    }
-    const double sigma = field.kernel.sigma();
-    const double z = bounds.minimumValue / sigma;
-    const double rhoMaximum = std::exp(normalLogPdf(z) - std::log(sigma) - normalLogCdf(z));
-    const double value = rhoMaximum * classicAreaMajorant(field, material, domain, w, policy);
-    return std::nextafter(value, std::numeric_limits<double>::infinity());
 }
 
 } // namespace mf

@@ -5,40 +5,11 @@
 
 namespace mf {
 
-FlightSample sampleClassicNullTracking(const ClassicFlightKernel& kernel,
-                                       double certifiedMajorant, Random& rng,
-                                       double maximumAge) {
-    if (!(certifiedMajorant >= 0.0) || !std::isfinite(certifiedMajorant)) {
-        throw NumericError(NumericStatus::InvalidMajorant, "invalid classic majorant");
-    }
-    double age = kernel.currentAge();
-    const double end = maximumAge < 0.0 ? kernel.maximumAgeInDomain() :
-        std::min(maximumAge, kernel.maximumAgeInDomain());
-    if (!(end >= age))
-        throw NumericError(NumericStatus::InvalidInput, "invalid classic flight limit");
-    if (certifiedMajorant == 0.0) {
-        return {false, end, std::nullopt, std::nullopt, 1.0};
-    }
-    while (true) {
-        age += -std::log1p(-rng.openUniform01()) / certifiedMajorant;
-        if (age >= end) {
-            return {false, end, std::nullopt, std::nullopt, std::nullopt};
-        }
-        const double hazard = kernel.evaluate(age).hazard.value;
-        if (hazard > certifiedMajorant) {
-            throw NumericError(NumericStatus::InvalidMajorant,
-                               "classic hazard exceeds its certified majorant");
-        }
-        if (rng.openUniform01() < hazard / certifiedMajorant) {
-            return {true, age, std::nullopt, std::nullopt, std::nullopt};
-        }
-    }
-}
-
 FlightSample sampleClassicDdaTracking(const ClassicFlightKernel& kernel,
                                      const DensityMajorantGrid& densityMajorant,
                                      double areaMajorant, Random& rng,
-                                     double maximumAge) {
+                                     double maximumAge,
+                                     DdaTrackingDiagnostics* diagnostics) {
     if (!(areaMajorant >= 0.0) || !std::isfinite(areaMajorant))
         throw NumericError(NumericStatus::InvalidMajorant, "invalid projected-area bound");
     const Ray ray{kernel.state().birthPosition, kernel.state().direction};
@@ -59,15 +30,17 @@ FlightSample sampleClassicDdaTracking(const ClassicFlightKernel& kernel,
             const double distance = -std::log1p(-rng.openUniform01()) / majorant;
             if (!(distance < segment.end - age)) break;
             age += distance;
+            if (diagnostics) ++diagnostics->candidates;
             const double hazard = kernel.evaluate(age).hazard.value;
             if (hazard > majorant)
                 throw NumericError(NumericStatus::InvalidMajorant,
                                    "classic hazard exceeds its macrocell majorant");
             if (rng.openUniform01() < hazard / majorant)
-                return {true, age, std::nullopt, std::nullopt, std::nullopt};
+                return {true, age};
+            if (diagnostics) ++diagnostics->nullCollisions;
         }
     }
-    return {false, end, std::nullopt, std::nullopt, std::nullopt};
+    return {false, end};
 }
 
 } // namespace mf

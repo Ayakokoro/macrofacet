@@ -42,7 +42,7 @@ void printUsage() {
         "\n"
         "  --out <file.nvdb>     output path (default out.nvdb; a .json sidecar is written too)\n"
         "  --sigma <s>           surface position standard deviation (default 0.05)\n"
-        "  --alpha <a>           material NDF parameter written to the alpha grid (default 0.5)\n"
+        "  --alpha <a>           Beckmann alpha written to the material grid (default 0.5)\n"
         "  --x --y --z <n>       voxels per axis over the mesh bounding box (default 32)\n"
         "  --band <k>            write the grids only inside +-k sigma (default 3)\n"
         "  --background <k>      sdf background, in sigma (default 6)\n"
