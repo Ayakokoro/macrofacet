@@ -37,9 +37,8 @@ PositiveResult classicProjectedArea(const GPSSField& field, const MaterialConfig
 ClassicEvaluation evaluateClassic(const GPSSField& field, const MaterialConfig& material,
                                   const Point3& x, const Vector3& w,
                                   const NumericPolicy& policy) {
-    // The signed distance is the local height above the tangent plane anchored
-    // on the mean surface. The gradient distribution is the local material GP,
-    // shared by extinction and collision scattering.
+    // Both GP models use the same one-point height density. The selected
+    // gradient distribution is shared by extinction and collision scattering.
     const double distance = field.mean->evaluate(x).value;
     const double sigma = field.kernel.sigma();
     const double z = distance / sigma;
@@ -76,8 +75,18 @@ double classicAreaMajorant(const GPSSField& field, const MaterialConfig& materia
         }
         areaMaximum = 0.5 * (1.0 + std::max({1.0, alpha.x(), alpha.y()}));
     } else {
-        // E[(-w.G)+] <= E[||G||] <= sqrt(E[||G||^2]). The local mean
-        // gradient has length at most one, including constant-mean fields.
+        // E[(-w.G)+] <= E[||G||] <= sqrt(E[||G||^2]). Global mode
+        // retains the mean SDF gradient; local mode normalizes it.
+        double maximumMeanGradient = 1.0;
+        if (material.gpModel == GpModel::GlobalPointwise) {
+            const BoundsSummary bounds = field.mean->bounds(domain);
+            if (!bounds.certified || !(bounds.maximumGradientNorm >= 0.0) ||
+                !std::isfinite(bounds.maximumGradientNorm)) {
+                throw NumericError(NumericStatus::InvalidMajorant,
+                                   "global mean has no certified gradient bound");
+            }
+            maximumMeanGradient = bounds.maximumGradientNorm;
+        }
         double trace = (field.kernel.sigma() * field.kernel.sigma() *
                         field.kernel.precision()).trace();
         if (material.alphaField) {
@@ -88,7 +97,7 @@ double classicAreaMajorant(const GPSSField& field, const MaterialConfig& materia
             }
             trace = 1.5 * alphaBounds.maximumValue * alphaBounds.maximumValue;
         }
-        areaMaximum = std::sqrt(1.0 + trace);
+        areaMaximum = std::hypot(maximumMeanGradient, std::sqrt(trace));
     }
     return std::nextafter(areaMaximum, std::numeric_limits<double>::infinity());
 }

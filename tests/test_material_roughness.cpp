@@ -1,5 +1,6 @@
 #include "TestHarness.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
+#include "macrofacet/macrofacet/ClassicCoefficients.h"
 #include "macrofacet/macrofacet/GaussianNdf.h"
 #include <nlohmann/json.hpp>
 #include <array>
@@ -207,6 +208,27 @@ void testMaterialRoughness(TestContext& context) {
     context.require(loaded.material.ndfFamily == NdfFamily::GeneralizedGaussian,
                     "NDF family is parsed from the material block");
     checkRoughness(loaded, 0.03, 0.6);
+    nlohmann::json globalJson = valid;
+    globalJson["material"]["gp_model"] = "global_pointwise";
+    temporary.write(globalJson);
+    const ExperimentConfig globalLoaded = loadExperimentConfig(temporary.path);
+    context.require(globalLoaded.material.gpModel == GpModel::GlobalPointwise,
+                    "global pointwise GP model is parsed from material");
+    const Point3 globalPoint(0.0, 0.0, 0.1);
+    const PointPrior globalPrior = globalLoaded.field.pointPrior(globalPoint);
+    const PointPrior globalMaterial = globalLoaded.material.materialNdf(globalLoaded.field, globalPoint);
+    context.near(globalMaterial.meanF, globalPrior.meanF, 1e-14,
+                 "global material retains the field mean value at the point");
+    context.require((globalMaterial.meanG - globalPrior.meanG).norm() < 1e-14 &&
+                    (globalMaterial.covarianceG - globalPrior.covarianceG).norm() < 1e-14,
+                    "global material reads the field's gradient statistics without a local replacement");
+    const Point3 surfacePoint = Point3::Zero();
+    const Vector3 incidence = Vector3(0.3, 0.4, -0.5).normalized();
+    context.near(classicProjectedArea(globalLoaded.field, globalLoaded.material,
+                                      surfacePoint, incidence).value,
+                 classicProjectedArea(loaded.field, loaded.material,
+                                      surfacePoint, incidence).value, 1e-12,
+                 "global and local models agree for a planar unit-gradient mean and equal alpha");
     applyFieldOverrides(loaded, 0.01, std::nullopt, false);
     checkRoughness(loaded, 0.01, 0.6);
     applyFieldOverrides(loaded, std::nullopt, 0.9, false);
@@ -220,6 +242,8 @@ void testMaterialRoughness(TestContext& context) {
                      "resolved metadata records the override instead of the input roughness");
         context.require(resolved.at("material").at("ndf_family") == "generalized_gaussian",
                         "resolved metadata records the material NDF family");
+        context.require(resolved.at("material").at("gp_model") == "local_tangent",
+                        "resolved metadata records the default local GP model");
         context.near(resolved.at("derived").at("isotropic_correlation_length").get<double>(),
                      0.01 / (0.9 / std::sqrt(2.0)), 1e-14,
                      "resolved metadata records effective correlation length");
@@ -242,6 +266,14 @@ void testMaterialRoughness(TestContext& context) {
     nlohmann::json ambiguous = valid;
     ambiguous["field"]["correlation_lengths"] = {0.1, 0.1, 0.1};
     rejectsJson(ambiguous, "JSON material roughness cannot be combined with correlation lengths");
+    nlohmann::json unknownModel = valid;
+    unknownModel["material"]["gp_model"] = "unknown";
+    rejectsJson(unknownModel, "unknown GP model is rejected");
+    nlohmann::json globalGgx = globalJson;
+    globalGgx["material"].erase("roughness");
+    globalGgx["material"]["ndf_family"] = "ggx";
+    globalGgx["field"]["correlation_lengths"] = {0.1, 0.1, 0.1};
+    rejectsJson(globalGgx, "global pointwise mode rejects GGX because it needs GP gradient statistics");
     for (const nlohmann::json& value : std::array<nlohmann::json, 7>{{
              "0.6", nlohmann::json::array({0.6, 0.6}), nullptr, 0.0, -0.1, true, false}}) {
         nlohmann::json invalid = valid;

@@ -218,6 +218,19 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     }
     config.field = {std::move(built.mean), kernel, domain};
     config.material.ndfFamily = ndfFamily;
+    const std::string gpModel = material.value("gp_model", "local_tangent");
+    if (gpModel == "local_tangent") {
+        config.material.gpModel = GpModel::LocalTangent;
+    } else if (gpModel == "global_pointwise") {
+        config.material.gpModel = GpModel::GlobalPointwise;
+        if (fieldJson.at("mean_type") == "nanovdb" &&
+            fieldJson.value("use_alpha_grid", true)) {
+            throw std::invalid_argument(
+                "global_pointwise requires field.use_alpha_grid=false");
+        }
+    } else {
+        throw std::invalid_argument("unknown material.gp_model: " + gpModel);
+    }
     const auto alpha = material.contains("ggx_alpha") ? material.at("ggx_alpha") :
         fieldJson.value("ggx_alpha", nlohmann::json());
     if (!alpha.is_null()) {
@@ -322,10 +335,14 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         (fieldVariance * config.field.kernel.precision().diagonal()).cwiseMax(0.0).cwiseSqrt();
     result["derived"]["gradient_stddev_xyz"] = toArray(gradientStddev);
     if (config.preparedAreaMajorant)
-        result["derived"]["local_area_majorant"] = *config.preparedAreaMajorant;
+        result["derived"]["projected_area_majorant"] = *config.preparedAreaMajorant;
     result["material"]["ndf_family"] = config.material.ndfFamily == NdfFamily::GGXBaseline
         ? "ggx" : config.material.ndfFamily == NdfFamily::BeckmannLimit
             ? "beckmann_limit" : "generalized_gaussian";
+    result["material"]["gp_model"] = config.material.gpModel == GpModel::GlobalPointwise
+        ? "global_pointwise" : "local_tangent";
+    if (result.contains("field") && result["field"].value("mean_type", "") == "nanovdb")
+        result["field"]["use_alpha_grid"] = static_cast<bool>(config.material.alphaField);
     result["material"]["ggx_alpha"] =
         {config.material.ggxAlpha.x(), config.material.ggxAlpha.y()};
     if (config.materialRoughness) {

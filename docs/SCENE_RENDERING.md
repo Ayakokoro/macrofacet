@@ -213,3 +213,13 @@ convention: the local Gaussian material GP uses `alpha(x)^2 / 2 * I`. The grid c
 both the local projected area used for extinction and the scattering NDF. The baked
 density still supplies the signed-distance height factor. Existing alpha grids baked under the former gradient-standard-deviation
 convention must be baked again with the desired Beckmann-alpha values.
+
+To compare against one GP defined over the full field, set `material.gp_model` to
+`"global_pointwise"` and, for NanoVDB, `field.use_alpha_grid` to `false`.
+The global model uses `∇m(x)` without normalizing it and uses the same configured
+SE covariance at every point for extinction, collision normals and scattering.
+`material.roughness` specifies its common alpha; a spatial alpha grid is not part
+of this global GP. The renderer still samples one-point marginals independently:
+cross-point GP conditioning is not implemented. With a unit-gradient SDF and the
+same alpha, global and local projected areas are equal. Interpolated grid gradients
+can differ from unit length, especially near sharp or underresolved features.

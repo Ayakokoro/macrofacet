@@ -5,6 +5,7 @@ namespace mf {
 
 PointPrior MaterialConfig::materialNdf(const GPSSField& field, const Point3& x) const {
     PointPrior prior = field.pointPrior(x);
+    if (gpModel == GpModel::GlobalPointwise) return prior;
     // The material GP is centred on the tangent plane at x. Its local mean is
     // m_local(u) = u_z, so at the local origin meanF = 0 and meanG = e_z.
     // Convert that unit gradient back to world space. A constant mean has no
@@ -32,6 +33,11 @@ Vector2 MaterialConfig::ggxAlphaAt(const Point3& x) const {
 }
 
 void MaterialConfig::validate(const Bounds3& domain) const {
+    if (gpModel == GpModel::GlobalPointwise &&
+        (alphaField || ndfFamily != NdfFamily::GeneralizedGaussian)) {
+        throw std::invalid_argument(
+            "global_pointwise requires generalized_gaussian and no alpha grid");
+    }
     if ((conductor.eta.array() < 0.0).any() || (conductor.k.array() < 0.0).any() ||
         !conductor.eta.allFinite() || !conductor.k.allFinite() ||
         ((conductor.eta.array().square() + conductor.k.array().square()) <= 0.0).any()) {

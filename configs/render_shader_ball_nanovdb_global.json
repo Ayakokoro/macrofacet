@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "seed": 17429,
+  "field": {
+    "mean_type": "nanovdb",
+    "grid_file": "outputs/fields/shader_ball.nvdb",
+    "use_alpha_grid": false,
+    "outside_domain": "vacuum"
+  },
+  "material": {
+    "ndf_family": "generalized_gaussian",
+    "type": "conductor",
+    "eta_rgb": [
+      0.2,
+      0.9,
+      1.1
+    ],
+    "k_rgb": [
+      3.9,
+      2.5,
+      2.2
+    ],
+    "force_unit_fresnel_for_energy_test": false,
+    "gp_model": "global_pointwise",
+    "roughness": 0.5
+  },
+  "transport": {
+    "classic_phase_proposal": "target_vndf",
+    "beckmann_mixture_weight": 0.9,
+    "roulette_start_depth": 8
+  },
+  "numeric": {
+    "relative_tolerance": 1e-06,
+    "absolute_tolerance": 1e-09,
+    "max_quadrature_subdivisions": 16384,
+    "max_root_iterations": 128,
+    "higher_precision_fallback": true,
+    "allow_unreported_jitter": false,
+    "distance_absolute_tolerance": 1e-10,
+    "distance_relative_tolerance": 1e-08
+  },
+  "render": {
+    "width": 512,
+    "height": 512,
+    "samples_per_pixel": 64,
+    "camera_position": [
+      0.134,
+      -0.178,
+      0.153
+    ],
+    "camera_target": [
+      0.0,
+      0.0,
+      0.041
+    ],
+    "vertical_fov_degrees": 32.0,
+    "environment": "directional_gradient",
+    "linear_output_format": "pfm"
+  },
+  "output_directory": "outputs/render_shader_ball_nanovdb_global"
+}

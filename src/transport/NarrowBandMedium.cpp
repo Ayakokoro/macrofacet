@@ -18,7 +18,7 @@ NarrowBandMedium::NarrowBandMedium(
     areaMajorant_ = preparedAreaMajorant.value_or(0.0);
     if (preparedAreaMajorant) {
         if (!(areaMajorant_ >= 0.0) || !std::isfinite(areaMajorant_))
-            throw std::invalid_argument("invalid prepared local area majorant");
+            throw std::invalid_argument("invalid prepared projected-area majorant");
     } else {
         areaMajorant_ = classicAreaMajorant(field_, material_, field_.activeDomain,
                                             Vector3::UnitZ());

@@ -769,6 +769,32 @@ void testMaterialNdfRoleSeparation(TestContext& context) {
                  classic.density.value * classic.projectedArea.value, 1e-9,
                  "local extinction is density times local projected area");
 
+    mf::MaterialConfig globalMaterial = materialWithout;
+    globalMaterial.gpModel = mf::GpModel::GlobalPointwise;
+    globalMaterial.validate(field.activeDomain);
+    const mf::PointPrior globalNdf = globalMaterial.materialNdf(field, x);
+    context.near(globalNdf.meanF, transport.meanF, 1e-12,
+                 "global pointwise mode keeps the mean signed distance");
+    context.require((globalNdf.meanG - transport.meanG).norm() < 1e-12 &&
+                    (globalNdf.covarianceG - transport.covarianceG).norm() < 1e-12,
+                    "global pointwise extinction and phase retain the global gradient prior");
+    context.near(mf::classicProjectedArea(field, globalMaterial, x, tangent).value,
+                 globalArea, 1e-9,
+                 "global pointwise extinction uses the global projected area");
+    const double globalBound = mf::classicAreaMajorant(field, globalMaterial,
+                                                       field.activeDomain, tangent);
+    context.require(globalBound >= globalArea,
+                    "global pointwise DDA majorant bounds the global projected area");
+    bool rejectedAlphaGrid = false;
+    try {
+        globalMaterial.alphaField = materialWithAlpha.alphaField;
+        globalMaterial.validate(field.activeDomain);
+    } catch (const std::invalid_argument&) {
+        rejectedAlphaGrid = true;
+    }
+    context.require(rejectedAlphaGrid,
+                    "global pointwise GP rejects a local alpha field");
+
     // ggxAlphaAt is the GGX family's route to the same grid: scalar lifted to
     // isotropic. Without a grid it must hand back the config's anisotropy
     // untouched, or every existing GGX config silently becomes isotropic.
