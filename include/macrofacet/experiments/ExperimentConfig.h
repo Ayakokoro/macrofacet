@@ -28,19 +28,22 @@ struct RenderConfig {
 struct ExperimentConfig {
     int schemaVersion = 1;
     std::uint64_t seed = 17429;
+    // Mean field, SE kernel, and active domain shared by both GP models.
+    // global-pointwise mode uses the mean field directly; local-tangent mode builds a
+    // tangent-plane GP at each point from the mean's gradient and Hessian.
     GPSSField field;
     // Baked density and its certified majorant drive DDA tracking.
     ScalarFieldPtr mediumDensity;
     std::shared_ptr<const DensityMajorantGrid> densityMajorantGrid;
-    // Certified local projected-area bound baked once during field preparation.
+    // Certified projected-area bound for the selected GP model, prepared once.
     std::optional<double> preparedAreaMajorant;
     MaterialConfig material;
     // Original field description, used to identify the cached analytic bake.
     std::string sourceFieldSpec;
     std::optional<double> bakeVoxelSize;
-    // Default local GP roughness in the Beckmann-alpha convention. It fixes
+    // Explicit scalar Beckmann alpha, if configured. It sets the SE kernel's
     // covarianceG = roughness^2 / 2 I and ell = sqrt(2) * sigma / roughness.
-    // An alpha grid overrides this covariance at each material point.
+    // In local mode only, an alpha grid overrides this covariance per point.
     std::optional<double> materialRoughness;
     RenderConfig render;
     NumericPolicy numeric;

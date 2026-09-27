@@ -17,8 +17,8 @@ namespace mf {
 struct MeanBuildResult {
     MeanFieldPtr mean;
     ScalarFieldPtr alphaField;
-    // Baked fields may define their own tracing domain. Procedural fields leave
-    // this empty and require domain_min/domain_max in the config.
+    // Baked fields may provide a tracing bounding box, not an exact active-band
+    // mask. Procedural fields leave this empty and require domain_min/domain_max.
     std::optional<Bounds3> activeDomain;
 };
 
@@ -35,9 +35,8 @@ void registerMeanFactory(const std::string& type, MeanFactoryFn fn);
 // Throws std::invalid_argument naming the offending type when it is unknown.
 MeanBuildResult buildMeanFromJson(const nlohmann::json& fieldJson);
 
-// Echoes a built field back into the config schema, so a resolved config can be
-// fed straight back in. Same registry, same keys: a type that can be built
-// should be able to describe itself.
+// Writes a built mean's field metadata for the resolved-config report. The
+// report as a whole is not necessarily a runnable input config.
 using MeanWriterFn = std::function<nlohmann::json(const MeanField&)>;
 
 void registerMeanWriter(const std::string& type, MeanWriterFn fn);

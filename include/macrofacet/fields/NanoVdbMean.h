@@ -14,14 +14,12 @@ namespace mf {
 //
 // Two behaviours differ from the analytic fields on purpose:
 //
-//  - Outside the grid, and at inactive voxels inside it, evaluate() returns the
-//    grid's background (+6 sigma) with a zero gradient. It must not throw:
-//    The flight kernel evaluates the mean at the ray's birth point during
-//    construction, and that point lies on the config's active domain, which is
-//    larger than the baked grid.
-//  - bounds() reports the grid's global extremes for every domain. That is
-//    conservative in both directions (a sub-domain is a subset), so it can only
-//    loosen the majorant, never drop a collision.
+//  - Where all eight interpolation samples are inactive, evaluate() returns
+//    the grid's background (+6 sigma) with zero gradient. At active/inactive
+//    boundaries it blends stored values with the background and can have a
+//    nonzero gradient. Queries outside the grid remain defined.
+//  - bounds() uses the grid's global value range and gradient bound for every
+//    domain. This is conservative for sub-domains but may loosen a majorant.
 //
 // This header deliberately exposes no nanovdb type; the grid lives behind a
 // pimpl so the core library never sees the dependency.
@@ -50,7 +48,7 @@ public:
     double sigma() const;
     double background() const;
     const std::filesystem::path& gridFile() const;
-    // The grid's world-space bounding box, which is what the bake covered.
+    // The grid's world-space bounding box, not the exact active-band mask.
     const Bounds3& gridBounds() const;
 
 private:

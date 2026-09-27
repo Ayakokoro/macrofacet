@@ -6,6 +6,7 @@
 
 namespace mf {
 
+// value-gradient joint distribution at a single point, with optional prior information
 struct PointPrior {
     double meanF = 0.0;
     double varianceF = 0.0;

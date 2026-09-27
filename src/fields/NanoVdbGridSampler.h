@@ -25,6 +25,7 @@
 // bias of dx/2 * |grad| everywhere else.
 
 #include "macrofacet/core/Types.h"
+#include "fields/TrilinearBounds.h"
 
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/HostBuffer.h>
@@ -97,6 +98,30 @@ public:
     double minimumValue() const { return minimum_; }
     double maximumValue() const { return maximum_; }
     const Bounds3& worldBounds() const { return worldBounds_; }
+
+    // Scan each interpolation cell touching an active voxel once. A cell
+    // outside this range has eight background corners and zero gradient.
+    // This is a single global bound, computed when NanoVdbMean is opened.
+    double maximumTrilinearGradientNorm() const {
+        const nanovdb::CoordBBox active = grid_->indexBBox();
+        auto accessor = grid_->getAccessor();
+        double maximum = 0.0;
+        for (int k = active.min()[2] - 1; k <= active.max()[2]; ++k) {
+            for (int j = active.min()[1] - 1; j <= active.max()[1]; ++j) {
+                for (int i = active.min()[0] - 1; i <= active.max()[0]; ++i) {
+                    double corner[2][2][2];
+                    for (int dk = 0; dk < 2; ++dk)
+                        for (int dj = 0; dj < 2; ++dj)
+                            for (int di = 0; di < 2; ++di)
+                                corner[di][dj][dk] = static_cast<double>(accessor.getValue(
+                                    nanovdb::Coord(i + di, j + dj, k + dk)));
+                    maximum = std::max(maximum,
+                        trilinearCellGradientNormBound(corner, dx_));
+                }
+            }
+        }
+        return maximum;
+    }
 
     // Trilinear interpolation is a convex combination of its eight corner
     // samples. Every corner touched by a world-space box is scanned, including

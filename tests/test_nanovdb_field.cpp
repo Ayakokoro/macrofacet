@@ -3,6 +3,7 @@
 #include "fieldgen/NanoVdbIO.h"
 #include "fieldgen/SyntheticMesh.h"
 #include "fieldgen/VdbBaker.h"
+#include "fields/TrilinearBounds.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/fields/MeanFactory.h"
 #include "macrofacet/fields/NanoVdbMean.h"
@@ -359,6 +360,21 @@ void testTrilinearGradientNormBound(TestContext& context) {
     context.require(sidecar.has_value(), "gradient test bake writes a sidecar");
     if (sidecar) context.near(sidecar->maximumGradientNorm, bound, 1e-6,
                               "sidecar records the tracing bound");
+}
+
+void testTightTrilinearCellGradientBound(TestContext& context) {
+    double corner[2][2][2];
+    for (int k = 0; k < 2; ++k)
+        for (int j = 0; j < 2; ++j)
+            for (int i = 0; i < 2; ++i)
+                corner[i][j][k] = 0.2 * i + 0.3 * j + 0.4 * k;
+
+    const double tight = mf::detail::trilinearCellGradientNormBound(corner, 1.0);
+    const double oldRange = mf::detail::trilinearGradientNormBound(0.0, 0.9, 1.0);
+    context.near(tight, std::sqrt(0.2 * 0.2 + 0.3 * 0.3 + 0.4 * 0.4), 1e-12,
+                 "the cell bound matches the exact affine gradient norm");
+    context.require(tight < oldRange,
+                    "the cell bound is tighter than the whole-value-range bound");
 }
 
 // The whole point of the factory: a config naming mean_type "nanovdb" builds the
@@ -1180,6 +1196,7 @@ void testNanoVdbField(TestContext& context) {
     testGradientMatchesCentralDifference(context);
     testBoundsAreConservative(context);
     testTrilinearGradientNormBound(context);
+    testTightTrilinearCellGradientBound(context);
     testFactoryRegistration(context);
     testSigmaDisagreementThrows(context);
     testSigmaSchema(context);

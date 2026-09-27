@@ -2,7 +2,6 @@
 
 #include "fieldgen/NanoVdbIO.h"
 #include "fields/NanoVdbGridSampler.h"
-#include "fields/TrilinearBounds.h"
 #include "macrofacet/fields/MeanFactory.h"
 #include "macrofacet/fields/NanoVdbSampledField.h"
 
@@ -18,12 +17,10 @@ struct NanoVdbMean::Impl {
     detail::GridView view;
     std::filesystem::path path;
     double sigma = 0.0;
+    double cachedMaximumGradientNorm = 0.0;
 
-    // The global value range also bounds every interpolation cell. Apply the
-    // three-dimensional trilinear gradient bound used by both bakers.
     double maximumGradientNorm() const {
-        return detail::trilinearGradientNormBound(
-            view.minimumValue(), view.maximumValue(), view.voxelSize());
+        return cachedMaximumGradientNorm;
     }
 };
 
@@ -56,6 +53,8 @@ std::shared_ptr<const NanoVdbMean> NanoVdbMean::open(const std::filesystem::path
         throw std::runtime_error("baked grid has a degenerate world bounding box: " +
                                  gridFile.string());
     }
+    result->impl_->cachedMaximumGradientNorm =
+        result->impl_->view.maximumTrilinearGradientNorm();
     return result;
 }
 

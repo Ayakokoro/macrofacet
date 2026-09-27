@@ -42,6 +42,7 @@ public:
         return evaluate(x + displacement).value - evaluate(x).value;
     }
     virtual BoundsSummary bounds(const Bounds3& domain) const = 0;
+    // If the mean is affine, returns its constant gradient. Otherwise returns
     virtual std::optional<Vector3> affineGradient() const { return std::nullopt; }
     // Nonzero for a sampled grid. The integrator partitions at interpolation
     // cell boundaries rather than using a loose global gradient bound.
