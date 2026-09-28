@@ -4,7 +4,7 @@
   "field": {
     "mean_type": "nanovdb",
     "grid_file": "outputs/fields/shader_ball.nvdb",
-    "use_alpha_grid": true,
+    "use_alpha_grid": false,
     "correlation_lengths": [
       0.0044,
       0.0044,

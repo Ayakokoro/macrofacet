@@ -1,5 +1,6 @@
 #include "macrofacet/transport/NarrowBandMedium.h"
 #include "macrofacet/macrofacet/ClassicCoefficients.h"
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -34,13 +35,22 @@ ClassicFlightKernel NarrowBandMedium::beginFlight(const FlightState& state) cons
     return ClassicFlightKernel(field_, material_, state, density_);
 }
 
+ClassicMajorantCursor NarrowBandMedium::sampleRay(const ClassicFlightKernel& flight,
+                                                   double maximumAge) const {
+    return ClassicMajorantCursor(flight, *majorantGrid_, areaMajorant_, maximumAge);
+}
+
 FlightSample NarrowBandMedium::sample(const ClassicFlightKernel& flight, Random& rng,
                                       const NumericPolicy& numeric,
                                       DdaTrackingDiagnostics* diagnostics,
                                       double maximumAge) const {
     (void)numeric;
-    return sampleClassicDdaTracking(flight, *majorantGrid_, areaMajorant_, rng,
-                                    maximumAge, diagnostics);
+    const double end=maximumAge < 0.0 ? flight.maximumAgeInDomain() :
+        std::min(maximumAge,flight.maximumAgeInDomain());
+    if (!(end>=flight.currentAge()))
+        throw NumericError(NumericStatus::InvalidInput,"invalid classic flight limit");
+    auto cursor=sampleRay(flight,end);
+    return sampleSegmentedDeltaTracking(flight,cursor,rng,end,diagnostics);
 }
 
 } // namespace mf

@@ -2,6 +2,7 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/transport/ClassicFlightKernel.h"
 #include "macrofacet/transport/ConditionalFlightKernel.h"
+#include "macrofacet/transport/ConditionalMedium.h"
 #include "macrofacet/transport/ConditionalNullTracking.h"
 #include "macrofacet/transport/CollisionGradientSampler.h"
 
@@ -97,6 +98,33 @@ void testFlightKernels(TestContext& context) {
         const Vector3 gradient = sampleCollisionGradient(conditioned, flight.age, rng);
         context.require(surface.direction.dot(gradient) < 0.0,
                         "conditional collision uses negative-flux gradient");
+    }
+    {
+        const ConditionalMedium medium(field);
+        DdaTrackingDiagnostics proof;
+        auto cursor=medium.sampleRay(conditioned,0.4,&proof);
+        context.require(proof.boundIntervals==0,
+                        "conditional cursor does not prove the far ray at construction");
+        double covered=0.0;
+        int count=0;
+        while (const auto segment=cursor.next()) {
+            context.near(segment->beginAge,covered,1e-15,
+                         "conditional segments have no gaps or overlaps");
+            context.require(segment->endAge>segment->beginAge &&
+                            std::isfinite(segment->majorant),
+                            "conditional segment has a finite bound and advances");
+            for (int j=0;j<4;++j) {
+                const double t=segment->beginAge+(segment->endAge-segment->beginAge)*
+                    (j+0.5)/4.0;
+                context.require(conditioned.evaluate(t).hazard.value<=segment->majorant,
+                                "conditional segment covers interior extinction probes");
+            }
+            covered=segment->endAge;
+            ++count;
+        }
+        context.near(covered,0.4,1e-15,"conditional cursor covers requested flight");
+        context.require(count>1 && proof.boundIntervals>0,
+                        "conditional cursor computes far bounds when visited");
     }
 
     // Independent 4x4 Gaussian conditioning reference at a non-small separation.
@@ -225,7 +253,7 @@ void testFlightKernels(TestContext& context) {
         int escapes=0;
         for (int i=0; i<trials; ++i)
             if (!sampleConditionalDeltaTracking(accelerated,acceleratedRng,&tracking,end).collided) ++escapes;
-        context.require(tracking.adaptiveMajorantFlights>0,"grazing survival test exercises interval thinning");
+        context.require(tracking.boundIntervals>0,"grazing survival test exercises lazy interval bounds");
         context.near(static_cast<double>(escapes)/trials,expected,
                      6.0*std::sqrt(expected*(1.0-expected)/trials)+0.002,
                      "accelerated tracking agrees with independent log-distance hazard integration");

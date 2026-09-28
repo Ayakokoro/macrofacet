@@ -24,6 +24,9 @@ build\Release\macrofacet_experiments.exe render --config configs\render_sphere.j
 Each run writes a linear-radiance `.pfm`, an sRGB `.bmp` preview, `resolved_config.json`, and
 render statistics. Use the `directional` preview to judge appearance. The `white` image is an
 energy-conservation diagnostic and intentionally has little shape contrast.
+During `render`, the terminal progress bar counts completed camera-ray samples. Its total is
+`width × height × spp` per image, summed across all selected modes and environments. Field
+preparation happens before this progress bar starts.
 
 The plane config uses the paper mixture proposal. The sphere uses `target_vndf`, which samples its
 exact local Gaussian visible-normal distribution even though the mean normal varies over the

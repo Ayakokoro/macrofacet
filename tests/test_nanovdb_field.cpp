@@ -15,6 +15,7 @@
 #include "macrofacet/transport/FlightKernel.h"
 #include "macrofacet/transport/NarrowBandMedium.h"
 #include "macrofacet/transport/ConditionalFlightKernel.h"
+#include "macrofacet/transport/ConditionalMedium.h"
 
 #include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
@@ -1213,6 +1214,24 @@ void testConditionalRayBounds(TestContext& context) {
         }
         const ConditionalFlightKernel kernel(field,state);
         const auto bounds=kernel.twoSegmentMajorants(0.7);
+        ConditionalMedium medium(field);
+        auto cursor=medium.sampleRay(kernel,0.7);
+        double covered=0.0;
+        int segmentCount=0;
+        while (const auto segment=cursor.next()) {
+            context.require(segment->beginAge==covered,
+                            "conditional NanoVDB intervals remain contiguous across cells");
+            for (int j=0;j<3;++j) {
+                const double t=segment->beginAge+
+                    (segment->endAge-segment->beginAge)*(j+0.5)/3.0;
+                context.require(kernel.evaluate(t).hazard.value<=segment->majorant,
+                                "conditional NanoVDB interval covers extinction probes");
+            }
+            covered=segment->endAge;
+            ++segmentCount;
+        }
+        context.require(covered==0.7 && segmentCount>1,
+                        "conditional NanoVDB cursor covers the requested ray");
         for (int i=0; i<=500; ++i) {
             const double t=0.7*std::pow(10.0,-10.0+10.0*i/500.0);
             context.require(kernel.evaluate(t).hazard.value<=

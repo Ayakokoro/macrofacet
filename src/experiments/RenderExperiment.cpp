@@ -1,10 +1,81 @@
 #include "macrofacet/experiments/RenderExperiment.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
+#include <algorithm>
 #include <chrono>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
+#include <limits>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <thread>
+
+namespace {
+
+class RenderProgressBar {
+public:
+    explicit RenderProgressBar(std::uint64_t total) : total_(total), reporter_([this] {
+        std::uint64_t last = std::numeric_limits<std::uint64_t>::max();
+        do {
+            const std::uint64_t count = completed.load(std::memory_order_relaxed);
+            if (count != last) {
+                print(count);
+                last = count;
+            }
+            if (finished_.load(std::memory_order_acquire)) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        } while (true);
+        const std::uint64_t count = completed.load(std::memory_order_relaxed);
+        if (count != last) print(count);
+        std::cerr << '\n';
+    }) {}
+
+    ~RenderProgressBar() {
+        finished_.store(true, std::memory_order_release);
+        reporter_.join();
+    }
+
+    std::atomic<std::uint64_t> completed{0};
+
+private:
+    void print(std::uint64_t count) const {
+        constexpr int width = 30;
+        const double fraction = std::min(1.0, static_cast<double>(count) / total_);
+        const int filled = static_cast<int>(width * fraction);
+        std::ostringstream line;
+        line << "\rrender [" << std::string(filled, '#')
+             << std::string(width - filled, '-') << "] "
+             << std::setw(3) << static_cast<int>(100.0 * fraction) << "% "
+             << count << '/' << total_ << " camera rays";
+        std::cerr << line.str() << std::flush;
+    }
+
+    const std::uint64_t total_;
+    std::atomic<bool> finished_{false};
+    std::thread reporter_;
+};
+
+std::uint64_t totalCameraRays(const mf::ExperimentConfig& config,
+                              std::size_t modeCount, std::size_t environmentCount) {
+    std::uint64_t total = 1;
+    for (const std::uint64_t factor : {
+             static_cast<std::uint64_t>(config.render.width),
+             static_cast<std::uint64_t>(config.render.height),
+             static_cast<std::uint64_t>(config.render.samplesPerPixel),
+             static_cast<std::uint64_t>(modeCount),
+             static_cast<std::uint64_t>(environmentCount)}) {
+        if (factor == 0 || total > std::numeric_limits<std::uint64_t>::max() / factor)
+            throw std::overflow_error("render camera-ray count exceeds uint64 range");
+        total *= factor;
+    }
+    return total;
+}
+
+} // namespace
 
 namespace mf {
 
@@ -21,6 +92,7 @@ void runRenderExperiments(const ExperimentConfig& config) {
             : std::vector<std::string>{config.transportMode};
         std::vector<std::string> environments{"unit_white"};
         if (config.render.environment != "unit_white") environments.push_back(config.render.environment);
+        RenderProgressBar progress(totalCameraRays(config, modes.size(), environments.size()));
         for (const std::string& mode : modes) for (const std::string& environment : environments) {
             ExperimentConfig renderConfig = config;
             renderConfig.transportMode = mode;
@@ -40,7 +112,7 @@ void runRenderExperiments(const ExperimentConfig& config) {
                 renderConfig.material.conductor.forceUnitFresnel = true;
             }
             const auto start = std::chrono::steady_clock::now();
-            const RenderedImage image = renderAnalyticScene(renderConfig);
+            const RenderedImage image = renderAnalyticScene(renderConfig, &progress.completed);
             const double seconds = std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - start).count();
             const std::string suffix = environment == "unit_white" ? "white" : "directional";

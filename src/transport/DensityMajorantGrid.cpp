@@ -36,69 +36,80 @@ DensityMajorantGrid::DensityMajorantGrid(const ScalarField& density, Bounds3 dom
             }
 }
 
-std::vector<DensityMajorantSegment> DensityMajorantGrid::segments(
-    const Ray& ray, double begin, double end) const {
-    std::vector<DensityMajorantSegment> result;
-    const DomainInterval interval = domain_.intersect(ray);
-    if (!interval.hit) return result;
-    double age = std::max(begin, interval.entry);
-    const double stop = std::min(end, interval.exit);
-    if (!(age < stop)) return result;
-    const Point3 p = ray.origin + age * ray.direction;
-    int cell[3], step[3];
-    double next[3];
-    const auto boundaryTime = [&](int axis, int cellIndex, int direction) {
+double DensityMajorantGrid::Cursor::boundaryTime(int axis, int cellIndex,
+                                                 int direction) const {
         const int boundary = cellIndex + (direction > 0 ? 1 : 0);
         // Use the exact domain face at the outermost boundary. Recomputing
         // times from planes also avoids accumulated error from repeated DDA
         // increments, which can otherwise put the last boundary before exit.
-        const double plane = boundary == 0 ? domain_.minimum[axis] :
-            boundary == resolution_ ? domain_.maximum[axis] :
-            domain_.minimum[axis] + boundary * cellSize_[axis];
-        return (plane - ray.origin[axis]) / ray.direction[axis];
-    };
+        const double plane = boundary == 0 ? grid_.domain_.minimum[axis] :
+            boundary == grid_.resolution_ ? grid_.domain_.maximum[axis] :
+            grid_.domain_.minimum[axis] + boundary * grid_.cellSize_[axis];
+        return (plane - ray_.origin[axis]) / ray_.direction[axis];
+}
+
+DensityMajorantGrid::Cursor::Cursor(const DensityMajorantGrid& grid, const Ray& ray,
+                                    double begin, double end)
+    : grid_(grid), ray_(ray) {
+    const DomainInterval interval = grid_.domain_.intersect(ray_);
+    if (!interval.hit) return;
+    age_ = std::max(begin, interval.entry);
+    stop_ = std::min(end, interval.exit);
+    if (!(age_ < stop_)) return;
+    const Point3 p = ray_.origin + age_ * ray_.direction;
     for (int axis = 0; axis < 3; ++axis) {
-        const double u = (p[axis] - domain_.minimum[axis]) / cellSize_[axis];
+        const double u = (p[axis] - grid_.domain_.minimum[axis]) / grid_.cellSize_[axis];
         int idx = static_cast<int>(std::floor(u));
         const double rounded = std::round(u);
-        if (ray.direction[axis] < 0.0 &&
+        if (ray_.direction[axis] < 0.0 &&
             std::abs(u - rounded) <= 16.0 * std::numeric_limits<double>::epsilon() *
                                       std::max(1.0, std::abs(u)))
             --idx;
-        cell[axis] = std::clamp(idx, 0, resolution_ - 1);
-        step[axis] = ray.direction[axis] > 0.0 ? 1 : ray.direction[axis] < 0.0 ? -1 : 0;
-        if (step[axis] == 0) {
-            next[axis] = std::numeric_limits<double>::infinity();
+        cell_[axis] = std::clamp(idx, 0, grid_.resolution_ - 1);
+        step_[axis] = ray_.direction[axis] > 0.0 ? 1 : ray_.direction[axis] < 0.0 ? -1 : 0;
+        if (step_[axis] == 0) {
+            crossing_[axis] = std::numeric_limits<double>::infinity();
         } else {
-            next[axis] = boundaryTime(axis, cell[axis], step[axis]);
-            if (next[axis] <= age) next[axis] = std::nextafter(age,
+            crossing_[axis] = boundaryTime(axis, cell_[axis], step_[axis]);
+            if (crossing_[axis] <= age_) crossing_[axis] = std::nextafter(age_,
                                                 std::numeric_limits<double>::infinity());
         }
     }
-    for (int count = 0; age < stop; ++count) {
-        if (count > 3 * resolution_ + 8)
+}
+
+std::optional<DensityMajorantSegment> DensityMajorantGrid::Cursor::next() {
+    if (!(age_ < stop_)) return std::nullopt;
+        if (count_++ > 3 * grid_.resolution_ + 8)
             throw NumericError(NumericStatus::InvalidMajorant,
                                "density majorant DDA exceeded its grid traversal budget");
-        const double boundary = std::min({next[0], next[1], next[2]});
-        const double segmentEnd = std::min(stop, boundary);
-        if (!(segmentEnd > age))
+        const double boundary = std::min({crossing_[0], crossing_[1], crossing_[2]});
+        const double segmentEnd = std::min(stop_, boundary);
+        if (!(segmentEnd > age_))
             throw NumericError(NumericStatus::InvalidMajorant,
                                "density majorant DDA failed to advance");
-        result.push_back({age, segmentEnd, maxima_[index(cell[0], cell[1], cell[2])]});
-        age = segmentEnd;
-        if (!(age < stop)) break;
+        const DensityMajorantSegment segment{age_, segmentEnd,
+            grid_.maxima_[grid_.index(cell_[0], cell_[1], cell_[2])]};
+        age_ = segmentEnd;
+        if (!(age_ < stop_)) return segment;
         for (int axis = 0; axis < 3; ++axis) {
-            if (next[axis] <= boundary) {
-                cell[axis] += step[axis];
-                if (cell[axis] < 0 || cell[axis] >= resolution_)
+            if (crossing_[axis] <= boundary) {
+                cell_[axis] += step_[axis];
+                if (cell_[axis] < 0 || cell_[axis] >= grid_.resolution_)
                     throw NumericError(NumericStatus::InvalidMajorant,
                                        "density majorant DDA left its domain early");
-                next[axis] = boundaryTime(axis, cell[axis], step[axis]);
-                if (next[axis] <= age) next[axis] = std::nextafter(age,
+                crossing_[axis] = boundaryTime(axis, cell_[axis], step_[axis]);
+                if (crossing_[axis] <= age_) crossing_[axis] = std::nextafter(age_,
                                                     std::numeric_limits<double>::infinity());
             }
         }
-    }
+        return segment;
+}
+
+std::vector<DensityMajorantSegment> DensityMajorantGrid::segments(
+    const Ray& ray, double begin, double end) const {
+    std::vector<DensityMajorantSegment> result;
+    Cursor cursor(*this, ray, begin, end);
+    while (const auto segment = cursor.next()) result.push_back(*segment);
     return result;
 }
 

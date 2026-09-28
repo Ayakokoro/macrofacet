@@ -19,6 +19,8 @@ public:
 
     FlightState startExternal(const Point3& entry, const Vector3& direction) const;
     ClassicFlightKernel beginFlight(const FlightState& state) const;
+    ClassicMajorantCursor sampleRay(const ClassicFlightKernel& flight,
+                                    double maximumAge = -1.0) const;
     FlightSample sample(const ClassicFlightKernel& flight, Random& rng,
                         const NumericPolicy& numeric,
                         DdaTrackingDiagnostics* diagnostics = nullptr,

@@ -3,6 +3,7 @@
 #include "macrofacet/core/Random.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/transport/ClassicNullTracking.h"
+#include <atomic>
 #include <vector>
 
 namespace mf {
@@ -50,7 +51,10 @@ Spectrum traceCameraPath(const Ray& initialRay,
 Spectrum traceCameraPath(const Ray& initialRay,
                          const ExperimentConfig& config, const NarrowBandMedium& medium,
                          Random& rng, RenderStatistics& statistics);
-RenderedImage renderAnalyticScene(const ExperimentConfig& config);
+// When supplied, increment completedCameraRays after each finished pixel sample.
+// Multiple renders may share the counter to report their combined progress.
+RenderedImage renderAnalyticScene(const ExperimentConfig& config,
+    std::atomic<std::uint64_t>* completedCameraRays = nullptr);
 void writePfm(const std::filesystem::path& path, const RenderedImage& image);
 void writeBmpPreview(const std::filesystem::path& path, const RenderedImage& image);
 

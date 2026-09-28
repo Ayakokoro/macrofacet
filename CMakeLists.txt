@@ -28,6 +28,7 @@ add_library(macrofacet
     src/transport/ClassicFlightKernel.cpp
     src/transport/ClassicNullTracking.cpp
     src/transport/ConditionalFlightKernel.cpp
+    src/transport/ConditionalMedium.cpp
     src/transport/ConditionalNullTracking.cpp
     src/transport/DensityMajorantGrid.cpp
     src/transport/NarrowBandMedium.cpp

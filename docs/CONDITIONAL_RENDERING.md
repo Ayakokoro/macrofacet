@@ -227,6 +227,10 @@ flight 中，`h≈5.58e-8`，`M_far≈1.84e16`，真实消光峰值也约为 `1.
 此外，深负尾中的 `phi(z)/Phi(z)` 使用连分式计算，避免两个量级为 `-z*z/2`
 的对数相减时丢掉 Mills 比率。原来的直接相减在很小条件方差下也会损失有效位。
 
+碰撞梯度的负通量采样也在同一次大图复验中暴露了窄分布的反演问题。
+现在负均值时直接在标准化变量中反演 CDF；非负均值时用 Rayleigh 或
+Gamma(2) 包络做精确拒绝采样。两种方法都保留原来的负通量分布。
+
 ### 开销和输出
 
 `M_far` 覆盖整个剩余 flight，场变化大或发生掠射时仍可能产生较多空碰撞。
@@ -307,3 +311,13 @@ classic_global 白环境有 3 条、方向环境有 1 条路径触及现有的 6
 - [旧平面记录](../outputs/two_segment_before_plane/)和[旧 shader ball 记录](../outputs/two_segment_before_ball/)
 
 输出目录是本地实验产物；重新生成可使用上面的命令。
+
+### 256×256 复验
+
+对 `configs/render_shader_ball_nanovdb.json` 当前内容生成仅将
+`field.use_alpha_grid` 改为 `false` 的测试副本，固定种子 `17429`，运行
+`global_conditional`、`256×256`、`8 spp`。白环境 20.88 秒、方向环境
+21.03 秒；两者各有 524288 条相机路径，`numerical_failures=0`。
+记录位于 [conditional_precision_validation](../outputs/conditional_precision_validation/)。
+这个时间是单次运行，不是性能基准。当前原始配置的 `use_alpha_grid=true`，
+不满足 global conditional 模式的输入约束；复验没有修改该配置文件。

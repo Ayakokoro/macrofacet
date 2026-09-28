@@ -2,24 +2,19 @@
 
 #include "macrofacet/transport/ClassicFlightKernel.h"
 #include "macrofacet/transport/DensityMajorantGrid.h"
-#include "macrofacet/core/Random.h"
-#include <cstdint>
+#include "macrofacet/transport/SegmentedDeltaTracking.h"
 
 namespace mf {
 
-struct FlightSample {
-    bool collided = false;
-    double age = 0.0;
-};
-
-struct DdaTrackingDiagnostics {
-    std::uint64_t candidates = 0;
-    std::uint64_t nullCollisions = 0;
-    std::uint64_t boundIntervals = 0;
-    std::uint64_t nearCandidates = 0;
-    std::uint64_t farCandidates = 0;
-    std::uint64_t roundedCandidateSteps = 0;
-    std::uint64_t adaptiveMajorantFlights = 0;
+class ClassicMajorantCursor {
+public:
+    ClassicMajorantCursor(const ClassicFlightKernel& kernel,
+                         const DensityMajorantGrid& grid, double areaMajorant,
+                         double maximumAge);
+    std::optional<ExtinctionSegment> next();
+private:
+    DensityMajorantGrid::Cursor cells_;
+    double areaMajorant_;
 };
 
 FlightSample sampleClassicDdaTracking(const ClassicFlightKernel& kernel,

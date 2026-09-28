@@ -3,6 +3,7 @@
 #include "macrofacet/transport/NarrowBandMedium.h"
 #include "macrofacet/transport/ConditionalFlightKernel.h"
 #include "macrofacet/transport/ConditionalNullTracking.h"
+#include "macrofacet/transport/ConditionalMedium.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -51,6 +52,7 @@ void runTransmittanceCurves(const ExperimentConfig& config, int rayCount, int bi
         config.densityMajorantGrid,
         config.material.gpModel == GpModel::GlobalPointwise
             ? config.preparedAreaMajorant : std::nullopt);
+    const ConditionalMedium conditionalMedium(config.field);
     const int nx = static_cast<int>(std::ceil(std::sqrt(rayCount)));
     const int ny = (rayCount + nx - 1) / nx;
     for (int i = 0; i < rayCount; ++i) {
@@ -67,10 +69,9 @@ void runTransmittanceCurves(const ExperimentConfig& config, int rayCount, int bi
                        (static_cast<std::uint64_t>(i) + 1) + mode * 0x100000001b3ULL);
             FlightSample sample;
             if (mode == 2) {
-                const FlightState state = startConditionalExterior(config.field, entry,
-                                                                    direction, rng);
-                const ConditionalFlightKernel kernel(config.field, state);
-                sample = sampleConditionalDeltaTracking(kernel, rng);
+                const FlightState state = conditionalMedium.startExternal(entry,direction,rng);
+                const ConditionalFlightKernel kernel = conditionalMedium.beginFlight(state);
+                sample = conditionalMedium.sample(kernel,rng);
             } else {
                 const NarrowBandMedium& medium = mode == 0 ? localMedium : globalMedium;
                 const ClassicFlightKernel kernel = medium.beginFlight(

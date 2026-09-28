@@ -20,6 +20,14 @@ struct ConditionalMajorants {
     std::vector<ConditionalMajorantInterval> farIntervals;
 };
 
+struct ConditionalBirthMajorant {
+    double split = 0.0;
+    double maximum = 0.0;
+    double smoothEnd = 0.0;
+    double slope = 0.0;
+    double curvature = 0.0;
+};
+
 struct ConditionalScalarStatistics {
     double meanF, varianceF, meanK, meanAtZero, varianceAtZero;
 };
@@ -32,6 +40,9 @@ public:
     HazardEvaluation evaluate(double age) const override;
     HitStatistics hitStatistics(double age) const override;
     ConditionalScalarStatistics scalarStatistics(double age) const;
+    ConditionalBirthMajorant birthMajorant(double end) const;
+    double birthAdjacentMajorant(double begin, double end,
+                                const ConditionalBirthMajorant& birth) const;
     ConditionalMajorants twoSegmentMajorants(double end) const;
     double intervalMajorant(double begin, double end) const;
 private:

@@ -87,6 +87,15 @@ void testDdaBoundaryExit(TestContext& context) {
         context.require(interval.hit && interval.exit > interval.entry,
                         "oblique DDA ray crosses the domain");
         const auto segments = grid.segments(ray, interval.entry, interval.exit);
+        auto cursor = grid.sampleRay(ray, interval.entry, interval.exit);
+        for (const auto& expected : segments) {
+            const auto actual=cursor.next();
+            context.require(actual && actual->begin==expected.begin &&
+                actual->end==expected.end &&
+                actual->densityMaximum==expected.densityMaximum,
+                "lazy density DDA reproduces the compatibility segment sequence");
+        }
+        context.require(!cursor.next(),"lazy density DDA ends after its final cell");
         context.require(!segments.empty() && segments.front().begin == interval.entry &&
                         segments.back().end == interval.exit,
                         "DDA covers the ray exactly through the outer domain face");

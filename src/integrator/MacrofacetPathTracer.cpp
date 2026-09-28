@@ -3,6 +3,7 @@
 #include "macrofacet/transport/FlightKernel.h"
 #include "macrofacet/transport/ConditionalFlightKernel.h"
 #include "macrofacet/transport/ConditionalNullTracking.h"
+#include "macrofacet/transport/ConditionalMedium.h"
 #include "macrofacet/transport/CollisionGradientSampler.h"
 #include "macrofacet/transport/NarrowBandMedium.h"
 #include <algorithm>
@@ -52,8 +53,9 @@ Spectrum traceCameraPath(const Ray& initialRay,
     }
     const Point3 entry = initialRay.origin + firstInterval.entry * initialDirection;
     const bool conditional = config.transportMode == "global_conditional";
+    const ConditionalMedium conditionalMedium(config.field);
     FlightState state = conditional
-        ? startConditionalExterior(config.field, entry, initialDirection, rng)
+        ? conditionalMedium.startExternal(entry, initialDirection, rng)
         : medium.startExternal(entry, initialDirection);
     Spectrum throughput = Spectrum::Ones();
     int depth = 0;
@@ -62,8 +64,8 @@ Spectrum traceCameraPath(const Ray& initialRay,
             FlightSample flight;
             Vector3 collisionGradient = Vector3::Zero();
             if (conditional) {
-                const ConditionalFlightKernel kernel(config.field, state);
-                flight = sampleConditionalDeltaTracking(kernel, rng, &statistics.tracking);
+                const ConditionalFlightKernel kernel = conditionalMedium.beginFlight(state);
+                flight = conditionalMedium.sample(kernel, rng, &statistics.tracking);
                 if (flight.collided)
                     collisionGradient = sampleCollisionGradient(kernel, flight.age,
                                                                  rng, config.numeric);
@@ -117,7 +119,8 @@ Spectrum traceCameraPath(const Ray& initialRay,
     return Spectrum::Zero();
 }
 
-RenderedImage renderAnalyticScene(const ExperimentConfig& config) {
+RenderedImage renderAnalyticScene(const ExperimentConfig& config,
+                                 std::atomic<std::uint64_t>* completedCameraRays) {
     // Prepare the local extinction bound before tracing any paths. All worker
     // threads share this immutable medium and its baked DDA majorant.
     const NarrowBandMedium medium(config.field, config.material, config.mediumDensity,
@@ -153,6 +156,8 @@ RenderedImage renderAnalyticScene(const ExperimentConfig& config) {
                 ++statistics.paths;
                 sum += traceCameraPath({config.render.cameraPosition, direction},
                                        config, medium, rng, statistics);
+                if (completedCameraRays)
+                    completedCameraRays->fetch_add(1, std::memory_order_relaxed);
             }
             result.pixels[static_cast<std::size_t>(y * result.width + x)] =
                 sum / config.render.samplesPerPixel;

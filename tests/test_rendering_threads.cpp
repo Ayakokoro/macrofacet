@@ -66,11 +66,19 @@ void testRenderingThreads(TestContext& context) {
     config.render.environment = "directional_gradient";
     {
         config.render.threadCount = 1;
-        const RenderedImage serial = renderAnalyticScene(config);
+        std::atomic<std::uint64_t> completedRays{0};
+        const RenderedImage serial = renderAnalyticScene(config, &completedRays);
+        context.require(completedRays.load()==static_cast<std::uint64_t>(
+            config.render.width*config.render.height*config.render.samplesPerPixel),
+            "single-thread render reports each completed camera ray");
         context.require(alpha->boundsCalls == 1,
                         "serial render bakes the alpha area bound once for all paths");
         config.render.threadCount = 3;
-        const RenderedImage parallel = renderAnalyticScene(config);
+        completedRays.store(0);
+        const RenderedImage parallel = renderAnalyticScene(config, &completedRays);
+        context.require(completedRays.load()==static_cast<std::uint64_t>(
+            config.render.width*config.render.height*config.render.samplesPerPixel),
+            "parallel render reports each completed camera ray");
         context.require(alpha->boundsCalls == 2,
                         "parallel render shares one baked area bound across workers");
         context.require(serial.pixels.size() == parallel.pixels.size(),

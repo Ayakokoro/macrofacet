@@ -218,10 +218,10 @@ double ConditionalFlightKernel::intervalMajorant(double lo, double hi) const {
     return momentIntervalMajorant(fmin,fmax,kmin,sigma2_,a,lo,hi);
 }
 
-ConditionalMajorants ConditionalFlightKernel::twoSegmentMajorants(double end) const {
+ConditionalBirthMajorant ConditionalFlightKernel::birthMajorant(double end) const {
     if (!(end>=currentAge() && end<=maximumAgeInDomain()))
         throw NumericError(NumericStatus::InvalidInput,"invalid conditional majorant limit");
-    ConditionalMajorants result;
+    ConditionalBirthMajorant result;
     if (end==0.0) return result;
     const double a=inverseLength2_, ell=1.0/std::sqrt(a), f0=state_.birthValue;
     // The first Taylor interval must lie inside one smooth interpolation cell.
@@ -236,6 +236,9 @@ ConditionalMajorants ConditionalFlightKernel::twoSegmentMajorants(double end) co
     if (f0==0.0 && !(k>0.0))
         throw NumericError(NumericStatus::UnsupportedSingularFlight,"surface birth must enter the positive side");
     const double curvature=birth.maximumSecondDerivative;
+    result.smoothEnd=smoothEnd;
+    result.slope=k;
+    result.curvature=curvature;
     const auto remainder=[&](double h) {
         return upward(0.5*(curvature+a*(std::abs(deltaValue_)+h*std::abs(deltaSlope_))));
     };
@@ -260,25 +263,47 @@ ConditionalMajorants ConditionalFlightKernel::twoSegmentMajorants(double end) co
     const double common=kabs+2.0*(std::abs(k)+error*h)+smax*kInvSqrtTwoPi;
     if (f0==0.0) {
         const double b=(k-error*h)/boundGuard;
-        result.nearMaximum=envelopeMaximum(std::log(std::sqrt(2.0/kPi)*common/std::sqrt(vmin)),
+        result.maximum=envelopeMaximum(std::log(std::sqrt(2.0/kPi)*common/std::sqrt(vmin)),
                                            b*b/(2.0*vmax),2.0,2.0,h);
     } else {
         const double b=(f0-std::abs(k)*h-error*h*h)/boundGuard;
         const double fluxCoefficient=2.0*f0+h*common;
-        result.nearMaximum=envelopeMaximum(std::log(std::sqrt(2.0/kPi)*fluxCoefficient/std::sqrt(vmin)),
+        result.maximum=envelopeMaximum(std::log(std::sqrt(2.0/kPi)*fluxCoefficient/std::sqrt(vmin)),
                                            b*b/(2.0*vmax),3.0,4.0,h);
     }
+    return result;
+}
+
+double ConditionalFlightKernel::birthAdjacentMajorant(
+    double lo, double hi, const ConditionalBirthMajorant& birth) const {
+    if (!(lo>0.0 && hi>lo && hi<=birth.smoothEnd))
+        throw NumericError(NumericStatus::InvalidInput, "invalid birth-adjacent interval");
+    const double a=inverseLength2_;
+    const double rem=upward(0.5*(birth.curvature+a*(std::abs(deltaValue_)+
+                                                     hi*std::abs(deltaSlope_))));
+    const double slopeRem=upward(birth.curvature+a*std::abs(deltaValue_)+
+                                 1.5*a*hi*std::abs(deltaSlope_));
+    return momentIntervalMajorant(
+        quadraticRange(state_.birthValue,birth.slope,-rem,lo,hi).first,
+        quadraticRange(state_.birthValue,birth.slope, rem,lo,hi).second,
+        birth.slope-slopeRem*hi,sigma2_,a,lo,hi);
+}
+
+ConditionalMajorants ConditionalFlightKernel::twoSegmentMajorants(double end) const {
+    const ConditionalBirthMajorant birth=birthMajorant(end);
+    ConditionalMajorants result;
+    result.split=birth.split;
+    result.nearMaximum=birth.maximum;
+    if (end==0.0) return result;
+    const double a=inverseLength2_, ell=1.0/std::sqrt(a), h=birth.split;
 
     // Bound the entire far segment. Internal intervals only tighten the proof:
     // their maximum is the default far Poisson rate. Retain the intervals for
     // exact thinning when this constant would cause excessive null events.
     const auto intervalMaximum=[&](double lo, double hi) {
         ++result.boundIntervals;
-        if (hi>smoothEnd) return intervalMajorant(lo,hi);
-        const double rem=remainder(hi);
-        return momentIntervalMajorant(quadraticRange(f0,k,-rem,lo,hi).first,
-            quadraticRange(f0,k,rem,lo,hi).second,k-slopeRemainder(hi)*hi,
-            sigma2_,a,lo,hi);
+        if (hi>birth.smoothEnd) return intervalMajorant(lo,hi);
+        return birthAdjacentMajorant(lo,hi,birth);
     };
     for (double lo=h; lo<end;) {
         double hi=std::min(end,lo+std::min(0.5*lo,0.5*ell));
