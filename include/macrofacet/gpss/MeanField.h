@@ -18,6 +18,15 @@ struct BoundsSummary {
     bool certified = false;
 };
 
+struct MeanRayBounds {
+    double minimumValue = 0.0, maximumValue = 0.0;
+    double minimumDerivative = 0.0, maximumDerivative = 0.0;
+    // Finite only on a smooth interval; used for the birth Taylor remainder.
+    double maximumSecondDerivative = std::numeric_limits<double>::infinity();
+    double beginDerivative = 0.0;
+    bool certified = false;
+};
+
 class MeanField {
 public:
     virtual ~MeanField() = default;
@@ -42,6 +51,8 @@ public:
         return evaluate(x + displacement).value - evaluate(x).value;
     }
     virtual BoundsSummary bounds(const Bounds3& domain) const = 0;
+    virtual MeanRayBounds rayBounds(const Point3& origin, const Vector3& direction,
+                                    double begin, double end) const;
     // If the mean is affine, returns its constant gradient. Otherwise returns
     virtual std::optional<Vector3> affineGradient() const { return std::nullopt; }
     // Nonzero for a sampled grid. The integrator partitions at interpolation
@@ -72,6 +83,8 @@ public:
     MeanJet evaluate(const Point3& x) const override;
     double valueDifference(const Point3& x, const Vector3& displacement) const override;
     BoundsSummary bounds(const Bounds3& domain) const override;
+    MeanRayBounds rayBounds(const Point3& origin, const Vector3& direction,
+                            double begin, double end) const override;
 private:
     Point3 center_;
     double radius_;

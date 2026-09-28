@@ -39,11 +39,13 @@ double normalSurvival(double z) { return normalCdf(-z); }
 double normalLogSurvival(double z) { return normalLogCdf(-z); }
 
 double normalPdfOverCdf(double z) {
-    if (z > -10.0) return std::exp(normalLogPdf(z) - normalLogCdf(z));
+    if (z > -8.0) return std::exp(normalLogPdf(z) - normalLogCdf(z));
     const double x = -z;
-    const double inverse = 1.0 / x;
-    const double inverse2 = inverse * inverse;
-    return x + inverse * (1.0 - 2.0 * inverse2 + 10.0 * inverse2 * inverse2);
+    // Laplace's continued fraction for the inverse Mills ratio. This avoids
+    // subtracting two log probabilities of size x^2/2 in the far negative tail.
+    double tail=0.0;
+    for (int n=64; n>=1; --n) tail=static_cast<double>(n)/(x+tail);
+    return x+tail;
 }
 
 double normalQuantile(double u) {

@@ -50,6 +50,8 @@ struct ExperimentConfig {
     std::filesystem::path outputDirectory = "outputs/macrofacet_experiments";
     double beckmannMixtureWeight = 0.5;
     std::string classicPhaseProposal = "uniform";
+    // classic obeys material.gp_model; comparison modes select it explicitly.
+    std::string transportMode = "classic";
 };
 
 ExperimentConfig loadExperimentConfig(const std::filesystem::path& path);

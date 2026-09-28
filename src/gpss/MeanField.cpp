@@ -6,6 +6,35 @@
 
 namespace mf {
 
+MeanRayBounds MeanField::rayBounds(const Point3& origin, const Vector3& w,
+                                    double begin, double end) const {
+    const Point3 first = origin + begin * w, last = origin + end * w;
+    const Vector3 pad = Vector3::Constant(1e-12 * (1.0 + first.norm() + last.norm()));
+    const BoundsSummary b = bounds({first.cwiseMin(last) - pad, first.cwiseMax(last) + pad});
+    MeanRayBounds result;
+    if (!b.certified) return result;
+    const double middle = evaluate(origin + 0.5 * (begin + end) * w).value;
+    const double speed = w.norm();
+    const double delta = b.maximumGradientNorm * speed * (end - begin) * 0.5;
+    result.minimumValue = std::max(b.minimumValue, middle - delta);
+    result.maximumValue = middle + delta;
+    result.minimumDerivative = -b.maximumGradientNorm * speed;
+    result.maximumDerivative = b.maximumGradientNorm * speed;
+    result.beginDerivative = evaluate(first).gradient.dot(w);
+    if (const auto gradient = affineGradient()) {
+        result.minimumDerivative = result.maximumDerivative = gradient->dot(w);
+        result.maximumSecondDerivative = 0.0;
+    }
+    const double error = 128.0 * std::numeric_limits<double>::epsilon() *
+        (1.0 + std::abs(middle) + delta + b.maximumGradientNorm * speed);
+    result.minimumValue -= error;
+    result.maximumValue += error;
+    result.minimumDerivative -= error;
+    result.maximumDerivative += error;
+    result.certified = true;
+    return result;
+}
+
 PlaneMean::PlaneMean(Vector3 normal, double offset)
     : normal_(normalizedOrThrow(normal)), offset_(offset) {
     if (!std::isfinite(offset)) throw std::invalid_argument("plane offset must be finite");
@@ -48,6 +77,18 @@ double SphereMean::valueDifference(const Point3& x, const Vector3& displacement)
     const double denominator = radial.norm() + (radial + displacement).norm();
     if (denominator == 0.0) return 0.0;
     return (2.0 * radial.dot(displacement) + displacement.squaredNorm()) / denominator;
+}
+
+MeanRayBounds SphereMean::rayBounds(const Point3& origin, const Vector3& w,
+                                    double begin, double end) const {
+    MeanRayBounds result = MeanField::rayBounds(origin, w, begin, end);
+    const Vector3 radial = origin - center_;
+    const double closest = std::clamp(-radial.dot(w) / w.squaredNorm(), begin, end);
+    const double minimumRadius = (radial + closest * w).norm();
+    if (minimumRadius > 0.0)
+        result.maximumSecondDerivative = std::nextafter(w.squaredNorm() / minimumRadius,
+                                                        std::numeric_limits<double>::infinity());
+    return result;
 }
 CutawaySphereMean::CutawaySphereMean(Point3 center, double innerRadius, double outerRadius)
     : center_(std::move(center)), innerRadius_(innerRadius), outerRadius_(outerRadius) {

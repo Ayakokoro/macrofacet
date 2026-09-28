@@ -30,6 +30,11 @@ inline void mergeInto(RenderStatistics& destination, const RenderStatistics& sou
     destination.accumulatedPathDepth += source.accumulatedPathDepth;
     destination.tracking.candidates += source.tracking.candidates;
     destination.tracking.nullCollisions += source.tracking.nullCollisions;
+    destination.tracking.boundIntervals += source.tracking.boundIntervals;
+    destination.tracking.nearCandidates += source.tracking.nearCandidates;
+    destination.tracking.farCandidates += source.tracking.farCandidates;
+    destination.tracking.roundedCandidateSteps += source.tracking.roundedCandidateSteps;
+    destination.tracking.adaptiveMajorantFlights += source.tracking.adaptiveMajorantFlights;
 }
 
 struct RenderedImage {

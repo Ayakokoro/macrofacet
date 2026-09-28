@@ -15,6 +15,11 @@ struct FlightSample {
 struct DdaTrackingDiagnostics {
     std::uint64_t candidates = 0;
     std::uint64_t nullCollisions = 0;
+    std::uint64_t boundIntervals = 0;
+    std::uint64_t nearCandidates = 0;
+    std::uint64_t farCandidates = 0;
+    std::uint64_t roundedCandidateSteps = 0;
+    std::uint64_t adaptiveMajorantFlights = 0;
 };
 
 FlightSample sampleClassicDdaTracking(const ClassicFlightKernel& kernel,

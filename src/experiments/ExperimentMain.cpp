@@ -1,5 +1,6 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/experiments/RenderExperiment.h"
+#include "macrofacet/experiments/TransmittanceCurves.h"
 #if defined(MACROFACET_HAS_FIELDS)
 #include "macrofacet/fields/NanoVdbMean.h"
 #include "macrofacet/fields/PrepareNanoVdbField.h"
@@ -24,6 +25,9 @@ struct CommandLine {
     std::optional<int> width;
     std::optional<int> height;
     std::optional<int> threadCount;
+    std::optional<std::string> mode;
+    int rays = 1024;
+    int bins = 64;
     bool preserveSlope = false;
 };
 
@@ -58,7 +62,7 @@ CommandLine parseCommandLine(int argc, char** argv) {
     if (argc < 2) throw std::invalid_argument("missing command");
     CommandLine options;
     options.command = argv[1];
-    if (options.command != "render")
+    if (options.command != "render" && options.command != "curves")
         throw std::invalid_argument("unknown command: " + options.command);
     for (int i = 2; i < argc; ++i) {
         const std::string argument = argv[i];
@@ -82,6 +86,12 @@ CommandLine parseCommandLine(int argc, char** argv) {
             options.height = parsePositiveInteger(argument, value);
         } else if (argument == "--threads") {
             options.threadCount = parseNonnegativeInteger(argument, value);
+        } else if (argument == "--mode") {
+            options.mode = value;
+        } else if (argument == "--rays") {
+            options.rays = parsePositiveInteger(argument, value);
+        } else if (argument == "--bins") {
+            options.bins = parsePositiveInteger(argument, value);
         } else throw std::invalid_argument("unknown option: " + argument);
     }
     if (options.configPath.empty()) throw std::invalid_argument("missing --config <path>");
@@ -118,6 +128,11 @@ int main(int argc, char** argv) {
         if (options.width) config.render.width = *options.width;
         if (options.height) config.render.height = *options.height;
         if (options.threadCount) config.render.threadCount = *options.threadCount;
+        if (options.mode) config.transportMode = *options.mode;
+        if (config.transportMode != "classic" && config.transportMode != "classic_local" &&
+            config.transportMode != "classic_global" &&
+            config.transportMode != "global_conditional" && config.transportMode != "all")
+            throw std::invalid_argument("unknown transport mode: " + config.transportMode);
 #if defined(MACROFACET_HAS_FIELDS)
         mf::prepareNanoVdbField(config);
 #else
@@ -125,7 +140,8 @@ int main(int argc, char** argv) {
 #endif
         std::filesystem::create_directories(config.outputDirectory);
         mf::writeResolvedConfig(config, config.outputDirectory / "resolved_config.json");
-        mf::runRenderExperiments(config);
+        if (command == "render") mf::runRenderExperiments(config);
+        else mf::runTransmittanceCurves(config, options.rays, options.bins);
         std::ofstream summary(config.outputDirectory / "run_summary.json");
         summary << "{\n  \"success\": true,\n  \"command\": \"" << command
                 << "\",\n  \"seed\": " << config.seed

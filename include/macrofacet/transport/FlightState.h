@@ -7,6 +7,8 @@ struct FlightState {
     Point3 birthPosition = Point3::Zero();
     Vector3 direction = Vector3::UnitZ();
     double age = 0.0;
+    double birthValue = 0.0;
+    Vector3 birthGradient = Vector3::Zero();
 };
 
 FlightState startExternalFlight(const Point3& x, const Vector3& w);

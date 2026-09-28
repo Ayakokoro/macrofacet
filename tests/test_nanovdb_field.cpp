@@ -14,6 +14,7 @@
 #include "macrofacet/macrofacet/GaussianNdf.h"
 #include "macrofacet/transport/FlightKernel.h"
 #include "macrofacet/transport/NarrowBandMedium.h"
+#include "macrofacet/transport/ConditionalFlightKernel.h"
 
 #include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
@@ -1187,6 +1188,40 @@ void testNarrowBandTransport(TestContext& context) {
     }
 }
 
+void testConditionalRayBounds(TestContext& context) {
+    using namespace mf;
+    const GPSSField field=bakedRenderField(sphereField());
+    const Vector3 w=normalizedOrThrow(Vector3(0.31,0.12,1.0));
+    const Point3 origin(0.021,0.032,-1.03);
+    const auto b=field.mean->rayBounds(origin,w,0.0,0.7);
+    context.require(b.certified,"NanoVDB certifies bounds across interpolation cells");
+    for (int i=0; i<=200; ++i) {
+        const auto jet=field.mean->evaluate(origin+(0.7*i/200.0)*w);
+        context.require(jet.value>=b.minimumValue && jet.value<=b.maximumValue,
+                        "ray value interval covers NanoVDB samples");
+        context.require(jet.gradient.dot(w)>=b.minimumDerivative &&
+                        jet.gradient.dot(w)<=b.maximumDerivative,
+                        "ray derivative interval covers NanoVDB samples");
+    }
+    FlightState state=startExternalFlight(origin,w);
+    state.birthValue=0.07;
+    state.birthGradient=field.mean->evaluate(origin).gradient;
+    for (int type=0; type<2; ++type) {
+        if (type==1) {
+            state.birthValue=0.0;
+            state.birthGradient=-state.birthGradient;
+        }
+        const ConditionalFlightKernel kernel(field,state);
+        const auto bounds=kernel.twoSegmentMajorants(0.7);
+        for (int i=0; i<=500; ++i) {
+            const double t=0.7*std::pow(10.0,-10.0+10.0*i/500.0);
+            context.require(kernel.evaluate(t).hazard.value<=
+                (t<bounds.split ? bounds.nearMaximum : bounds.farMaximum),
+                "two-segment bound covers NanoVDB conditional hazard across cells");
+        }
+    }
+}
+
 } // namespace
 
 void testNanoVdbField(TestContext& context) {
@@ -1208,4 +1243,5 @@ void testNanoVdbField(TestContext& context) {
     testAnalyticFullDomainBake(context);
     testMeshFullDomainBake(context);
     testNarrowBandTransport(context);
+    testConditionalRayBounds(context);
 }

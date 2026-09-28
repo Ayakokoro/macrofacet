@@ -25,6 +25,7 @@
 // bias of dx/2 * |grad| everywhere else.
 
 #include "macrofacet/core/Types.h"
+#include "macrofacet/gpss/MeanField.h"
 #include "fields/TrilinearBounds.h"
 
 #include <nanovdb/GridHandle.h>
@@ -152,6 +153,95 @@ public:
     }
 
     // Trilinear value at a world point; the background outside the grid.
+    MeanRayBounds rayCellBounds(const Point3& origin, const Vector3& direction,
+                                 double begin, double end) const {
+        const auto middle = continuousIndex(origin + (0.5 * begin + 0.5 * end) * direction);
+        int base[3];
+        double low[3], high[3], first[3];
+        const auto start = continuousIndex(origin + begin * direction);
+        const auto stop = continuousIndex(origin + end * direction);
+        double coordinateScale = 1.0;
+        for (int axis = 0; axis < 3; ++axis) {
+            base[axis] = static_cast<int>(std::floor(middle[axis]));
+            first[axis] = start[axis] - base[axis];
+            low[axis] = std::clamp(std::min(start[axis], stop[axis]) - base[axis], 0.0, 1.0);
+            high[axis] = std::clamp(std::max(start[axis], stop[axis]) - base[axis], 0.0, 1.0);
+            coordinateScale = std::max(coordinateScale,
+                (std::abs(origin[axis]) + std::abs(origin_[axis]) +
+                 std::abs(end * direction[axis])) / dx_);
+        }
+        auto accessor = grid_->getAccessor();
+        double c[2][2][2], magnitude = 0.0;
+        for (int k = 0; k < 2; ++k) for (int j = 0; j < 2; ++j) for (int i = 0; i < 2; ++i) {
+            c[i][j][k] = accessor.getValue(nanovdb::Coord(base[0]+i, base[1]+j, base[2]+k));
+            magnitude = std::max(magnitude, std::abs(c[i][j][k]));
+        }
+        const auto jet = [&](const double* f) {
+            MeanJet out;
+            for (int k = 0; k < 2; ++k) for (int j = 0; j < 2; ++j) for (int i = 0; i < 2; ++i) {
+                const double x = i ? f[0] : 1-f[0], y = j ? f[1] : 1-f[1], z = k ? f[2] : 1-f[2];
+                const double value = c[i][j][k];
+                out.value += x*y*z*value;
+                out.gradient += value / dx_ * Vector3((i ? 1.0 : -1.0)*y*z,
+                    x*(j ? 1.0 : -1.0)*z, x*y*(k ? 1.0 : -1.0));
+            }
+            return out;
+        };
+        MeanRayBounds result;
+        result.minimumValue = result.minimumDerivative = std::numeric_limits<double>::infinity();
+        result.maximumValue = result.maximumDerivative = -std::numeric_limits<double>::infinity();
+        // Value and directional derivative are multi-affine on this box.
+        for (int k = 0; k < 2; ++k) for (int j = 0; j < 2; ++j) for (int i = 0; i < 2; ++i) {
+            const double f[3]{i ? high[0] : low[0], j ? high[1] : low[1], k ? high[2] : low[2]};
+            const MeanJet value = jet(f);
+            result.minimumValue = std::min(result.minimumValue, value.value);
+            result.maximumValue = std::max(result.maximumValue, value.value);
+            result.minimumDerivative = std::min(result.minimumDerivative, value.gradient.dot(direction));
+            result.maximumDerivative = std::max(result.maximumDerivative, value.gradient.dot(direction));
+        }
+        double xy=0.0, xz=0.0, yz=0.0;
+        for (int i=0; i<2; ++i) {
+            xy = std::max(xy, std::abs(c[1][1][i]-c[1][0][i]-c[0][1][i]+c[0][0][i]));
+            xz = std::max(xz, std::abs(c[1][i][1]-c[1][i][0]-c[0][i][1]+c[0][i][0]));
+            yz = std::max(yz, std::abs(c[i][1][1]-c[i][1][0]-c[i][0][1]+c[i][0][0]));
+        }
+        result.maximumSecondDerivative = 2.0 / (dx_*dx_) *
+            (std::abs(direction.x()*direction.y())*xy +
+             std::abs(direction.x()*direction.z())*xz + std::abs(direction.y()*direction.z())*yz);
+        result.beginDerivative = jet(first).gradient.dot(direction);
+        const double error = 256.0 * std::numeric_limits<double>::epsilon() *
+            (1.0 + coordinateScale) * std::max(magnitude, 1e-30);
+        result.minimumValue -= error;
+        result.maximumValue += error;
+        result.minimumDerivative -= error * direction.lpNorm<1>() / dx_;
+        result.maximumDerivative += error * direction.lpNorm<1>() / dx_;
+        result.maximumSecondDerivative += error * direction.squaredNorm() / (dx_*dx_);
+        result.certified = true;
+        return result;
+    }
+
+    double valueDifference(const Point3& x, const Vector3& displacement) const {
+        const auto u = continuousIndex(x);
+        int base[3];
+        double f[3], df[3];
+        for (int a=0; a<3; ++a) {
+            base[a] = static_cast<int>(std::floor(u[a]));
+            f[a] = u[a]-base[a];
+            df[a] = displacement[a]/dx_;
+            if (f[a]+df[a] < 0.0 || f[a]+df[a] > 1.0)
+                return sample(x+displacement)-sample(x);
+        }
+        auto accessor = grid_->getAccessor();
+        double difference=0.0;
+        for (int k=0; k<2; ++k) for (int j=0; j<2; ++j) for (int i=0; i<2; ++i) {
+            const double x0=i?f[0]:1-f[0], y0=j?f[1]:1-f[1], z0=k?f[2]:1-f[2];
+            const double xd=(i?1:-1)*df[0], yd=(j?1:-1)*df[1], zd=(k?1:-1)*df[2];
+            difference += (xd*y0*z0+(x0+xd)*yd*z0+(x0+xd)*(y0+yd)*zd) *
+                accessor.getValue(nanovdb::Coord(base[0]+i,base[1]+j,base[2]+k));
+        }
+        return difference;
+    }
+
     double sample(const Point3& x) const {
         const nanovdb::Vec3d u = continuousIndex(x);
         const nanovdb::Coord base(static_cast<int>(std::floor(u[0])),

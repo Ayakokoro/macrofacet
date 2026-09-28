@@ -83,6 +83,35 @@ BoundsSummary NanoVdbMean::bounds(const Bounds3& domain) const {
     return summary;
 }
 
+double NanoVdbMean::valueDifference(const Point3& x, const Vector3& displacement) const {
+    return impl_->view.valueDifference(x, displacement);
+}
+
+MeanRayBounds NanoVdbMean::rayBounds(const Point3& origin, const Vector3& direction,
+                                     double begin, double end) const {
+    std::vector<double> knots{begin};
+    appendRayBreakpoints(origin, direction, begin, end, knots);
+    knots.push_back(end);
+    std::sort(knots.begin(), knots.end());
+    knots.erase(std::unique(knots.begin(), knots.end()), knots.end());
+    MeanRayBounds result;
+    result.minimumValue = result.minimumDerivative = std::numeric_limits<double>::infinity();
+    result.maximumValue = result.maximumDerivative = -std::numeric_limits<double>::infinity();
+    for (std::size_t i = 1; i < knots.size(); ++i) {
+        const MeanRayBounds piece = impl_->view.rayCellBounds(origin, direction, knots[i-1], knots[i]);
+        result.minimumValue = std::min(result.minimumValue, piece.minimumValue);
+        result.maximumValue = std::max(result.maximumValue, piece.maximumValue);
+        result.minimumDerivative = std::min(result.minimumDerivative, piece.minimumDerivative);
+        result.maximumDerivative = std::max(result.maximumDerivative, piece.maximumDerivative);
+        if (i == 1) {
+            result.beginDerivative = piece.beginDerivative;
+            if (knots.size() == 2) result.maximumSecondDerivative = piece.maximumSecondDerivative;
+        }
+    }
+    result.certified = knots.size() >= 2;
+    return result;
+}
+
 double NanoVdbMean::voxelSizeHint() const { return impl_->view.voxelSize(); }
 
 void NanoVdbMean::appendRayBreakpoints(const Point3& origin, const Vector3& direction,

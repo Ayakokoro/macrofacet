@@ -145,6 +145,23 @@ void testSampling(TestContext& context) {
                             negativePartMean(mean, stddev).value;
     context.near(sampledMean, expected, 0.025, "negative-flux sample mean");
 
+    for (double sigma : {1e-12,1e-20}) {
+        Random concentratedRng(773);
+        double gammaMean=0.0, centeredMean=0.0;
+        for (int i=0; i<2000; ++i) {
+            const double negative=sampleNegativeFluxNormal(-1.0,sigma,concentratedRng);
+            context.require(negative<0.0 && std::isfinite(negative),
+                            "concentrated negative flux does not lose its standardized CDF");
+            centeredMean+=(negative+1.0)/sigma;
+            const double positive=sampleNegativeFluxNormal(1.0,sigma,concentratedRng);
+            context.require(positive<0.0 && std::isfinite(positive),
+                            "far positive-tail flux sampler stays on negative support");
+            gammaMean+=-positive/(sigma*sigma);
+        }
+        context.near(centeredMean/2000.0,0.0,0.12,"narrow negative flux retains its Gaussian limit");
+        context.near(gammaMean/2000.0,2.0,0.15,"positive-tail flux retains its Gamma(2) scaling limit");
+    }
+
     Gaussian<3> gradient;
     gradient.mean = Vector3(0.1, -0.2, 1.0);
     gradient.covariance = (Vector3(0.3, 0.6, 0.4)).asDiagonal();

@@ -14,7 +14,12 @@ bool sameStatistics(const mf::RenderStatistics& a, const mf::RenderStatistics& b
            a.numericalFailures == b.numericalFailures &&
            a.accumulatedPathDepth == b.accumulatedPathDepth &&
            a.tracking.candidates == b.tracking.candidates &&
-           a.tracking.nullCollisions == b.tracking.nullCollisions;
+           a.tracking.nullCollisions == b.tracking.nullCollisions &&
+           a.tracking.boundIntervals == b.tracking.boundIntervals &&
+           a.tracking.nearCandidates == b.tracking.nearCandidates &&
+           a.tracking.farCandidates == b.tracking.farCandidates &&
+           a.tracking.roundedCandidateSteps == b.tracking.roundedCandidateSteps &&
+           a.tracking.adaptiveMajorantFlights == b.tracking.adaptiveMajorantFlights;
 }
 
 class ThrowingMean final : public mf::MeanField {
@@ -83,6 +88,23 @@ void testRenderingThreads(TestContext& context) {
                         "a prepared render reuses the baked alpha bound without scanning the field");
         config.preparedAreaMajorant.reset();
     }
+
+    config.material.alphaField.reset();
+    config.transportMode = "global_conditional";
+    config.render.threadCount = 1;
+    const RenderedImage conditionalSerial = renderAnalyticScene(config);
+    config.render.threadCount = 3;
+    const RenderedImage conditionalParallel = renderAnalyticScene(config);
+    bool conditionalEqual = conditionalSerial.pixels.size() == conditionalParallel.pixels.size();
+    for (std::size_t i = 0; conditionalEqual && i < conditionalSerial.pixels.size(); ++i)
+        conditionalEqual = (conditionalSerial.pixels[i].array() ==
+                            conditionalParallel.pixels[i].array()).all();
+    context.require(conditionalEqual,
+                    "conditional render pixels are independent of worker count");
+    context.require(sameStatistics(conditionalSerial.statistics,
+                                   conditionalParallel.statistics),
+                    "conditional render statistics are independent of worker count");
+    config.transportMode = "classic";
 
     config.field.mean = std::make_shared<ThrowingMean>();
     config.render.threadCount = 3;

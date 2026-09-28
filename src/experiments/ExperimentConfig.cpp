@@ -243,6 +243,11 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.material.conductor.forceUnitFresnel =
         material.value("force_unit_fresnel_for_energy_test", false);
     const auto& transport = root.at("transport");
+    config.transportMode = transport.value("mode", "classic");
+    if (config.transportMode != "classic" && config.transportMode != "classic_local" &&
+        config.transportMode != "classic_global" &&
+        config.transportMode != "global_conditional" && config.transportMode != "all")
+        throw std::invalid_argument("unknown transport.mode: " + config.transportMode);
     for (const char* obsolete : {"conditional29", "correlated_sampler", "external_policy",
                                  "hard_depth_cap", "next_event_estimation"}) {
         if (transport.contains(obsolete))
@@ -358,7 +363,14 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                           {"render_spp", config.render.samplesPerPixel},
                           {"render_threads", config.render.threadCount}};
     result["classic_phase_proposal"] = config.classicPhaseProposal;
+    result["transport"]["mode"] = config.transportMode;
     result["transport"]["classic"]["sampler"] = "dda_null_tracking";
+    result["transport"]["global_conditional"] = {
+        {"sampler", "two_segment_delta_tracking"},
+        {"majorant", "analytic_birth_and_conditional_interval_bounds"},
+        {"tracking_segments", 2},
+        {"far_interval_thinning", true},
+        {"birth_policy", "sampled_positive_exterior"}};
     result["numeric"] = {{"relative_tolerance", config.numeric.relativeTolerance},
         {"absolute_tolerance", config.numeric.absoluteTolerance},
         {"distance_absolute_tolerance", config.numeric.distanceAbsoluteTolerance},

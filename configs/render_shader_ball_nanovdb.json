@@ -65,15 +65,15 @@
     "samples_per_pixel": 64,
     "camera_position": [
       0.134,
-      -0.178,
-      0.153
+      -0.4,
+      0.2
     ],
     "camera_target": [
       0.0,
       0.0,
       0.041
     ],
-    "vertical_fov_degrees": 32.0,
+    "vertical_fov_degrees": 16.0,
     "environment": "directional_gradient",
     "linear_output_format": "pfm"
   },

@@ -1,6 +1,9 @@
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
 #include "macrofacet/macrofacet/ConductorPhase.h"
 #include "macrofacet/transport/FlightKernel.h"
+#include "macrofacet/transport/ConditionalFlightKernel.h"
+#include "macrofacet/transport/ConditionalNullTracking.h"
+#include "macrofacet/transport/CollisionGradientSampler.h"
 #include "macrofacet/transport/NarrowBandMedium.h"
 #include <algorithm>
 #include <atomic>
@@ -48,14 +51,26 @@ Spectrum traceCameraPath(const Ray& initialRay,
         return environmentEmission(initialDirection, config.render.environment);
     }
     const Point3 entry = initialRay.origin + firstInterval.entry * initialDirection;
-    FlightState state = medium.startExternal(entry, initialDirection);
+    const bool conditional = config.transportMode == "global_conditional";
+    FlightState state = conditional
+        ? startConditionalExterior(config.field, entry, initialDirection, rng)
+        : medium.startExternal(entry, initialDirection);
     Spectrum throughput = Spectrum::Ones();
     int depth = 0;
     for (; depth < config.render.safetyDepthCap; ++depth) {
         try {
-            const ClassicFlightKernel kernel = medium.beginFlight(state);
-            const FlightSample flight = medium.sample(kernel, rng, config.numeric,
-                                                       &statistics.tracking);
+            FlightSample flight;
+            Vector3 collisionGradient = Vector3::Zero();
+            if (conditional) {
+                const ConditionalFlightKernel kernel(config.field, state);
+                flight = sampleConditionalDeltaTracking(kernel, rng, &statistics.tracking);
+                if (flight.collided)
+                    collisionGradient = sampleCollisionGradient(kernel, flight.age,
+                                                                 rng, config.numeric);
+            } else {
+                const ClassicFlightKernel kernel = medium.beginFlight(state);
+                flight = medium.sample(kernel, rng, config.numeric, &statistics.tracking);
+            }
             if (!flight.collided) {
                 ++statistics.escapedPaths;
                 statistics.accumulatedPathDepth += depth;
@@ -64,13 +79,23 @@ Spectrum traceCameraPath(const Ray& initialRay,
             }
             const Point3 hit = state.birthPosition + flight.age * state.direction;
             ++statistics.realCollisions;
-            const double mixture = config.classicPhaseProposal == "paper_mixture"
-                ? config.beckmannMixtureWeight : 0.0;
-            const bool useTargetVndf = config.classicPhaseProposal == "target_vndf";
-            ConductorPhase phase(config.field, config.material, hit, mixture, useTargetVndf);
-            const PhaseSample sample = phase.samplePhase(state.direction, rng);
-            throughput = throughput.cwiseProduct(sample.throughputWeight);
-            state = startClassicCollisionFlight(hit, sample.direction);
+            if (conditional) {
+                const Vector3 normal = normalizedOrThrow(collisionGradient);
+                throughput = throughput.cwiseProduct(conductorFresnel(
+                    -state.direction.dot(normal), config.material.conductor));
+                const Vector3 outgoing = reflectTravelDirection(state.direction, normal);
+                state = startClassicCollisionFlight(hit, outgoing);
+                state.birthValue = 0.0;
+                state.birthGradient = collisionGradient;
+            } else {
+                const double mixture = config.classicPhaseProposal == "paper_mixture"
+                    ? config.beckmannMixtureWeight : 0.0;
+                const bool useTargetVndf = config.classicPhaseProposal == "target_vndf";
+                ConductorPhase phase(config.field, config.material, hit, mixture, useTargetVndf);
+                const PhaseSample sample = phase.samplePhase(state.direction, rng);
+                throughput = throughput.cwiseProduct(sample.throughputWeight);
+                state = startClassicCollisionFlight(hit, sample.direction);
+            }
             if (depth + 1 >= config.render.rouletteStartDepth) {
                 const double continuation = std::clamp(throughput.maxCoeff(), 0.05, 0.95);
                 if (rng.openUniform01() >= continuation) {
@@ -81,6 +106,7 @@ Spectrum traceCameraPath(const Ray& initialRay,
                 throughput /= continuation;
             }
         } catch (const NumericError&) {
+            if (conditional) throw; // A failed majorant must not become a black sample.
             ++statistics.numericalFailures;
             statistics.accumulatedPathDepth += depth;
             return Spectrum::Zero();

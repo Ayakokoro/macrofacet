@@ -3,9 +3,22 @@
 #include "macrofacet/mathutility/GaussianMoments1D.h"
 #include "macrofacet/mathutility/Quadrature.h"
 #include "macrofacet/mathutility/SmallGaussian.h"
+#include "macrofacet/mathutility/CompensatedSum.h"
 
 void testGaussianMath(TestContext& context) {
     using namespace mf;
+    {
+        // An individual exponential distance can be below one age ulp.
+        // Retain these increments instead of discarding or enlarging them.
+        const double tiny = std::ldexp(1.0, -60);
+        CompensatedSum age(1.0);
+        for (int i=0; i<1024; ++i) age.add(tiny);
+        context.require(age.value()==1.0+std::ldexp(1.0,-50),
+                        "sub-ulp flight increments accumulate without a forced minimum step");
+        age.add(-1.0);
+        context.require(age.value()==std::ldexp(1.0,-50),
+                        "compensated sum retains accumulated small distances after cancellation");
+    }
     context.near(normalCdf(0.0), 0.5, 1e-15, "Phi(0)");
     context.near(normalPdf(0.0), kInvSqrtTwoPi, 1e-15, "phi(0)");
     for (double z : {-40.0, -20.0, -8.0, -2.0, 0.0, 2.0, 8.0, 20.0, 40.0}) {
@@ -13,6 +26,11 @@ void testGaussianMath(TestContext& context) {
         context.near(normalCdf(z) + normalCdf(-z), 1.0, 2e-15, "normal CDF symmetry");
     }
     context.relative(normalPdfOverCdf(-40.0), 40.0249688, 2e-7, "deep-tail inverse Mills ratio");
+    for (double z : {-8.0,-12.0,-20.0,-40.0})
+        context.relative(normalPdfOverCdf(z),std::exp(normalLogPdf(z)-normalLogCdf(z)),
+                         2e-13,"inverse Mills continued fraction matches the resolved log ratio");
+    context.relative(normalPdfOverCdf(-1e10)/1e10,1.0,1e-15,
+                     "inverse Mills ratio survives catastrophic log-density cancellation");
     for (double probability : {1e-12, 1e-6, 0.01, 0.5, 0.99, 1.0 - 1e-12}) {
         const double z = normalQuantile(probability);
         context.relative(normalCdf(z), probability, 2e-10, "normal quantile round trip");

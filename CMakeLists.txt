@@ -27,12 +27,15 @@ add_library(macrofacet
     src/transport/FlightKernel.cpp
     src/transport/ClassicFlightKernel.cpp
     src/transport/ClassicNullTracking.cpp
+    src/transport/ConditionalFlightKernel.cpp
+    src/transport/ConditionalNullTracking.cpp
     src/transport/DensityMajorantGrid.cpp
     src/transport/NarrowBandMedium.cpp
     src/transport/CollisionGradientSampler.cpp
     src/integrator/MacrofacetPathTracer.cpp
     src/experiments/ExperimentConfig.cpp
     src/experiments/RenderExperiment.cpp)
+target_sources(macrofacet PRIVATE src/experiments/TransmittanceCurves.cpp)
 
 target_include_directories(macrofacet PUBLIC include)
 target_link_libraries(macrofacet PUBLIC Eigen3::Eigen nlohmann_json::nlohmann_json Threads::Threads)

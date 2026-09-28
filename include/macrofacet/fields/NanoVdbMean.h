@@ -37,7 +37,10 @@ public:
     // it -- see MeanField::intrinsicSigma.
     std::optional<double> intrinsicSigma() const override;
     MeanJet evaluate(const Point3& x) const override;
+    double valueDifference(const Point3& x, const Vector3& displacement) const override;
     BoundsSummary bounds(const Bounds3& domain) const override;
+    MeanRayBounds rayBounds(const Point3& origin, const Vector3& direction,
+                            double begin, double end) const override;
     double voxelSizeHint() const override;
     void appendRayBreakpoints(const Point3& origin, const Vector3& direction,
                               double begin, double end,
