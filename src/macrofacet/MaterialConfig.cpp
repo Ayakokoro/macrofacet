@@ -52,9 +52,11 @@ void MaterialConfig::validate(const Bounds3& domain) const {
         if (!bounds.certified) {
             throw std::invalid_argument("the alpha field cannot certify its bounds");
         }
-        if (!(bounds.minimumValue > 0.0)) {
+        if (!(bounds.minimumValue > 0.0) &&
+            !(gpModel == GpModel::LocalTangent && alphaPositiveOnDensitySupport &&
+              bounds.minimumValue == 0.0)) {
             throw std::invalid_argument(
-                "the alpha field must be strictly positive over the active domain "
+                "the alpha field must be positive wherever density can be positive "
                 "(minimum is " + std::to_string(bounds.minimumValue) + ")");
         }
     }

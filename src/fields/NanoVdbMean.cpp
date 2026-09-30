@@ -29,11 +29,26 @@ NanoVdbMean::~NanoVdbMean() = default;
 
 std::shared_ptr<const NanoVdbMean> NanoVdbMean::open(const std::filesystem::path& gridFile,
                                                      double sigmaOverride) {
+    const auto sidecar = readSidecar(gridFile);
+    if (sidecar && sidecar->version != 2) {
+        throw std::invalid_argument(
+            "NanoVDB field needs a version 2 sidecar for index-node samples; re-bake " +
+            gridFile.string());
+    }
     auto result = std::shared_ptr<NanoVdbMean>(new NanoVdbMean());
     result->impl_->path = gridFile;
     result->impl_->view = detail::GridView::open(gridFile, "sdf");
 
-    const double fileSigma = resolveSigma(gridFile);
+    // The primitive generator writes only sdf/density/alpha, without sigma
+    // metadata. Its caller must provide sigma explicitly; our own bakes carry
+    // a sigma grid and sidecar, which continue to be the source of truth.
+    const auto storedSigma = readSigmaGrid(gridFile);
+    const double fileSigma = (storedSigma || sidecar)
+        ? resolveSigma(gridFile) : sigmaOverride;
+    if (!(fileSigma > 0.0) || !std::isfinite(fileSigma)) {
+        throw std::invalid_argument(
+            "NanoVDB field has no stored sigma; provide field.sigma for " + gridFile.string());
+    }
     if (sigmaOverride > 0.0) {
         // An explicit override still has to agree with the file: a mismatch
         // means the field was baked for a different statistical scale, which
@@ -58,10 +73,8 @@ std::shared_ptr<const NanoVdbMean> NanoVdbMean::open(const std::filesystem::path
     return result;
 }
 
-// The far-field value. At the background (+6 sigma) the hazard's density term
-// is phi(6)/(sigma*Phi(6)) ~ 6.2e-9/sigma, so a ray travelling outside the grid
-// effectively never collides -- which is also what makes scattering rays that
-// miss the object terminate cleanly instead of picking up phantom hits.
+// Mesh bakes have a zero SDF background, but their separate density grid has a
+// zero background too. Classic transport uses that density grid to skip vacuum.
 MeanJet NanoVdbMean::evaluate(const Point3& x) const {
     MeanJet jet;
     impl_->view.sampleWithGradient(x, jet.value, jet.gradient);
@@ -122,15 +135,15 @@ void NanoVdbMean::appendRayBreakpoints(const Point3& origin, const Vector3& dire
     for (int axis = 0; axis < 3; ++axis) {
         const double speed = direction[axis];
         if (std::abs(speed) < 1e-14) continue;
-        const double u0 = (origin[axis] + begin * speed - gridOrigin[axis]) / dx - 0.5;
-        const double u1 = (origin[axis] + end * speed - gridOrigin[axis]) / dx - 0.5;
+        const double u0 = (origin[axis] + begin * speed - gridOrigin[axis]) / dx;
+        const double u1 = (origin[axis] + end * speed - gridOrigin[axis]) / dx;
         const long long first = static_cast<long long>(std::floor(std::min(u0, u1))) + 1;
         const long long last = static_cast<long long>(std::ceil(std::max(u0, u1))) - 1;
         if (last - first > 100000) {
             throw std::invalid_argument("ray crosses too many NVDB interpolation cells");
         }
         for (long long index = first; index <= last; ++index) {
-            const double coordinate = gridOrigin[axis] + (static_cast<double>(index) + 0.5) * dx;
+            const double coordinate = gridOrigin[axis] + static_cast<double>(index) * dx;
             const double age = (coordinate - origin[axis]) / speed;
             if (age > begin && age < end) knots.push_back(age);
         }
@@ -146,6 +159,7 @@ std::optional<double> NanoVdbMean::intrinsicSigma() const { return sigma(); }
 double NanoVdbMean::background() const { return impl_->view.background(); }
 const std::filesystem::path& NanoVdbMean::gridFile() const { return impl_->path; }
 const Bounds3& NanoVdbMean::gridBounds() const { return impl_->view.worldBounds(); }
+const Bounds3& NanoVdbMean::activeNodeBounds() const { return impl_->view.activeNodeBounds(); }
 
 namespace {
 
@@ -155,15 +169,25 @@ MeanBuildResult makeNanoVdbMean(const nlohmann::json& fieldJson) {
     MeanBuildResult result;
     result.mean = NanoVdbMean::open(file, sigmaOverride);
     const auto& baked = static_cast<const NanoVdbMean&>(*result.mean);
-    const Vector3 interpolationMargin = Vector3::Constant(baked.voxelSizeHint());
-    result.activeDomain = {baked.gridBounds().minimum - interpolationMargin,
-                           baked.gridBounds().maximum + interpolationMargin};
+    result.activeDomain = baked.activeNodeBounds();
+    if (!result.activeDomain->valid()) {
+        throw std::invalid_argument("nanovdb SDF active nodes must span at least two samples per axis");
+    }
     // The alpha grid lives in the same file, so a config only ever names one
     // path. It is optional: the generator always writes it, but a file trimmed
     // down to the sdf grid stays usable (the material then falls back to the
     // config's roughness).
     if (fieldJson.value("use_alpha_grid", true) && nanovdb::io::hasGrid(file, "alpha")) {
         result.alphaField = NanoVdbSampledField::open(file, "alpha");
+        const auto& alpha = static_cast<const NanoVdbSampledField&>(*result.alphaField);
+        if (alpha.background() == 0.0) {
+            const auto density = NanoVdbSampledField::open(file, "density");
+            if (!alpha.positiveAtEveryPositiveNodeOf(*density)) {
+                throw std::invalid_argument(
+                    "zero-background alpha must be positive wherever baked density is positive");
+            }
+            result.alphaPositiveOnDensitySupport = true;
+        }
     }
     return result;
 }

@@ -23,6 +23,7 @@ struct MaterialConfig {
     // Spatial Beckmann alpha. For the Gaussian material NDF each gradient
     // component has variance alpha(x)^2 / 2; GGX reads alpha(x) directly.
     ScalarFieldPtr alphaField;
+    bool alphaPositiveOnDensitySupport = false;
 
     // Local mode centres a tangent-plane GP at x and may replace its gradient
     // covariance with alpha(x)^2 / 2 I. Global mode uses field.pointPrior(x)

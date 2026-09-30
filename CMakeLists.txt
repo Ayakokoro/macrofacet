@@ -115,6 +115,7 @@ set(MACROFACET_TEST_SOURCES
     tests/test_cutaway_mean.cpp
     tests/test_shader_ball_mean.cpp
     tests/test_material_roughness.cpp
+    tests/test_transmittance_config.cpp
     tests/test_rendering_threads.cpp)
 set(MACROFACET_TEST_LIBRARIES macrofacet)
 

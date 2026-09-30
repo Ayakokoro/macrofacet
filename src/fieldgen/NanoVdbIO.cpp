@@ -56,6 +56,7 @@ void writeFieldFile(const std::filesystem::path& path, const BakedGrids& grids,
     sidecar.maximumGradientNorm = report.maximumGradientNorm;
     sidecar.sdfMinimum = report.sdfMinimum;
     sidecar.sdfMaximum = report.sdfMaximum;
+    const double alphaBackground = grids.alpha().grid<float>()->tree().root().background();
 
     const nlohmann::json document = {
         {"version", sidecar.version},
@@ -71,7 +72,8 @@ void writeFieldFile(const std::filesystem::path& path, const BakedGrids& grids,
         {"voxels", {sidecar.voxels[0], sidecar.voxels[1], sidecar.voxels[2]}},
         {"mesh", sidecar.meshName},
         {"transform", {{"scale", transform.scale}, {"translation", toArray(transform.translation)}}},
-        {"background", {{"sdf", report.background}, {"alpha", settings.alpha}, {"density", 0.0}}},
+        {"background", {{"sdf", report.background},
+                         {"alpha", alphaBackground}, {"density", 0.0}}},
         {"measured", {{"sdf_min", report.sdfMinimum},
                       {"sdf_max", report.sdfMaximum},
                       {"density_max", report.densityMaximum},

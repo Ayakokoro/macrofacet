@@ -1,28 +1,9 @@
 #pragma once
 
 // Internal helper shared by NanoVdbMean and NanoVdbSampledField. It is the only
-// place that talks to the nanovdb API on the render side, so the half-voxel
-// convention (see docs/archive/PLAN_NANOVDB_FIELD.md 2.2) is written down exactly once.
-//
-// Two conventions meet here and they are NOT the same:
-//
-//   NanoVDB's Map is corner-based -- indexToWorld(i) == applyMap(i) == origin +
-//   dx * i, with no half-voxel offset.
-//
-//   The value stored in voxel ijk is the field sampled at that voxel's *centre*,
-//   origin + dx * (ijk + 0.5), which is OpenVDB's convention and what VdbBaker
-//   writes.
-//
-// So a world point maps to the continuous index in the *centre* frame:
-//
-//   continuous index  = (P - origin) / dx - 0.5
-//   base voxel        = floor(continuous index)
-//   fraction          = continuous index - base
-//
-// Subtracting the half voxel is what makes the interpolant reproduce the stored
-// value exactly at a voxel centre (u == i, fraction 0). Omitting it reads the
-// field half a voxel off, which is invisible on a flat region and a constant
-// bias of dx/2 * |grad| everywhere else.
+// place that talks to the nanovdb API on the render side. Both bakers now store
+// each sample at NanoVDB's indexToWorld(ijk) = origin + dx * ijk, matching
+// primitive_macrofacet. The continuous index is (P - origin) / dx.
 
 #include "macrofacet/core/Types.h"
 #include "macrofacet/gpss/MeanField.h"
@@ -79,8 +60,8 @@ public:
             view.minimum_ = view.maximum_ = static_cast<double>(view.background_);
         }
         // A sub-domain's extremes are a subset of the grid's, so folding the
-        // background in keeps bounds() conservative for the sdf grid, whose
-        // background (+6 sigma) sits above every active value.
+        // background in keeps bounds() conservative for both narrow-band and
+        // full-domain fields.
         view.maximum_ = std::max(view.maximum_, static_cast<double>(view.background_));
         view.minimum_ = std::min(view.minimum_, static_cast<double>(view.background_));
 
@@ -90,6 +71,10 @@ public:
         view.worldBounds_.maximum = view.origin_ + view.dx_ * Point3(bbox.max()[0] + 1,
                                                                      bbox.max()[1] + 1,
                                                                      bbox.max()[2] + 1);
+        view.activeNodeBounds_.minimum = view.worldBounds_.minimum;
+        view.activeNodeBounds_.maximum = view.origin_ + view.dx_ * Point3(bbox.max()[0],
+                                                                          bbox.max()[1],
+                                                                          bbox.max()[2]);
         return view;
     }
 
@@ -99,6 +84,28 @@ public:
     double minimumValue() const { return minimum_; }
     double maximumValue() const { return maximum_; }
     const Bounds3& worldBounds() const { return worldBounds_; }
+    const Bounds3& activeNodeBounds() const { return activeNodeBounds_; }
+
+    // With shared trilinear weights, positive density can only occur where
+    // alpha is positive if that implication holds at every grid node.
+    bool positiveAtEveryPositiveNodeOf(const GridView& density) const {
+        if (dx_ != density.dx_ || (origin_ - density.origin_).squaredNorm() != 0.0 ||
+            density.background_ != 0.0f || background_ != 0.0f)
+            return false;
+        const nanovdb::CoordBBox active = density.grid_->indexBBox();
+        auto densityAccessor = density.grid_->getAccessor();
+        auto alphaAccessor = grid_->getAccessor();
+        for (int k = active.min()[2]; k <= active.max()[2]; ++k)
+            for (int j = active.min()[1]; j <= active.max()[1]; ++j)
+                for (int i = active.min()[0]; i <= active.max()[0]; ++i) {
+                    const nanovdb::Coord node(i, j, k);
+                    const float d = densityAccessor.getValue(node);
+                    const float a = alphaAccessor.getValue(node);
+                    if (!std::isfinite(d) || !std::isfinite(a) || d < 0.0f || a < 0.0f ||
+                        (d > 0.0f && !(a > 0.0f))) return false;
+                }
+        return true;
+    }
 
     // Scan each interpolation cell touching an active voxel once. A cell
     // outside this range has eight background corners and zero gradient.
@@ -311,12 +318,11 @@ public:
     }
 
 private:
-    // World point -> continuous index in the centre frame. See the note at the
-    // top of this file for why the half voxel is subtracted.
+    // World point -> continuous index of the stored sample nodes.
     nanovdb::Vec3d continuousIndex(const Point3& x) const {
-        return nanovdb::Vec3d((x.x() - origin_.x()) / dx_ - 0.5,
-                              (x.y() - origin_.y()) / dx_ - 0.5,
-                              (x.z() - origin_.z()) / dx_ - 0.5);
+        return nanovdb::Vec3d((x.x() - origin_.x()) / dx_,
+                              (x.y() - origin_.y()) / dx_,
+                              (x.z() - origin_.z()) / dx_);
     }
 
     nanovdb::GridHandle<nanovdb::HostBuffer> handle_;
@@ -327,6 +333,7 @@ private:
     double minimum_ = 0.0;
     double maximum_ = 0.0;
     Bounds3 worldBounds_;
+    Bounds3 activeNodeBounds_;
 };
 
 } // namespace mf::detail

@@ -12,6 +12,23 @@ ctest --test-dir build -C Release --output-on-failure
 
 ## Render
 
+Mesh fields now use the `primitive_macrofacet` index-node bake convention: the
+grid map is anchored at world zero, samples are written at integer indices,
+and unwritten `sdf`, `density`, and `alpha` values are zero. Re-bake fields made
+before this change. New macrofacet bakes write a version 2 sidecar; a three-grid
+file from `primitive_macrofacet` can be read when `field.sigma` is specified.
+
+For the shader ball comparison, run from this directory:
+
+```powershell
+build\Release\macrofacet_fieldgen.exe "scenes/shader ball.ply" --sigma 0.001 --alpha 0.5 --x 96 --y 96 --z 96 --out outputs/fields/shader_ball.nvdb
+build\Release\macrofacet_experiments.exe render --config configs/render_shader_ball_nanovdb.json
+```
+
+The shader ball config selects `classic_local` and reads the baked alpha grid.
+The additional `sigma` grid and JSON sidecar carry scale and provenance; they
+do not change the three fields used by PBRT.
+
 ```powershell
 build\Release\macrofacet_experiments.exe render --config configs\macrofacet_ci.json
 build\Release\macrofacet_experiments.exe render --config configs\render_shader_ball_nanovdb.json

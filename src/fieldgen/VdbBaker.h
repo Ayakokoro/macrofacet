@@ -15,9 +15,8 @@ namespace mf {
 struct BakeSettings {
     double sigma = 0.05;   // standard deviation of the surface position
     double alpha = 0.5;    // Beckmann alpha written unchanged to the material grid
-    std::array<int, 3> resolution{32, 32, 32};  // voxels per axis over the unexpanded bbox
+    std::array<int, 3> resolution{32, 32, 32};  // divisions per axis over the expanded bbox
     double bandSigmas = 3.0;         // the grids are written only inside +-bandSigmas
-    double backgroundSigmas = 6.0;   // the sdf grid's background value, in sigma
     int threadCount = 0;             // 0 selects the hardware concurrency
     bool symmetricDensity = false;   // use |distance| in Density() instead of the signed one
     bool fullDomain = false;          // preserve signed distance throughout the baked box
@@ -26,7 +25,7 @@ struct BakeSettings {
     // rules out the band. Exact for a watertight mesh (where |w| is 0 or 1, so
     // |dist| == sqrt(sqrD)); an open mesh can have a fractional w that shrinks
     // the magnitude into the band, and those voxels would be missed.
-    bool pruneByUnsignedDistance = true;
+    bool pruneByUnsignedDistance = false;  // original generator checks winding for every node
 };
 
 struct BakeReport {
@@ -75,7 +74,7 @@ struct BakedGrids {
 // did not do -- signed distances below zero inflate the density by up to 4x.
 double macrofacetDensity(double distance, double sigma, bool symmetric);
 
-// Bakes the three grids (sdf / density / alpha) plus the constant sigma grid.
+// Bakes the three zero-background grids (sdf / density / alpha) plus the constant sigma grid.
 // Throws std::invalid_argument for settings that cannot produce a usable field
 // (non-positive sigma, empty mesh, a grid too coarse to contain the band).
 BakedGrids bakeMacrofacetField(const TriangleMesh& mesh, const BakeSettings& settings);

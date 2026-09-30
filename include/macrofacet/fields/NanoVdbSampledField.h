@@ -11,9 +11,8 @@ namespace mf {
 // The `alpha` grid of a baked .nvdb, exposed as a per-point scalar field. It
 // drives the local material NDF and its projected area in transport.
 //
-// Sampling is trilinear. Outside the grid the grid's background is returned,
-// which the generator sets to the same constant alpha it writes inside the
-// band, so the field does not jump at the band edge.
+// Sampling is trilinear. Mesh bakes use a zero background for density and alpha;
+// analytic bakes keep a positive alpha background.
 class NanoVdbSampledField final : public ScalarField {
 public:
     static std::shared_ptr<const NanoVdbSampledField> open(const std::filesystem::path& gridFile,
@@ -30,6 +29,7 @@ public:
     const std::string& gridName() const;
     const Bounds3& gridBounds() const;
     double voxelSize() const;
+    bool positiveAtEveryPositiveNodeOf(const NanoVdbSampledField& density) const;
 
 private:
     NanoVdbSampledField();

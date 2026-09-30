@@ -43,5 +43,9 @@ double NanoVdbSampledField::background() const { return impl_->view.background()
 const std::string& NanoVdbSampledField::gridName() const { return impl_->name; }
 const Bounds3& NanoVdbSampledField::gridBounds() const { return impl_->view.worldBounds(); }
 double NanoVdbSampledField::voxelSize() const { return impl_->view.voxelSize(); }
+bool NanoVdbSampledField::positiveAtEveryPositiveNodeOf(
+    const NanoVdbSampledField& density) const {
+    return impl_->view.positiveAtEveryPositiveNodeOf(density.impl_->view);
+}
 
 } // namespace mf

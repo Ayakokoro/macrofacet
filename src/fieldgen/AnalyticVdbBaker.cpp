@@ -32,9 +32,9 @@ BakedGrids bakeAnalyticMean(const MeanField& mean, const Bounds3& domain,
         voxelCount *= dimensions[axis];
     }
 
-    // The first and last sample centres lie outside the active domain. Every
+    // The first and last sample nodes lie outside the active domain. Every
     // trilinear cell touched by tracing is therefore backed by real samples.
-    const Point3 origin = domain.minimum - Vector3::Constant(1.5 * dx);
+    const Point3 origin = domain.minimum - Vector3::Constant(dx);
     const float background = static_cast<float>(6.0 * sigma);
     nanovdb::tools::build::Grid<float> sdfGrid(background, "sdf",
                                                nanovdb::GridClass::LevelSet);
@@ -61,7 +61,7 @@ BakedGrids bakeAnalyticMean(const MeanField& mean, const Bounds3& domain,
     for (int k = 0; k < dimensions[2]; ++k) {
         for (int j = 0; j < dimensions[1]; ++j) {
             for (int i = 0; i < dimensions[0]; ++i) {
-                const Point3 x = origin + dx * Point3(i + 0.5, j + 0.5, k + 0.5);
+                const Point3 x = origin + dx * Point3(i, j, k);
                 double value;
                 try {
                     value = mean.evaluate(x).value;

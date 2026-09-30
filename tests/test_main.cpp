@@ -16,6 +16,8 @@ int main() {
     catch (const std::exception& e) { context.require(false, std::string("sampling threw: ") + e.what()); }
     try { testRenderingThreads(context); }
     catch (const std::exception& e) { context.require(false, std::string("render threading threw: ") + e.what()); }
+    try { testTransmittanceConfig(context); }
+    catch (const std::exception& e) { context.require(false, std::string("transmittance config threw: ") + e.what()); }
     try { testCutawayMean(context); }
     catch (const std::exception& e) { context.require(false, std::string("cutaway mean threw: ") + e.what()); }
     try { testShaderBallMean(context); }

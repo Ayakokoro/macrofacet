@@ -44,9 +44,6 @@ void validateSettings(const BakeSettings& settings) {
     if (!(settings.bandSigmas > 0.0) || !std::isfinite(settings.bandSigmas)) {
         throw std::invalid_argument("band must be a finite positive number of sigmas");
     }
-    if (!(settings.backgroundSigmas > settings.bandSigmas)) {
-        throw std::invalid_argument("sdf background must sit outside the band");
-    }
     for (int axis = 0; axis < 3; ++axis) {
         if (settings.resolution[axis] < 1) {
             throw std::invalid_argument("resolution must be at least one voxel per axis");
@@ -65,31 +62,26 @@ struct Frame {
 
 Frame makeFrame(const TriangleMesh& mesh, const BakeSettings& settings) {
     const Bounds3 meshBounds = mesh.bounds();
-    // dx is derived from the *unexpanded* bounding box, matching the original
-    // generator: the grid then covers the sigma-expanded box with a few extra
-    // voxels per axis rather than shrinking dx to fit it exactly.
-    const Vector3 gap = meshBounds.maximum - meshBounds.minimum;
     Frame frame;
+    const double margin = settings.bandSigmas * settings.sigma;
+    frame.domainMinimum = meshBounds.minimum.array() - margin;
+    frame.domainMaximum = meshBounds.maximum.array() + margin;
+    // Match macrofcaet_vdb_generator: resolution divides the expanded box,
+    // while the NanoVDB map stays anchored at the world origin.
+    const Vector3 gap = frame.domainMaximum - frame.domainMinimum;
     frame.dx = std::min({gap.x() / settings.resolution[0],
                          gap.y() / settings.resolution[1],
                          gap.z() / settings.resolution[2]});
     if (!(frame.dx > 0.0) || !std::isfinite(frame.dx)) {
         throw std::invalid_argument("mesh bounding box is degenerate");
     }
-    const double margin = settings.bandSigmas * settings.sigma;
-    frame.domainMinimum = meshBounds.minimum.array() - margin;
-    frame.domainMaximum = meshBounds.maximum.array() + margin;
-    frame.origin = frame.domainMinimum;
-
-    // NanoVDB's Map has no half-voxel offset: applyMap(ijk) is the voxel's lower
-    // corner. Index 0 therefore sits exactly at the domain corner, and a voxel's
-    // centre is origin + dx * (ijk + 0.5). The fill loop and NanoVdbMean's
-    // sampler must agree on this or the whole field shifts by dx/2.
-    const Vector3 extent = frame.domainMaximum - frame.domainMinimum;
-    frame.lo = nanovdb::Coord(0, 0, 0);
-    frame.hi = nanovdb::Coord(static_cast<int>(std::ceil(extent.x() / frame.dx)),
-                              static_cast<int>(std::ceil(extent.y() / frame.dx)),
-                              static_cast<int>(std::ceil(extent.z() / frame.dx)));
+    frame.origin = Point3::Zero();
+    frame.lo = nanovdb::Coord(static_cast<int>(std::floor(frame.domainMinimum.x() / frame.dx)),
+                              static_cast<int>(std::floor(frame.domainMinimum.y() / frame.dx)),
+                              static_cast<int>(std::floor(frame.domainMinimum.z() / frame.dx)));
+    frame.hi = nanovdb::Coord(static_cast<int>(std::floor(frame.domainMaximum.x() / frame.dx)),
+                              static_cast<int>(std::floor(frame.domainMaximum.y() / frame.dx)),
+                              static_cast<int>(std::floor(frame.domainMaximum.z() / frame.dx)));
     return frame;
 }
 
@@ -155,12 +147,13 @@ BakedGrids bakeMacrofacetField(const TriangleMesh& mesh, const BakeSettings& set
     validateSettings(settings);
     const Frame frame = makeFrame(mesh, settings);
     const double sigma = settings.sigma;
-    const double background = settings.backgroundSigmas * sigma;
-    const float backgroundFloat = static_cast<float>(background);
+    const double background = 0.0;
 
     MeshDistanceField distanceField(mesh, settings.signMode);
 
-    const int nx = frame.hi[0] + 1, ny = frame.hi[1] + 1, nz = frame.hi[2] + 1;
+    const int nx = frame.hi[0] - frame.lo[0] + 1;
+    const int ny = frame.hi[1] - frame.lo[1] + 1;
+    const int nz = frame.hi[2] - frame.lo[2] + 1;
     const int workers = resolveWorkerCount(settings.threadCount, nz);
 
     std::vector<std::vector<BandVoxel>> perWorker(static_cast<std::size_t>(workers));
@@ -169,13 +162,15 @@ BakedGrids bakeMacrofacetField(const TriangleMesh& mesh, const BakeSettings& set
     auto bakeSlab = [&](int k, std::vector<BandVoxel>& out) {
         const Eigen::Index count = static_cast<Eigen::Index>(nx) * ny;
         Eigen::MatrixXd points(count, 3);
-        const double z = frame.origin.z() + frame.dx * (k + 0.5);
+        const int zk = frame.lo[2] + k;
+        const double z = frame.dx * zk;
         Eigen::Index row = 0;
         for (int i = 0; i < nx; ++i) {
-            const double x = frame.origin.x() + frame.dx * (i + 0.5);
+            const int xi = frame.lo[0] + i;
+            const double x = frame.dx * xi;
             for (int j = 0; j < ny; ++j) {
                 points(row, 0) = x;
-                points(row, 1) = frame.origin.y() + frame.dx * (j + 0.5);
+                points(row, 1) = frame.dx * (frame.lo[1] + j);
                 points(row, 2) = z;
                 ++row;
             }
@@ -204,7 +199,7 @@ BakedGrids bakeMacrofacetField(const TriangleMesh& mesh, const BakeSettings& set
                     : magnitude * (1.0 - 2.0 * std::abs(winding));
                 if (!settings.fullDomain &&
                     !(signedDistance > -band && signedDistance < band)) continue;
-                out.push_back(BandVoxel{i, j, k,
+                out.push_back(BandVoxel{frame.lo[0] + i, frame.lo[1] + j, zk,
                                         static_cast<float>(signedDistance),
                                         static_cast<float>(
                                             macrofacetDensity(signedDistance, sigma,
@@ -236,15 +231,13 @@ BakedGrids bakeMacrofacetField(const TriangleMesh& mesh, const BakeSettings& set
     }
 
     // --- fill the build grids ---
-    // setValue (rather than the operator() sweep) is deliberate: operator()
-    // silently drops any value equal to the background, which would leave the
-    // alpha grid -- constant alpha equals its own background -- completely
-    // empty and break the "all three grids share one active mask" contract.
-    nanovdb::tools::build::Grid<float> sdfGrid(backgroundFloat, "sdf",
-                                               nanovdb::GridClass::LevelSet);
+    // All three grids have the original generator's zero background. setValue
+    // retains the same active mask even when an in-band SDF happens to be zero.
+    nanovdb::tools::build::Grid<float> sdfGrid(0.0f, "sdf",
+                                               nanovdb::GridClass::Unknown);
     nanovdb::tools::build::Grid<float> densityGrid(0.0f, "density",
                                                    nanovdb::GridClass::Unknown);
-    nanovdb::tools::build::Grid<float> alphaGrid(static_cast<float>(settings.alpha), "alpha",
+    nanovdb::tools::build::Grid<float> alphaGrid(0.0f, "alpha",
                                                  nanovdb::GridClass::Unknown);
     sdfGrid.setTransform(frame.dx, nanovdb::Vec3d(frame.origin.x(), frame.origin.y(),
                                                   frame.origin.z()));

@@ -3,7 +3,7 @@
   "seed": 17429,
   "field": {
     "mean_type": "nanovdb",
-    "grid_file": "outputs/fields/shader_ball.nvdb",
+    "grid_file": "outputs/fields/shader_ball_full.nvdb",
     "use_alpha_grid": false,
     "outside_domain": "vacuum"
   },
@@ -42,20 +42,78 @@
   "render": {
     "width": 512,
     "height": 512,
-    "samples_per_pixel": 64,
+    "samples_per_pixel": 256,
     "camera_position": [
       0.134,
-      -0.178,
-      0.153
+      -0.4,
+      0.2
     ],
     "camera_target": [
       0.0,
       0.0,
       0.041
     ],
-    "vertical_fov_degrees": 32.0,
+    "vertical_fov_degrees": 16.0,
     "environment": "directional_gradient",
     "linear_output_format": "pfm"
+  },
+  "transmittance": {
+    "modes": [
+      "classic_global",
+      "global_conditional"
+    ],
+    "curve": {
+      "bins": 256,
+      "spacing": "linear",
+      "distance_origin": "ray_origin"
+    },
+    "monte_carlo": {
+      "trials_per_ray": 4096,
+      "confidence_level": 0.95,
+      "write_raw_samples": false
+    },
+    "conditional_birth": {
+      "policy": "sample_positive_exterior"
+    },
+    "comparison": {
+      "local_transport_reference": "classic_global",
+      "constant_exponential": {
+        "enabled": false,
+        "fit": "censored_mle"
+      }
+    },
+    "rays": [
+      {
+        "id": "camera_center",
+        "group": "camera",
+        "origin": [
+          0.134,
+          -0.178,
+          0.153
+        ],
+        "direction": [
+          -0.134,
+          0.178,
+          -0.112
+        ],
+        "max_distance": 0.5
+      },
+      {
+        "id": "camera_offset",
+        "group": "camera",
+        "origin": [
+          0.134,
+          -0.178,
+          0.153
+        ],
+        "direction": [
+          -0.104,
+          0.178,
+          -0.112
+        ],
+        "max_distance": 0.5
+      }
+    ]
   },
   "output_directory": "outputs/render_shader_ball_nanovdb_global"
 }

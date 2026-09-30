@@ -32,6 +32,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -71,7 +72,6 @@ const BakedSphere& sphereField() {
         result.settings.alpha = 0.5;
         result.settings.resolution = {64, 64, 64};
         result.settings.bandSigmas = 3.0;
-        result.settings.backgroundSigmas = 6.0;
         result.path = tempFieldPath("sphere_r1_s64.nvdb");
 
         const mf::TriangleMesh mesh =
@@ -88,7 +88,7 @@ const BakedSphere& sphereField() {
 // sampler. Every voxel in the grid must read back as exactly one of two things:
 //
 //   in the band   -> density > 0, alpha = the configured alpha
-//   outside       -> sdf = the +6 sigma background, density = 0, alpha = alpha
+//   outside       -> sdf = density = alpha = 0
 //
 // Anything else is a voxel the renderer would misinterpret. Together with the
 // active-voxel counts below this also pins down the active masks: density can
@@ -99,7 +99,7 @@ void testVoxelContract(TestContext& context) {
     const BakedSphere& baked = sphereField();
     const double sigma = baked.settings.sigma;
     const double band = baked.settings.bandSigmas * sigma;
-    const float background = static_cast<float>(baked.settings.backgroundSigmas * sigma);
+    const float background = 0.0f;
     const float alphaValue = static_cast<float>(baked.settings.alpha);
 
     auto density = nanovdb::io::readGrid<nanovdb::HostBuffer>(baked.path.string(), "density");
@@ -139,12 +139,15 @@ void testVoxelContract(TestContext& context) {
                 const float alphaSample = alphaAccessor.getValue(ijk);
                 const bool alphaOk = std::abs(alphaSample - alphaValue) <= 1e-6f;
 
-                if (std::abs(distance) < band) {
+                if (sdfAccessor.isActive(ijk)) {
                     ++inBand;
-                    if (!(densityValue > 0.0f) || !alphaOk) ++wrong;
+                    if (!(std::abs(distance) < band) || !(densityValue > 0.0f) ||
+                        !alphaOk || !densityAccessor.isActive(ijk) ||
+                        !alphaAccessor.isActive(ijk)) ++wrong;
                 } else if (distance == background) {
                     ++outside;
-                    if (densityValue != 0.0f || !alphaOk) ++wrong;
+                    if (densityValue != 0.0f || alphaSample != 0.0f ||
+                        densityAccessor.isActive(ijk) || alphaAccessor.isActive(ijk)) ++wrong;
                 } else {
                     // Neither inside the band nor the documented background.
                     ++wrong;
@@ -160,6 +163,29 @@ void testVoxelContract(TestContext& context) {
                         std::to_string(densityActive) + ")");
     context.require(wrong == 0,
                     std::to_string(wrong) + " voxels violate the band/background contract");
+
+    // The stored value belongs to indexToWorld(ijk), as in the PBRT baker.
+    auto mean = mf::NanoVdbMean::open(baked.path);
+    auto densityField = mf::NanoVdbSampledField::open(baked.path, "density");
+    auto alphaField = mf::NanoVdbSampledField::open(baked.path, "alpha");
+    bool checkedNode = false;
+    for (int k = bbox.min()[2]; k <= bbox.max()[2] && !checkedNode; ++k)
+        for (int j = bbox.min()[1]; j <= bbox.max()[1] && !checkedNode; ++j)
+            for (int i = bbox.min()[0]; i <= bbox.max()[0]; ++i) {
+                const nanovdb::Coord ijk(i, j, k);
+                if (!sdfAccessor.isActive(ijk)) continue;
+                const auto world = sdfGrid->indexToWorld(nanovdb::Vec3d(i, j, k));
+                const mf::Point3 p(world[0], world[1], world[2]);
+                context.near(mean->evaluate(p).value, sdfAccessor.getValue(ijk), 1e-6,
+                             "sdf reads its stored value at the integer index position");
+                context.near(densityField->sample(p), densityAccessor.getValue(ijk), 1e-5,
+                             "density reads its stored value at the integer index position");
+                context.near(alphaField->sample(p), alphaAccessor.getValue(ijk), 1e-6,
+                             "alpha reads its stored value at the integer index position");
+                checkedNode = true;
+                break;
+            }
+    context.require(checkedNode, "the node-position check found an active voxel");
 }
 
 // Outside the band the file must read back as the documented constants, since
@@ -173,18 +199,17 @@ void testBackgroundValues(TestContext& context) {
     // (~1e-8 relative), not to double precision.
     const double sigma = baked.settings.sigma;
     context.near(mean->sigma(), sigma, 1e-6 * sigma, "sigma round-trips through the .nvdb");
-    context.near(mean->background(), 6.0 * sigma, 1e-6, "sdf background is +6 sigma");
-    context.near(alphaField->background(), baked.settings.alpha, 1e-6,
-                 "alpha background is the configured alpha");
+    context.near(mean->background(), 0.0, 0.0, "mesh sdf background is zero");
+    context.near(alphaField->background(), 0.0, 0.0, "mesh alpha background is zero");
 
     // Far outside the object, and inside the object's core -- the bake only
     // covers +-3 sigma, so both are inactive and read as background.
     const double far = 2.0;
-    context.near(mean->evaluate(mf::Point3(far, 0.0, 0.0)).value, 6.0 * sigma, 1e-6,
+    context.near(mean->evaluate(mf::Point3(far, 0.0, 0.0)).value, 0.0, 0.0,
                  "outside the object reads the sdf background");
-    context.near(mean->evaluate(mf::Point3(0.0, 0.0, 0.0)).value, 6.0 * sigma, 1e-6,
+    context.near(mean->evaluate(mf::Point3(0.0, 0.0, 0.0)).value, 0.0, 0.0,
                  "the object's core reads the sdf background");
-    context.near(alphaField->sample(mf::Point3(far, 0.0, 0.0)), baked.settings.alpha, 1e-6,
+    context.near(alphaField->sample(mf::Point3(far, 0.0, 0.0)), 0.0, 0.0,
                  "outside the object reads the alpha background");
 
     // The gradient must be zero where the field is constant, or the majorant
@@ -320,8 +345,8 @@ void testBoundsAreConservative(TestContext& context) {
     context.require(alphaBounds.certified, "the alpha field reports certified bounds");
     context.near(alphaBounds.maximumValue, baked.settings.alpha, 1e-6,
                  "alpha's upper bound is the configured alpha");
-    context.require(alphaBounds.minimumValue > 0.0,
-                    "alpha is strictly positive, as materialNdf requires");
+    context.near(alphaBounds.minimumValue, 0.0, 0.0,
+                 "the alpha grid includes its zero vacuum background");
 }
 
 void testTrilinearGradientNormBound(TestContext& context) {
@@ -465,6 +490,51 @@ void testSigmaDisagreementThrows(TestContext& context) {
         mismatchThrew = true;
     }
     context.require(mismatchThrew, "a sidecar that disagrees with the sigma grid is rejected");
+
+    const std::filesystem::path legacy = tempFieldPath("legacy_sample_positions.nvdb");
+    std::filesystem::copy_file(baked.path, legacy,
+                               std::filesystem::copy_options::overwrite_existing);
+    {
+        std::ifstream existing(baked.path.string() + ".json");
+        nlohmann::json document;
+        existing >> document;
+        document["version"] = 1;
+        std::ofstream out(legacy.string() + ".json");
+        out << document;
+    }
+    bool rejectedLegacy = false;
+    try { mf::NanoVdbMean::open(legacy); }
+    catch (const std::invalid_argument&) { rejectedLegacy = true; }
+    context.require(rejectedLegacy,
+                    "the node sampler rejects a field baked at old sample positions");
+
+    // The primitive generator writes exactly these three grids and no sidecar.
+    // It has no sigma metadata, so an explicit config sigma supplies the scale.
+    const std::filesystem::path primitive = tempFieldPath("primitive_three_grids.nvdb");
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> primitiveGrids;
+    for (const char* name : {"density", "alpha", "sdf"}) {
+        primitiveGrids.push_back(
+            nanovdb::io::readGrid<nanovdb::HostBuffer>(baked.path.string(), name));
+    }
+    nanovdb::io::writeGrids<nanovdb::HostBuffer, std::vector>(
+        primitive.string(), primitiveGrids, nanovdb::io::Codec::NONE, 1);
+    std::filesystem::remove(primitive.string() + ".json");
+    bool needsSigma = false;
+    try { mf::NanoVdbMean::open(primitive); }
+    catch (const std::invalid_argument&) { needsSigma = true; }
+    context.require(needsSigma, "a primitive three-grid file asks for explicit sigma");
+    const auto primitiveMean = mf::NanoVdbMean::open(primitive, baked.settings.sigma);
+    context.near(primitiveMean->evaluate(mf::Point3(0.0, 0.0, baked.radius)).value,
+                 mf::NanoVdbMean::open(baked.path)->evaluate(
+                     mf::Point3(0.0, 0.0, baked.radius)).value,
+                 0.0, "a primitive three-grid file uses the same node sampler");
+    mf::registerNanoVdbFieldTypes();
+    const mf::MeanBuildResult primitiveField = mf::buildMeanFromJson(
+        {{"mean_type", "nanovdb"}, {"grid_file", primitive.string()},
+         {"sigma", baked.settings.sigma}, {"use_alpha_grid", true}});
+    context.require(primitiveField.alphaField != nullptr &&
+                        primitiveField.alphaPositiveOnDensitySupport,
+                    "a primitive three-grid field loads its alpha and density support");
 }
 
 // loadExperimentConfig installs the config's numeric policy globally; the
@@ -556,9 +626,9 @@ void testSigmaSchema(TestContext& context) {
         const auto bakedMean = std::dynamic_pointer_cast<const mf::NanoVdbMean>(
             omitted->field.mean);
         context.require(bakedMean &&
-                        omitted->field.activeDomain.contains(bakedMean->gridBounds().minimum) &&
-                        omitted->field.activeDomain.contains(bakedMean->gridBounds().maximum),
-                        "a baked field derives its tracing domain from its grid");
+                        (omitted->field.activeDomain.minimum - bakedMean->activeNodeBounds().minimum).norm() == 0.0 &&
+                        (omitted->field.activeDomain.maximum - bakedMean->activeNodeBounds().maximum).norm() == 0.0,
+                        "a baked field traces only within the SDF active-node bounds");
     }
 
     nlohmann::json staleDomain = config;
@@ -709,9 +779,11 @@ void testOffCentreMesh(TestContext& context) {
 
     const std::filesystem::path path = tempFieldPath("sphere_offset.nvdb");
     mf::BakedGrids grids = mf::bakeMacrofacetField(mesh, settings);
-    // The frame must cover the object, not the origin.
-    context.near(grids.report.origin.x(), centre.x() - radius - 3.0 * settings.sigma, 1e-9,
-                 "the grid origin tracks the mesh, not the world origin");
+    context.near(grids.report.origin.x(), 0.0, 0.0,
+                 "the primitive grid map is anchored at the world origin");
+    const double expandedWidth = 2.0 * radius + 6.0 * settings.sigma;
+    context.near(grids.report.dx, expandedWidth / 32.0, 1e-9,
+                 "resolution divides the sigma-expanded mesh bounds");
     mf::writeFieldFile(path, grids, settings, "<offset sphere>");
 
     auto mean = mf::NanoVdbMean::open(path);
@@ -744,8 +816,6 @@ mf::GPSSField bakedRenderField(const BakedSphere& baked) {
 void testMaterialNdfRoleSeparation(TestContext& context) {
     const BakedSphere& baked = sphereField();
     const double sigma = baked.settings.sigma;
-    const double alpha = baked.settings.alpha;
-
     const mf::GPSSField field = bakedRenderField(baked);
     mf::MaterialConfig materialWithAlpha;
     materialWithAlpha.alphaField = mf::NanoVdbSampledField::open(baked.path, "alpha");
@@ -753,6 +823,7 @@ void testMaterialNdfRoleSeparation(TestContext& context) {
 
     // Sample where the bake is meaningful: on the surface.
     const mf::Point3 x(0.0, 0.0, baked.radius);
+    const double alpha = materialWithAlpha.alphaField->sample(x);
     const mf::PointPrior transport = field.pointPrior(x);
     const mf::PointPrior material = materialWithAlpha.materialNdf(field, x);
 
@@ -875,9 +946,11 @@ void testMajorantCoversAlphaField(TestContext& context) {
 
     double worstRatio = 0.0;
     int checked = 0;
+    const auto density = mf::NanoVdbSampledField::open(baked.path, "density");
     for (int i = 0; i <= 16; ++i) {
         for (int j = 0; j <= 16; ++j) {
             const mf::Point3 x(-1.0 + 2.0 * i / 16.0, -1.0 + 2.0 * j / 16.0, 0.5);
+            if (density->sample(x) == 0.0) continue;
             const mf::PositiveResult value = mf::classicProjectedArea(field, material, x, w);
             if (value.status != mf::NumericStatus::Ok) continue;
             ++checked;
@@ -932,6 +1005,7 @@ void testMajorantCoversBakedField(TestContext& context) {
             if (!(rho > 0.0)) continue;
             for (double radius : {baked.radius, baked.radius - 2.0 * sigma}) {
                 const mf::Point3 point = x * (radius / rho);
+                if (density->sample(point) == 0.0) continue;
                 const mf::PositiveResult area = mf::classicProjectedArea(field, material, point, w);
                 if (area.status != mf::NumericStatus::Ok) continue;
                 ++checked;
@@ -1062,13 +1136,13 @@ void testAnalyticFullDomainBake(TestContext& context) {
     context.require(prepared.preparedAreaMajorant.has_value() &&
                     *prepared.preparedAreaMajorant > 0.0,
                     "field preparation bakes a local projected-area majorant");
-    const auto density = NanoVdbSampledField::open(path, "density");
-    const Vector3 densityMargin = Vector3::Constant(density->voxelSize());
-    context.require(prepared.field.activeDomain.contains(
-                        density->gridBounds().minimum - densityMargin) &&
-                    prepared.field.activeDomain.contains(
-                        density->gridBounds().maximum + densityMargin),
-                    "automatic tracing domain contains the density interpolation support");
+    auto sampled = NanoVdbMean::open(path);
+    context.require((prepared.field.activeDomain.minimum - sampled->activeNodeBounds().minimum).norm() == 0.0 &&
+                    (prepared.field.activeDomain.maximum - sampled->activeNodeBounds().maximum).norm() == 0.0,
+                    "automatic tracing domain equals the full-domain SDF active-node bounds");
+    context.near(sampled->gridBounds().maximum.x() - prepared.field.activeDomain.maximum.x(),
+                 sampled->voxelSizeHint(), 1e-6 * sampled->voxelSizeHint(),
+                 "automatic tracing domain excludes the upper interpolation cell");
     writeResolvedConfig(prepared, configPath);
     {
         std::ifstream stream(configPath);
@@ -1078,7 +1152,6 @@ void testAnalyticFullDomainBake(TestContext& context) {
                      prepared.field.activeDomain.minimum.x(), 1e-12,
                      "resolved config records the automatic tracing domain");
     }
-    auto sampled = NanoVdbMean::open(path);
     context.near(sampled->evaluate(Point3::Zero()).value, -0.5, 1e-5,
                  "full-domain bake preserves the sphere's negative core");
     context.near(sampled->evaluate(Point3(0.8, 0.0, 0.0)).value, 0.3, 0.01,
@@ -1146,13 +1219,10 @@ void testNarrowBandTransport(TestContext& context) {
     prepareNanoVdbField(prepared);
     context.require(prepared.densityMajorantGrid != nullptr,
                     "narrow-band field builds its DDA majorant grid");
-    const auto importedDensity = NanoVdbSampledField::open(baked.path, "density");
-    const Vector3 margin = Vector3::Constant(importedDensity->voxelSize());
-    context.require(prepared.field.activeDomain.contains(
-                        importedDensity->gridBounds().minimum - margin) &&
-                    prepared.field.activeDomain.contains(
-                        importedDensity->gridBounds().maximum + margin),
-                    "automatic narrow-band domain contains density interpolation support");
+    const auto importedMean = NanoVdbMean::open(baked.path);
+    context.require((prepared.field.activeDomain.minimum - importedMean->activeNodeBounds().minimum).norm() == 0.0 &&
+                    (prepared.field.activeDomain.maximum - importedMean->activeNodeBounds().maximum).norm() == 0.0,
+                    "automatic narrow-band domain equals the SDF active-node bounds");
     const GPSSField field = bakedRenderField(baked);
     MaterialConfig material;
     material.alphaField = NanoVdbSampledField::open(baked.path, "alpha");

@@ -39,7 +39,7 @@ public:
     // procedural mean is scale-free -- the same sphere renders at any sigma, so
     // sigma there is a model knob and the config is its only source. A *baked*
     // field is not: sigma is frozen into its data, since the band spans +-3
-    // sigma, the background sits at +6 sigma and dx was chosen against it. The
+    // sigma, the background comes from the grid and dx was chosen against it. The
     // config may then omit "sigma" and read it from here, which is why this is
     // a capability of the field rather than a field of its own: nothing
     // downstream can tell the two sources apart, because kernel.sigma() is

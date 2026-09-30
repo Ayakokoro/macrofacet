@@ -37,11 +37,6 @@ void prepareNanoVdbField(ExperimentConfig& config) {
         config.mediumDensity = density;
         if (!density->gridBounds().valid())
             throw std::invalid_argument("nanovdb density grid has no valid spatial bounds");
-        const Vector3 margin = Vector3::Constant(density->voxelSize());
-        config.field.activeDomain.minimum = config.field.activeDomain.minimum.cwiseMin(
-            density->gridBounds().minimum - margin);
-        config.field.activeDomain.maximum = config.field.activeDomain.maximum.cwiseMax(
-            density->gridBounds().maximum + margin);
         config.field.validate();
         config.densityMajorantGrid = std::make_shared<DensityMajorantGrid>(
             *config.mediumDensity, config.field.activeDomain);
@@ -75,7 +70,7 @@ void prepareNanoVdbField(ExperimentConfig& config) {
     }
 
     std::ostringstream signature;
-    signature << "full-domain-v2|" << config.sourceFieldSpec << '|'
+    signature << "full-domain-v3|" << config.sourceFieldSpec << '|'
               << std::setprecision(17) << sigma << '|' << dx << '|'
               << config.field.activeDomain.minimum.transpose() << '|'
               << config.field.activeDomain.maximum.transpose() << '|'

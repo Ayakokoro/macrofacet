@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <limits>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace mf {
 namespace {
@@ -35,6 +36,46 @@ void requirePositiveFinite(double value, const char* name) {
     if (!(value > 0.0) || !std::isfinite(value)) {
         throw std::invalid_argument(std::string(name) + " must be a finite positive number");
     }
+}
+
+ConditionalBirthConfig parseConditionalBirth(const nlohmann::json& value,
+                                              const std::string& location) {
+    if (!value.is_object())
+        throw std::invalid_argument(location + " must be an object");
+    ConditionalBirthConfig result;
+    result.policy = value.value("policy", result.policy);
+    if (result.policy == "sample_positive_exterior") {
+        return result;
+    }
+    if (result.policy != "fixed_observation") {
+        throw std::invalid_argument(
+            location + ".policy must be sample_positive_exterior or fixed_observation");
+    }
+    if (!value.contains("value") || !value.contains("gradient")) {
+        throw std::invalid_argument(
+            location + " fixed_observation requires value and gradient");
+    }
+    result.value = value.at("value").get<double>();
+    result.gradient = vector3(value.at("gradient"));
+    if (!(result.value >= 0.0) || !std::isfinite(result.value) ||
+        !result.gradient.allFinite()) {
+        throw std::invalid_argument(location + " fixed observation must be finite with value >= 0");
+    }
+    return result;
+}
+
+bool isTransmittanceMode(const std::string& mode) {
+    return mode == "classic_local" || mode == "classic_global" ||
+           mode == "global_conditional";
+}
+
+nlohmann::json conditionalBirthJson(const ConditionalBirthConfig& birth) {
+    nlohmann::json result{{"policy", birth.policy}};
+    if (birth.policy == "fixed_observation") {
+        result["value"] = birth.value;
+        result["gradient"] = toArray(birth.gradient);
+    }
+    return result;
 }
 
 SquaredExponentialKernel roughnessKernel(double sigma, double roughness, NdfFamily family) {
@@ -92,7 +133,7 @@ void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
     // The CLI is the other way a sigma can reach a baked field, so it obeys the
     // same rule as the config key: sigma is part of the data, not a knob.
     // Sweeping it would reinterpret the band (+-3 sigma) and the background
-    // (+6 sigma) at the wrong scale and render a plausible but wrong surface.
+    // at the wrong scale and render a plausible but wrong surface.
     // An agreeing value stays allowed -- it keeps a sweep script that passes one
     // sigma to every config working -- but the field's own spelling wins, so the
     // override really is the no-op it claims to be rather than a swap to a value
@@ -237,6 +278,7 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         config.material.ggxAlpha = Vector2(alpha[0].get<double>(), alpha[1].get<double>());
     }
     config.material.alphaField = std::move(built.alphaField);
+    config.material.alphaPositiveOnDensitySupport = built.alphaPositiveOnDensitySupport;
 
     config.material.conductor.eta = vector3(material.at("eta_rgb"));
     config.material.conductor.k = vector3(material.at("k_rgb"));
@@ -288,6 +330,115 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     if (render.contains("flight_table_cells"))
         throw std::invalid_argument("obsolete render.flight_table_cells setting");
     config.render.threadCount = render.value("thread_count", 0);
+
+    if (root.contains("transmittance")) {
+        const auto& experiment = root.at("transmittance");
+        if (!experiment.is_object())
+            throw std::invalid_argument("transmittance must be an object");
+        TransmittanceConfig transmittance;
+        if (experiment.contains("modes")) {
+            const auto& modes = experiment.at("modes");
+            if (!modes.is_array() || modes.empty())
+                throw std::invalid_argument("transmittance.modes must be a nonempty array");
+            transmittance.modes.clear();
+            std::unordered_set<std::string> uniqueModes;
+            for (const auto& entry : modes) {
+                const std::string mode = entry.get<std::string>();
+                if (!isTransmittanceMode(mode))
+                    throw std::invalid_argument("unknown transmittance mode: " + mode);
+                if (!uniqueModes.insert(mode).second)
+                    throw std::invalid_argument("duplicate transmittance mode: " + mode);
+                transmittance.modes.push_back(mode);
+            }
+        }
+        if (experiment.contains("curve")) {
+            const auto& curve = experiment.at("curve");
+            transmittance.bins = curve.value("bins", transmittance.bins);
+            transmittance.spacing = curve.value("spacing", transmittance.spacing);
+            transmittance.distanceOrigin =
+                curve.value("distance_origin", transmittance.distanceOrigin);
+        }
+        if (transmittance.bins < 2 || transmittance.spacing != "linear" ||
+            transmittance.distanceOrigin != "ray_origin") {
+            throw std::invalid_argument(
+                "transmittance.curve requires bins >= 2, spacing=linear, "
+                "and distance_origin=ray_origin");
+        }
+        if (experiment.contains("monte_carlo")) {
+            const auto& monteCarlo = experiment.at("monte_carlo");
+            transmittance.trialsPerRay =
+                monteCarlo.value("trials_per_ray", transmittance.trialsPerRay);
+            transmittance.confidenceLevel =
+                monteCarlo.value("confidence_level", transmittance.confidenceLevel);
+            transmittance.writeRawSamples =
+                monteCarlo.value("write_raw_samples", transmittance.writeRawSamples);
+        }
+        if (transmittance.trialsPerRay < 1 ||
+            !(transmittance.confidenceLevel > 0.0 &&
+              transmittance.confidenceLevel < 1.0) ||
+            !std::isfinite(transmittance.confidenceLevel)) {
+            throw std::invalid_argument("invalid transmittance Monte Carlo settings");
+        }
+        if (experiment.contains("conditional_birth")) {
+            transmittance.conditionalBirth = parseConditionalBirth(
+                experiment.at("conditional_birth"), "transmittance.conditional_birth");
+        }
+        if (experiment.contains("comparison")) {
+            const auto& comparison = experiment.at("comparison");
+            transmittance.localTransportReference = comparison.value(
+                "local_transport_reference", transmittance.localTransportReference);
+            if (transmittance.localTransportReference != "classic_global") {
+                throw std::invalid_argument(
+                    "transmittance comparison currently requires classic_global as the local reference");
+            }
+            if (comparison.contains("constant_exponential")) {
+                const auto& exponential = comparison.at("constant_exponential");
+                transmittance.constantExponentialEnabled =
+                    exponential.value("enabled", transmittance.constantExponentialEnabled);
+                transmittance.constantExponentialFit =
+                    exponential.value("fit", transmittance.constantExponentialFit);
+            }
+            if (transmittance.constantExponentialFit != "censored_mle") {
+                throw std::invalid_argument(
+                    "transmittance constant exponential fit must be censored_mle");
+            }
+        }
+        if (!experiment.contains("rays") || !experiment.at("rays").is_array() ||
+            experiment.at("rays").empty()) {
+            throw std::invalid_argument("transmittance.rays must be a nonempty array");
+        }
+        std::unordered_set<std::string> rayIds;
+        for (std::size_t index = 0; index < experiment.at("rays").size(); ++index) {
+            const auto& rayJson = experiment.at("rays").at(index);
+            const std::string location =
+                "transmittance.rays[" + std::to_string(index) + "]";
+            TransmittanceRayConfig ray;
+            ray.id = rayJson.at("id").get<std::string>();
+            ray.group = rayJson.value("group", ray.group);
+            ray.origin = vector3(rayJson.at("origin"));
+            ray.direction = normalizedOrThrow(vector3(rayJson.at("direction")));
+            ray.maximumDistance = rayJson.at("max_distance").get<double>();
+            if (ray.id.empty() || !rayIds.insert(ray.id).second)
+                throw std::invalid_argument(location + ".id must be nonempty and unique");
+            if (ray.group.empty())
+                throw std::invalid_argument(location + ".group must be nonempty");
+            requirePositiveFinite(ray.maximumDistance,
+                                  (location + ".max_distance").c_str());
+            if (!ray.origin.allFinite())
+                throw std::invalid_argument(location + ".origin must be finite");
+            if (rayJson.contains("bins")) {
+                ray.bins = rayJson.at("bins").get<int>();
+                if (*ray.bins < 2)
+                    throw std::invalid_argument(location + ".bins must be at least 2");
+            }
+            if (rayJson.contains("conditional_birth")) {
+                ray.conditionalBirth = parseConditionalBirth(
+                    rayJson.at("conditional_birth"), location + ".conditional_birth");
+            }
+            transmittance.rays.push_back(std::move(ray));
+        }
+        config.transmittance = std::move(transmittance);
+    }
     config.outputDirectory = root.at("output_directory").get<std::string>();
 
     if (config.render.width < 1 || config.render.height < 1 || config.render.samplesPerPixel < 1 ||
@@ -371,6 +522,39 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         {"tracking_segments", 2},
         {"far_interval_thinning", true},
         {"birth_policy", "sampled_positive_exterior"}};
+    if (config.transmittance) {
+        const TransmittanceConfig& source = *config.transmittance;
+        nlohmann::json experiment;
+        experiment["modes"] = source.modes;
+        experiment["curve"] = {
+            {"bins", source.bins},
+            {"spacing", source.spacing},
+            {"distance_origin", source.distanceOrigin}};
+        experiment["monte_carlo"] = {
+            {"trials_per_ray", source.trialsPerRay},
+            {"confidence_level", source.confidenceLevel},
+            {"write_raw_samples", source.writeRawSamples}};
+        experiment["conditional_birth"] = conditionalBirthJson(source.conditionalBirth);
+        experiment["comparison"] = {
+            {"local_transport_reference", source.localTransportReference},
+            {"constant_exponential", {
+                {"enabled", source.constantExponentialEnabled},
+                {"fit", source.constantExponentialFit}}}};
+        experiment["rays"] = nlohmann::json::array();
+        for (const TransmittanceRayConfig& ray : source.rays) {
+            nlohmann::json entry{
+                {"id", ray.id},
+                {"group", ray.group},
+                {"origin", toArray(ray.origin)},
+                {"direction", toArray(ray.direction)},
+                {"max_distance", ray.maximumDistance}};
+            if (ray.bins) entry["bins"] = *ray.bins;
+            if (ray.conditionalBirth)
+                entry["conditional_birth"] = conditionalBirthJson(*ray.conditionalBirth);
+            experiment["rays"].push_back(std::move(entry));
+        }
+        result["transmittance"] = std::move(experiment);
+    }
     result["numeric"] = {{"relative_tolerance", config.numeric.relativeTolerance},
         {"absolute_tolerance", config.numeric.absoluteTolerance},
         {"distance_absolute_tolerance", config.numeric.distanceAbsoluteTolerance},

@@ -15,7 +15,7 @@ namespace mf {
 // Two behaviours differ from the analytic fields on purpose:
 //
 //  - Where all eight interpolation samples are inactive, evaluate() returns
-//    the grid's background (+6 sigma) with zero gradient. At active/inactive
+//    the grid's background (zero for mesh bakes) with zero gradient. At active/inactive
 //    boundaries it blends stored values with the background and can have a
 //    nonzero gradient. Queries outside the grid remain defined.
 //  - bounds() uses the grid's global value range and gradient bound for every
@@ -51,8 +51,11 @@ public:
     double sigma() const;
     double background() const;
     const std::filesystem::path& gridFile() const;
-    // The grid's world-space bounding box, not the exact active-band mask.
+    // Includes the interpolation cell after the highest active node.
     const Bounds3& gridBounds() const;
+    // Bounding box through the outermost stored SDF nodes; not the exact
+    // active-band mask of a sparse bake.
+    const Bounds3& activeNodeBounds() const;
 
 private:
     NanoVdbMean();

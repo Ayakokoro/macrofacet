@@ -13,11 +13,10 @@
 
 namespace mf {
 
-// The JSON written next to a .nvdb. It is a convenience, never the source of
-// truth: everything the renderer needs is also inside the .nvdb itself (the
-// sigma grid carries sigma, every grid carries its own background).
+// The JSON written next to a .nvdb. Version 2 marks the index-node sampling
+// convention; the sigma grid and each grid's background remain self-contained.
 struct FieldSidecar {
-    int version = 1;
+    int version = 2;
     double sigma = 0.0;
     double alpha = 0.0;
     double dx = 0.0;

@@ -43,14 +43,13 @@ void printUsage() {
         "  --out <file.nvdb>     output path (default out.nvdb; a .json sidecar is written too)\n"
         "  --sigma <s>           surface position standard deviation (default 0.05)\n"
         "  --alpha <a>           Beckmann alpha written to the material grid (default 0.5)\n"
-        "  --x --y --z <n>       voxels per axis over the mesh bounding box (default 32)\n"
+        "  --x --y --z <n>       divisions per axis over the expanded bounding box (default 32)\n"
         "  --band <k>            write the grids only inside +-k sigma (default 3)\n"
-        "  --background <k>      sdf background, in sigma (default 6)\n"
         "  --threads <n>         bake threads (default: hardware concurrency)\n"
         "  --symmetric           use |distance| in Density() instead of the signed value\n"
         "  --sign-mode <m>       winding (default) | threshold\n"
-        "  --no-prune-band       query the winding number for every voxel (slower, and\n"
-        "                        the only correct choice for a non-watertight mesh)\n"
+        "  --prune-band          skip winding for nodes outside unsigned distance band\n"
+        "                        (only exact for a watertight mesh)\n"
         "  --full-domain         retain signed distance throughout the baked box\n"
         "  --allow-sparse        do not fail when dx is too coarse for the band\n"
         "\n"
@@ -92,8 +91,6 @@ Options parseOptions(int argc, char** argv) {
             options.bake.resolution[2] = std::stoi(requireValue(argc, argv, index));
         } else if (argument == "--band") {
             options.bake.bandSigmas = std::stod(requireValue(argc, argv, index));
-        } else if (argument == "--background") {
-            options.bake.backgroundSigmas = std::stod(requireValue(argc, argv, index));
         } else if (argument == "--threads") {
             options.bake.threadCount = std::stoi(requireValue(argc, argv, index));
         } else if (argument == "--symmetric") {
@@ -103,8 +100,8 @@ Options parseOptions(int argc, char** argv) {
             if (mode == "winding") options.bake.signMode = mf::SignMode::Winding;
             else if (mode == "threshold") options.bake.signMode = mf::SignMode::Threshold;
             else throw std::invalid_argument("unknown sign mode: " + mode);
-        } else if (argument == "--no-prune-band") {
-            options.bake.pruneByUnsignedDistance = false;
+        } else if (argument == "--prune-band") {
+            options.bake.pruneByUnsignedDistance = true;
         } else if (argument == "--full-domain") {
             options.bake.fullDomain = true;
         } else if (argument == "--allow-sparse") {

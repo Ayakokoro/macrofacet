@@ -26,8 +26,9 @@ struct CommandLine {
     std::optional<int> height;
     std::optional<int> threadCount;
     std::optional<std::string> mode;
-    int rays = 1024;
-    int bins = 64;
+    std::optional<int> rays;
+    std::optional<int> bins;
+    std::optional<int> trials;
     bool preserveSlope = false;
 };
 
@@ -92,6 +93,8 @@ CommandLine parseCommandLine(int argc, char** argv) {
             options.rays = parsePositiveInteger(argument, value);
         } else if (argument == "--bins") {
             options.bins = parsePositiveInteger(argument, value);
+        } else if (argument == "--trials") {
+            options.trials = parsePositiveInteger(argument, value);
         } else throw std::invalid_argument("unknown option: " + argument);
     }
     if (options.configPath.empty()) throw std::invalid_argument("missing --config <path>");
@@ -115,7 +118,9 @@ int main(int argc, char** argv) {
         std::cerr << "usage: macrofacet_experiments render "
                      "--config <file> [--sigma <value>] [--roughness <value>] [--preserve-slope] "
                      "[--width <pixels>] [--height <pixels>] [--spp <count>] "
-                     "[--threads <count>] [--output <directory>]\n";
+                     "[--threads <count>] [--output <directory>]\n"
+                     "       macrofacet_experiments curves --config <file> "
+                     "[--trials <count>] [--bins <count>] [--output <directory>]\n";
         return 2;
     }
     try {
@@ -133,6 +138,21 @@ int main(int argc, char** argv) {
             config.transportMode != "classic_global" &&
             config.transportMode != "global_conditional" && config.transportMode != "all")
             throw std::invalid_argument("unknown transport mode: " + config.transportMode);
+        if (command == "curves" && config.transmittance) {
+            if (options.rays) {
+                throw std::invalid_argument(
+                    "--rays is only available for legacy configs without transmittance.rays");
+            }
+            if (options.bins) {
+                config.transmittance->bins = *options.bins;
+                for (mf::TransmittanceRayConfig& ray : config.transmittance->rays)
+                    ray.bins = *options.bins;
+            }
+            if (options.trials) config.transmittance->trialsPerRay = *options.trials;
+        } else if (options.trials) {
+            throw std::invalid_argument(
+                "--trials requires an explicit transmittance block in the config");
+        }
 #if defined(MACROFACET_HAS_FIELDS)
         mf::prepareNanoVdbField(config);
 #else
@@ -141,7 +161,8 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(config.outputDirectory);
         mf::writeResolvedConfig(config, config.outputDirectory / "resolved_config.json");
         if (command == "render") mf::runRenderExperiments(config);
-        else mf::runTransmittanceCurves(config, options.rays, options.bins);
+        else mf::runTransmittanceCurves(config, options.rays.value_or(1024),
+                                        options.bins.value_or(64));
         std::ofstream summary(config.outputDirectory / "run_summary.json");
         summary << "{\n  \"success\": true,\n  \"command\": \"" << command
                 << "\",\n  \"seed\": " << config.seed

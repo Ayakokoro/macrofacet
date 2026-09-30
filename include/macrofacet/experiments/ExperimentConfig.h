@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace mf {
 
@@ -23,6 +24,40 @@ struct RenderConfig {
     int rouletteStartDepth = 5;
     int safetyDepthCap = 64;
     int threadCount = 0;  // 0 selects the hardware concurrency
+};
+
+struct ConditionalBirthConfig {
+    // sample_positive_exterior matches camera-ray initialization. fixed_observation
+    // is useful for comparing flights that share an exact GP history.
+    std::string policy = "sample_positive_exterior";
+    double value = 0.0;
+    Vector3 gradient = Vector3::Zero();
+};
+
+struct TransmittanceRayConfig {
+    std::string id;
+    std::string group = "ungrouped";
+    Point3 origin = Point3::Zero();
+    Vector3 direction = Vector3::UnitZ();
+    double maximumDistance = 0.0;
+    std::optional<int> bins;
+    std::optional<ConditionalBirthConfig> conditionalBirth;
+};
+
+struct TransmittanceConfig {
+    std::vector<std::string> modes{
+        "classic_local", "classic_global", "global_conditional"};
+    int bins = 256;
+    std::string spacing = "linear";
+    std::string distanceOrigin = "ray_origin";
+    int trialsPerRay = 16384;
+    double confidenceLevel = 0.95;
+    bool writeRawSamples = false;
+    ConditionalBirthConfig conditionalBirth;
+    std::string localTransportReference = "classic_global";
+    bool constantExponentialEnabled = true;
+    std::string constantExponentialFit = "censored_mle";
+    std::vector<TransmittanceRayConfig> rays;
 };
 
 struct ExperimentConfig {
@@ -46,6 +81,7 @@ struct ExperimentConfig {
     // In local mode only, an alpha grid overrides this covariance per point.
     std::optional<double> materialRoughness;
     RenderConfig render;
+    std::optional<TransmittanceConfig> transmittance;
     NumericPolicy numeric;
     std::filesystem::path outputDirectory = "outputs/macrofacet_experiments";
     double beckmannMixtureWeight = 0.5;

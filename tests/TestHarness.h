@@ -36,6 +36,7 @@ void testMacrofacetBaseline(TestContext& context);
 void testFlightKernels(TestContext& context);
 void testSampling(TestContext& context);
 void testRenderingThreads(TestContext& context);
+void testTransmittanceConfig(TestContext& context);
 void testCutawayMean(TestContext& context);
 void testShaderBallMean(TestContext& context);
 void testMaterialRoughness(TestContext& context);

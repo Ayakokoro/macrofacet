@@ -17,6 +17,10 @@ namespace mf {
 struct MeanBuildResult {
     MeanFieldPtr mean;
     ScalarFieldPtr alphaField;
+    // Certified when a zero-background alpha grid is positive at every node
+    // carrying positive density, so no positive-density interpolation can have
+    // alpha zero.
+    bool alphaPositiveOnDensitySupport = false;
     // Baked fields may provide a tracing bounding box, not an exact active-band
     // mask. Procedural fields leave this empty and require domain_min/domain_max.
     std::optional<Bounds3> activeDomain;

@@ -5,28 +5,6 @@
     "mean_type": "nanovdb",
     "grid_file": "outputs/fields/shader_ball.nvdb",
     "use_alpha_grid": false,
-    "correlation_lengths": [
-      0.0044,
-      0.0044,
-      0.0044
-    ],
-    "kernel_rotation": [
-      [
-        1.0,
-        0.0,
-        0.0
-      ],
-      [
-        0.0,
-        1.0,
-        0.0
-      ],
-      [
-        0.0,
-        0.0,
-        1.0
-      ]
-    ],
     "outside_domain": "vacuum"
   },
   "material": {
@@ -42,9 +20,11 @@
       2.5,
       2.2
     ],
-    "force_unit_fresnel_for_energy_test": false
+    "force_unit_fresnel_for_energy_test": false,
+    "roughness": 0.5
   },
   "transport": {
+    "mode": "classic_local",
     "classic_phase_proposal": "target_vndf",
     "beckmann_mixture_weight": 0.9,
     "roulette_start_depth": 8
@@ -62,7 +42,7 @@
   "render": {
     "width": 512,
     "height": 512,
-    "samples_per_pixel": 64,
+    "samples_per_pixel": 256,
     "camera_position": [
       0.134,
       -0.4,
@@ -76,6 +56,64 @@
     "vertical_fov_degrees": 16.0,
     "environment": "directional_gradient",
     "linear_output_format": "pfm"
+  },
+  "transmittance": {
+    "modes": [
+      "classic_local",
+      "global_conditional"
+    ],
+    "curve": {
+      "bins": 256,
+      "spacing": "linear",
+      "distance_origin": "ray_origin"
+    },
+    "monte_carlo": {
+      "trials_per_ray": 4096,
+      "confidence_level": 0.95,
+      "write_raw_samples": false
+    },
+    "conditional_birth": {
+      "policy": "sample_positive_exterior"
+    },
+    "comparison": {
+      "local_transport_reference": "classic_global",
+      "constant_exponential": {
+        "enabled": false,
+        "fit": "censored_mle"
+      }
+    },
+    "rays": [
+      {
+        "id": "camera_center",
+        "group": "camera",
+        "origin": [
+          0.134,
+          -0.178,
+          0.153
+        ],
+        "direction": [
+          -0.134,
+          0.178,
+          -0.112
+        ],
+        "max_distance": 0.5
+      },
+      {
+        "id": "camera_offset",
+        "group": "camera",
+        "origin": [
+          0.134,
+          -0.178,
+          0.153
+        ],
+        "direction": [
+          -0.104,
+          0.178,
+          -0.112
+        ],
+        "max_distance": 0.5
+      }
+    ]
   },
   "output_directory": "outputs/render_shader_ball_nanovdb"
 }

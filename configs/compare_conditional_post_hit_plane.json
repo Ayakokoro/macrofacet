@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "seed": 17429,
+  "field": {
+    "mean_type": "plane",
+    "plane_normal": [0.0, 0.0, 1.0],
+    "plane_offset": 0.0,
+    "sigma": 0.03,
+    "correlation_lengths": [0.25, 0.25, 0.25],
+    "bake_voxel_size": 0.005,
+    "domain_min": [-0.4, -0.1, -0.12],
+    "domain_max": [0.4, 0.1, 0.12]
+  },
+  "material": {
+    "ndf_family": "generalized_gaussian",
+    "gp_model": "global_pointwise",
+    "eta_rgb": [0.2, 0.9, 1.1],
+    "k_rgb": [3.9, 2.5, 2.2]
+  },
+  "transport": {
+    "classic_phase_proposal": "target_vndf",
+    "roulette_start_depth": 5
+  },
+  "numeric": {
+    "relative_tolerance": 1e-6,
+    "absolute_tolerance": 1e-9,
+    "max_quadrature_subdivisions": 2048,
+    "max_root_iterations": 128,
+    "distance_absolute_tolerance": 1e-10,
+    "distance_relative_tolerance": 1e-8
+  },
+  "render": {
+    "width": 16,
+    "height": 16,
+    "samples_per_pixel": 1,
+    "camera_position": [0.0, 0.0, 0.2],
+    "camera_target": [0.0, 0.0, 0.0],
+    "vertical_fov_degrees": 45.0,
+    "environment": "directional_gradient"
+  },
+  "transmittance": {
+    "modes": ["classic_global", "global_conditional"],
+    "curve": {
+      "bins": 256,
+      "spacing": "linear",
+      "distance_origin": "ray_origin"
+    },
+    "monte_carlo": {
+      "trials_per_ray": 4096,
+      "confidence_level": 0.95,
+      "write_raw_samples": false
+    },
+    "comparison": {
+      "local_transport_reference": "classic_global",
+      "constant_exponential": {
+        "enabled": true,
+        "fit": "censored_mle"
+      }
+    },
+    "rays": [
+      {
+        "id": "surface_outgoing_gx_010",
+        "group": "post_hit_fixed_gradient",
+        "origin": [0.0, 0.0, 0.0],
+        "direction": [1.0, 0.0, 0.0],
+        "max_distance": 0.3,
+        "conditional_birth": {
+          "policy": "fixed_observation",
+          "value": 0.0,
+          "gradient": [0.1, 0.0, 1.0]
+        }
+      }
+    ]
+  },
+  "output_directory": "outputs/compare_conditional_post_hit_plane"
+}
