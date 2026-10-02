@@ -82,7 +82,12 @@ inline DynamicGaussian conditionGaussianDynamic(const DynamicGaussian& target,
     if (resultEig.info() != Eigen::Success) {
         throw NumericError(NumericStatus::InvalidCovariance, "conditional eigensolver failed");
     }
-    const double resultTolerance = covarianceTolerance(
+    // Forming a Schur complement amplifies covariance roundoff by the norm of
+    // the standardized observation pseudo-inverse. This matters for nearby GP
+    // observations, whose difference mode has a very small variance.
+    const double conditioningAmplification = std::min(
+        1e8, std::max(1.0, inverseValues.maxCoeff()));
+    const double resultTolerance = conditioningAmplification * covarianceTolerance(
         std::max({1.0, target.covariance.norm(), result.covariance.norm()}), policy);
     if (resultEig.eigenvalues().minCoeff() < -resultTolerance) {
         throw NumericError(NumericStatus::InvalidCovariance, "conditional covariance is not PSD");

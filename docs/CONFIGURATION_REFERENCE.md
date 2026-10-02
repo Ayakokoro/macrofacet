@@ -1,6 +1,6 @@
 # Configuration reference
 
-The renderer supports Classic local/global DDA null tracking and global conditional GP delta tracking. Commands are `render` and `curves`. Old `fixed_flight`, `modes`, `reference`, `render.flight_table_cells`, and legacy Conditional29 transport settings are rejected.
+The renderer supports Classic local/global DDA null tracking and global conditional GP delta tracking. Commands are `render`, `curves`, and the independent 1D `first-passage` experiment. Old `fixed_flight`, `modes`, `reference`, `render.flight_table_cells`, and legacy Conditional29 transport settings are rejected.
 
 A config contains `schema_version`, `seed`, `field`, `material`, `transport`, `numeric`, `render`, and `output_directory`. See `configs/macrofacet_ci.json` for a complete small example.
 
@@ -66,3 +66,11 @@ does not dilute its rate. Explicit experiments write one long-form curve CSV,
 one summary CSV, a ray-geometry CSV, optional raw trial samples, and one SVG per
 ray. `--trials` and `--bins` override the JSON budgets for quick checks;
 `--rays` remains limited to legacy configs without explicit rays.
+
+## First-passage experiment
+
+`first-passage` uses a separate minimal JSON schema rooted at `first_passage`; it does not require `field`, `material`, `render`, or NanoVDB. See `configs/first_passage_kernels.json`. Its `kernels` array accepts `squared_exponential`, `matern_3_2`, `matern_5_2`, and `rational_quadratic`, each with `id`, `variance`, and `length_scale`; rational quadratic additionally accepts `alpha`.
+
+`grid.max_time` and `grid.step_sizes` define a finest exact Gaussian grid and coupled coarser crossing checks. Every step must divide `max_time` and be an integer multiple of the finest step. `initial_condition` currently supports a fixed value strictly above `process.threshold`. `monte_carlo.trajectories`, `monte_carlo.thread_count`, `curve.bins`, and `state_analysis` control the risk-set hazard, parallelism, survivor-state snapshots, and \((X,X')\)-conditioned future-event grid. `rice_series` enables the start-conditioned Rice expansion; `max_order` currently accepts 1 or 2, while its tolerances and subdivision budget control the nested Gaussian-CDF and time quadratures. A zero thread count selects hardware concurrency without changing per-trajectory random streams. The CLI accepts `--trials`, `--bins`, `--threads`, and `--output` overrides.
+
+Outputs include `first_passage_curves.csv`, `first_passage_summary.csv`, survivor-state CSV files, survival/hazard SVG plots, `first_passage_rice_density.svg`, and a resolved config. The curve CSV reports Monte Carlo first-passage hazard beside the endpoint-conditioned \(\Sigma_1\), pointwise \(\Sigma_2\), ordinary Rice downcrossing intensity, and the start-conditioned Rice terms \(\bar W_1(t)\), \(\int_0^t\bar W_2(u,t)du\), and their order-two density. It also compares Monte Carlo survival with the analytic start-conditioned endpoint probability, survival integrated from \(\Sigma_1\), and the pointwise exponential survival from \(\Sigma_2\). Full definitions and limitations are in [FIRST_PASSAGE_EXPERIMENT.md](FIRST_PASSAGE_EXPERIMENT.md).

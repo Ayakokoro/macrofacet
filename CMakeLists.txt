@@ -35,6 +35,8 @@ add_library(macrofacet
     src/transport/CollisionGradientSampler.cpp
     src/integrator/MacrofacetPathTracer.cpp
     src/experiments/ExperimentConfig.cpp
+    src/experiments/FirstPassageRice.cpp
+    src/experiments/FirstPassageExperiment.cpp
     src/experiments/RenderExperiment.cpp)
 target_sources(macrofacet PRIVATE src/experiments/TransmittanceCurves.cpp)
 
@@ -61,6 +63,7 @@ option(MACROFACET_BUILD_FIELDS "Build the NanoVDB field generator" ON)
 if(MACROFACET_BUILD_FIELDS)
     find_package(nanovdb CONFIG REQUIRED)
     find_package(libigl CONFIG REQUIRED)
+    find_package(OpenVDB CONFIG REQUIRED)
 
     # The vcpkg libigl port does not install igl/raytri.c; see src/ext/igl_shim.
     add_library(igl_raytri_shim INTERFACE)
@@ -97,6 +100,15 @@ if(MACROFACET_BUILD_FIELDS)
         target_compile_options(macrofacet_fieldgen PRIVATE /W4 /permissive- /EHsc /utf-8)
     endif()
 
+    add_executable(macrofacet_nvdb_to_tungsten tools/nvdb_to_tungsten/main.cpp)
+    target_link_libraries(macrofacet_nvdb_to_tungsten PRIVATE
+        nanovdb::nanovdb OpenVDB::openvdb nlohmann_json::nlohmann_json)
+    if(MSVC)
+        target_compile_options(macrofacet_nvdb_to_tungsten PRIVATE /W4 /permissive- /EHsc /utf-8)
+    else()
+        target_compile_options(macrofacet_nvdb_to_tungsten PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
     # Linking the field library is what makes a config's `"mean_type": "nanovdb"`
     # resolvable in a render run. The macro guards the explicit registration call
     # in ExperimentMain.cpp, so -DMACROFACET_BUILD_FIELDS=OFF still yields a
@@ -115,6 +127,7 @@ set(MACROFACET_TEST_SOURCES
     tests/test_cutaway_mean.cpp
     tests/test_shader_ball_mean.cpp
     tests/test_material_roughness.cpp
+    tests/test_first_passage.cpp
     tests/test_transmittance_config.cpp
     tests/test_rendering_threads.cpp)
 set(MACROFACET_TEST_LIBRARIES macrofacet)

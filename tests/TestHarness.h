@@ -40,6 +40,7 @@ void testTransmittanceConfig(TestContext& context);
 void testCutawayMean(TestContext& context);
 void testShaderBallMean(TestContext& context);
 void testMaterialRoughness(TestContext& context);
+void testFirstPassage(TestContext& context);
 
 #if defined(MACROFACET_TEST_FIELDS)
 void testNanoVdbField(TestContext& context);

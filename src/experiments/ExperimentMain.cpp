@@ -1,4 +1,5 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
+#include "macrofacet/experiments/FirstPassageExperiment.h"
 #include "macrofacet/experiments/RenderExperiment.h"
 #include "macrofacet/experiments/TransmittanceCurves.h"
 #if defined(MACROFACET_HAS_FIELDS)
@@ -63,7 +64,8 @@ CommandLine parseCommandLine(int argc, char** argv) {
     if (argc < 2) throw std::invalid_argument("missing command");
     CommandLine options;
     options.command = argv[1];
-    if (options.command != "render" && options.command != "curves")
+    if (options.command != "render" && options.command != "curves" &&
+        options.command != "first-passage")
         throw std::invalid_argument("unknown command: " + options.command);
     for (int i = 2; i < argc; ++i) {
         const std::string argument = argv[i];
@@ -120,12 +122,37 @@ int main(int argc, char** argv) {
                      "[--width <pixels>] [--height <pixels>] [--spp <count>] "
                      "[--threads <count>] [--output <directory>]\n"
                      "       macrofacet_experiments curves --config <file> "
-                     "[--trials <count>] [--bins <count>] [--output <directory>]\n";
+                     "[--trials <count>] [--bins <count>] [--output <directory>]\n"
+                     "       macrofacet_experiments first-passage --config <file> "
+                     "[--trials <count>] [--bins <count>] [--threads <count>] "
+                     "[--output <directory>]\n";
         return 2;
     }
     try {
         const CommandLine options = parseCommandLine(argc, argv);
         const std::string& command = options.command;
+        if (command == "first-passage") {
+            if (options.sigma || options.roughness || options.preserveSlope ||
+                options.samplesPerPixel || options.width || options.height ||
+                options.mode || options.rays) {
+                throw std::invalid_argument(
+                    "first-passage accepts only --config, --trials, --bins, --threads, and --output");
+            }
+            mf::FirstPassageExperimentConfig firstPassage =
+                mf::loadFirstPassageExperimentConfig(options.configPath);
+            if (options.outputDirectory) firstPassage.outputDirectory = *options.outputDirectory;
+            if (options.trials) firstPassage.trajectories = *options.trials;
+            if (options.bins) firstPassage.curveBins = *options.bins;
+            if (options.threadCount.has_value()) firstPassage.threadCount = *options.threadCount;
+            mf::runFirstPassageExperiment(firstPassage);
+            std::ofstream summary(firstPassage.outputDirectory / "run_summary.json");
+            summary << "{\n  \"success\": true,\n  \"command\": \"first-passage\",\n"
+                    << "  \"seed\": " << firstPassage.seed << ",\n"
+                    << "  \"trajectories\": " << firstPassage.trajectories << "\n}\n";
+            std::cout << "completed first-passage -> "
+                      << firstPassage.outputDirectory.string() << '\n';
+            return 0;
+        }
         mf::ExperimentConfig config = mf::loadExperimentConfig(options.configPath);
         mf::applyFieldOverrides(config, options.sigma, options.roughness, options.preserveSlope);
         if (options.outputDirectory) config.outputDirectory = *options.outputDirectory;

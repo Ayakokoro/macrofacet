@@ -34,6 +34,9 @@ build\Release\macrofacet_experiments.exe render --config configs\macrofacet_ci.j
 build\Release\macrofacet_experiments.exe render --config configs\render_shader_ball_nanovdb.json
 build\Release\macrofacet_experiments.exe render --config configs\macrofacet_ci.json --mode all --width 16 --height 16 --spp 8
 build\Release\macrofacet_experiments.exe curves --config configs\macrofacet_ci.json --rays 1024 --bins 64
+build\Release\macrofacet_experiments.exe first-passage --config configs\first_passage_kernels.json
 ```
 
 The renderer writes PFM images, BMP previews, `render_summary.csv`, and `resolved_config.json`. The `curves` command writes per-ray collision data and a comparison CSV/SVG. See the [configuration reference](docs/CONFIGURATION_REFERENCE.md), [conditional rendering guide](docs/CONDITIONAL_RENDERING.md), [NanoVDB tracing guide](docs/NVDB_TRACING.md), and [scene rendering guide](docs/SCENE_RENDERING.md). Earlier transport derivations and implementation reports remain as historical research notes.
+
+The independent `first-passage` command samples conditioned 1D Gaussian processes and measures the no-history-approximation survival and hazard curves for several kernels. It also records survivor \((X,X')\) states and compares the Monte Carlo hazard with the endpoint-conditioned and pointwise approximations. See [the first-passage experiment guide](docs/FIRST_PASSAGE_EXPERIMENT.md).
