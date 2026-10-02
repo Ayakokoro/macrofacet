@@ -17,10 +17,9 @@ PointPrior MaterialConfig::materialNdf(const GPSSField& field, const Point3& x) 
     }
     if (alphaField) {
         const double alpha = alphaField->sample(x);
-        // The local isotropic SE model has ell = sqrt(2) * sigma / alpha.
-        // Its gradient covariance, including the local normal component, is
-        // sigma^2 / ell^2 I = alpha^2 / 2 I. Without a grid, the configured
-        // global roughness supplies this same covariance through field.kernel.
+        // Alpha fixes the one-point gradient covariance directly, independent
+        // of the spatial kernel family. Without a grid, configured global
+        // roughness supplies this same covariance through field.kernel.
         prior.covarianceG = (0.5 * alpha * alpha) * Matrix3::Identity();
     }
     return prior;

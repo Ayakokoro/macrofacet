@@ -77,6 +77,21 @@ void testFlightKernels(TestContext& context) {
     FlightState surface = startExternalFlight(Point3::Zero(), Vector3::UnitX());
     surface.birthGradient = Vector3(0.2, 0.0, 1.0);
     ConditionalFlightKernel conditioned(field, surface);
+    {
+        GPSSField maternField = field;
+        maternField.kernel = CovarianceKernel::fromGradientCovariance(
+            CovarianceKernelType::Matern52, field.kernel.sigma(),
+            field.kernel.gradientCovarianceAtZero());
+        bool rejected = false;
+        try {
+            (void)ConditionalFlightKernel(maternField, surface);
+        } catch (const std::invalid_argument& error) {
+            rejected = std::string(error.what()).find("global_conditional") !=
+                       std::string::npos;
+        }
+        context.require(rejected,
+                        "non-SE conditional transport is rejected instead of using SE formulas");
+    }
     material.gpModel = GpModel::GlobalPointwise;
     ClassicFlightKernel pointwise(field, material, surface);
     const double age = 0.8;

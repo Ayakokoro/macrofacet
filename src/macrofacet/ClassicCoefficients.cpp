@@ -87,8 +87,7 @@ double classicAreaMajorant(const GPSSField& field, const MaterialConfig& materia
             }
             maximumMeanGradient = bounds.maximumGradientNorm;
         }
-        double trace = (field.kernel.sigma() * field.kernel.sigma() *
-                        field.kernel.precision()).trace();
+        double trace = field.kernel.gradientCovarianceAtZero().trace();
         if (material.alphaField) {
             const ScalarBounds alphaBounds = material.alphaField->bounds(domain);
             if (!alphaBounds.certified) {

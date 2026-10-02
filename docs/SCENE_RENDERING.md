@@ -140,9 +140,10 @@ large value produces a broad stochastic shell with more multiple scattering and 
 appearance.
 
 For configurations specified by `field.correlation_lengths`, changing `sigma` without
-`--preserve-slope` also changes the gradient covariance
-`sigma^2 * kernelPrecision`, hence the normal distribution and roughness. With
-`--preserve-slope`, the command rescales kernel precision so gradient covariance stays fixed. This
+`--preserve-slope` also changes the selected kernel's zero-distance gradient covariance,
+hence the normal distribution and
+roughness. With `--preserve-slope`, the command rescales the family-specific spatial metric so
+gradient covariance stays fixed. This
 is the recommended mode for an isolated thickness comparison.
 
 This remains a Gaussian-process statistical *surface* model. It can look volumetric, but it is not
@@ -169,17 +170,18 @@ the relevant entries in an otherwise complete scene configuration:
 
 Here roughness is Beckmann alpha `a`: the standard deviation of each slope component
 is `a / sqrt(2)` in the Beckmann limit. The renderer constructs the full consistent
-SE kernel with `gradient_covariance = a^2 / 2 * I` and isotropic correlation length
-`ell = sqrt(2) * sigma / a`. For signed-distance means, larger `a` broadens the
+kernel with `gradient_covariance = a^2 / 2 * I`. The isotropic correlation length is
+family-specific: `sqrt(2) sigma/a` for SE, `sqrt(6) sigma/a` for Matérn 3/2, and
+`sqrt(10/3) sigma/a` for Matérn 5/2. For signed-distance means, larger `a` broadens the
 local normal distribution. At each material point, the local GP has a tangent-plane
 mean: its value mean is zero and its gradient mean is the unit SDF normal. Without
-an alpha grid it uses the configured SE gradient covariance; with a grid it uses
+an alpha grid it uses the configured kernel's gradient covariance; with a grid it uses
 `alpha(x)^2 / 2 * I` instead. The generalized Gaussian NDF still has a random gradient
 component along the mean normal and is therefore not exactly Beckmann. This is not
 GGX/Disney perceptual roughness. Values greater than 1 are permitted; zero (a
 perfect-mirror limit) is unsupported.
 
-At `sigma = 0.03`, example values are:
+For the default SE kernel at `sigma = 0.03`, example values are:
 
 | Roughness | Derived correlation length |
 | --- | --- |

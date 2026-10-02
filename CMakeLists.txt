@@ -15,7 +15,7 @@ add_library(macrofacet
     src/fields/MeanFactory.cpp
     src/gpss/MeanField.cpp
     src/gpss/ShaderBallMean.cpp
-    src/gpss/SquaredExponentialKernel.cpp
+    src/gpss/CovarianceKernel.cpp
     src/gpss/GPSSField.cpp
     src/macrofacet/GaussianNdf.cpp
     src/macrofacet/GgxHeightfield.cpp

@@ -78,33 +78,23 @@ nlohmann::json conditionalBirthJson(const ConditionalBirthConfig& birth) {
     return result;
 }
 
-SquaredExponentialKernel roughnessKernel(double sigma, double roughness, NdfFamily family) {
+CovarianceKernel roughnessKernel(CovarianceKernelType type, double sigma,
+                                 double roughness, NdfFamily family) {
     requirePositiveFinite(sigma, "sigma");
     requirePositiveFinite(roughness, "material roughness");
     if (family != NdfFamily::GeneralizedGaussian) {
         throw std::invalid_argument("material roughness requires the generalized_gaussian NDF family");
     }
-    const double valueVariance = sigma * sigma;
     // Beckmann alpha is sqrt(2) times the standard deviation of each slope
     // component when the mean height gradient has unit length.
     const double gradientStddev = roughness / std::sqrt(2.0);
     const double gradientVariance = gradientStddev * gradientStddev;
-    const double correlationLength = sigma / gradientStddev;
-    if (!(valueVariance > 0.0) || !std::isfinite(valueVariance) ||
-        !(gradientVariance > 0.0) || !std::isfinite(gradientVariance) ||
-        !(correlationLength > 0.0) || !std::isfinite(correlationLength)) {
+    if (!(gradientVariance > 0.0) || !std::isfinite(gradientVariance)) {
         throw std::invalid_argument(
             "roughness and sigma must yield finite positive variances and correlation length");
     }
-    const double inverseLength = gradientStddev / sigma;
-    const double precision = inverseLength * inverseLength;
-    const double actualGradientVariance = valueVariance * precision;
-    if (!(precision > 0.0) || !std::isfinite(precision) ||
-        !(actualGradientVariance > 0.0) || !std::isfinite(actualGradientVariance)) {
-        throw std::invalid_argument(
-            "roughness / (sqrt(2) * sigma) must yield finite positive kernel precision and gradient covariance");
-    }
-    return SquaredExponentialKernel(sigma, precision * Matrix3::Identity());
+    return CovarianceKernel::fromGradientCovariance(
+        type, sigma, gradientVariance * Matrix3::Identity());
 }
 
 } // namespace
@@ -112,7 +102,8 @@ SquaredExponentialKernel roughnessKernel(double sigma, double roughness, NdfFami
 GPSSField buildDefaultField() {
     GPSSField field{
         std::make_shared<PlaneMean>(Vector3::UnitZ(), 0.0),
-        SquaredExponentialKernel::fromCorrelationLengths(0.1, Vector3(0.2, 0.2, 0.2)),
+        CovarianceKernel::fromCorrelationLengths(
+            CovarianceKernelType::SquaredExponential, 0.1, Vector3(0.2, 0.2, 0.2)),
         {Point3(-2.0, -2.0, -0.3), Point3(2.0, 2.0, 0.3)}};
     field.validate();
     return field;
@@ -155,18 +146,20 @@ void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
     // anisotropic lengths. Config roughness also stays fixed as sigma changes.
     const std::optional<double> effectiveRoughness = roughness ? roughness : config.materialRoughness;
     if (effectiveRoughness) {
-        config.field.kernel = roughnessKernel(sigma.value_or(config.field.kernel.sigma()),
-                                             *effectiveRoughness, config.material.ndfFamily);
+        config.field.kernel = roughnessKernel(
+            config.field.kernel.type(), sigma.value_or(config.field.kernel.sigma()),
+            *effectiveRoughness, config.material.ndfFamily);
         config.materialRoughness = effectiveRoughness;
         config.field.validate();
     } else if (sigma) {
-        const double oldSigma = config.field.kernel.sigma();
-        Matrix3 precision = config.field.kernel.precision();
+        const CovarianceKernelType type = config.field.kernel.type();
+        const Matrix3 metric = config.field.kernel.metric();
         if (preserveSlope) {
-            const double scale = oldSigma / *sigma;
-            precision *= scale * scale;
+            config.field.kernel = CovarianceKernel::fromGradientCovariance(
+                type, *sigma, config.field.kernel.gradientCovarianceAtZero());
+        } else {
+            config.field.kernel = CovarianceKernel(type, *sigma, metric);
         }
-        config.field.kernel = SquaredExponentialKernel(*sigma, precision);
         config.field.validate();
     }
 }
@@ -221,7 +214,9 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     else if (family == "beckmann_limit") ndfFamily = NdfFamily::BeckmannLimit;
     else if (family == "ggx") ndfFamily = NdfFamily::GGXBaseline;
     else throw std::invalid_argument("unknown NDF family: " + family);
-    SquaredExponentialKernel kernel;
+    const CovarianceKernelType kernelType = parseCovarianceKernelType(
+        fieldJson.value("kernel_type", std::string("squared_exponential")));
+    CovarianceKernel kernel;
     if (material.contains("roughness")) {
         if (fieldJson.contains("correlation_lengths")) {
             throw std::invalid_argument("material.roughness and field.correlation_lengths are mutually exclusive");
@@ -230,7 +225,7 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
             throw std::invalid_argument("material.roughness must be a finite positive number");
         }
         config.materialRoughness = material.at("roughness").get<double>();
-        kernel = roughnessKernel(sigma, *config.materialRoughness, ndfFamily);
+        kernel = roughnessKernel(kernelType, sigma, *config.materialRoughness, ndfFamily);
     } else {
         Vector3 lengths;
         const auto& lengthJson = fieldJson.at("correlation_lengths");
@@ -243,7 +238,8 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         }
         const Matrix3 rotation = fieldJson.contains("kernel_rotation") ?
             matrix3(fieldJson.at("kernel_rotation")) : Matrix3::Identity();
-        kernel = SquaredExponentialKernel::fromCorrelationLengths(sigma, lengths, rotation);
+        kernel = CovarianceKernel::fromCorrelationLengths(
+            kernelType, sigma, lengths, rotation);
     }
     // A baked grid fixes its own spatial coverage, just as it fixes sigma.
     // Legacy domain_min/domain_max entries are ignored for baked fields so a
@@ -479,16 +475,23 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         // describe themselves through the same registry that built them.
         result["field"] = *written;
     }
+    if (result.contains("field")) {
+        result["field"]["kernel_type"] =
+            covarianceKernelTypeName(config.field.kernel.type());
+    }
     result["derived"] = {
         {"sigma", config.field.kernel.sigma()},
-        {"kernel_precision", {{config.field.kernel.precision()(0,0), config.field.kernel.precision()(0,1), config.field.kernel.precision()(0,2)},
-                              {config.field.kernel.precision()(1,0), config.field.kernel.precision()(1,1), config.field.kernel.precision()(1,2)},
-                              {config.field.kernel.precision()(2,0), config.field.kernel.precision()(2,1), config.field.kernel.precision()(2,2)}}},
+        {"kernel_type", covarianceKernelTypeName(config.field.kernel.type())},
+        {"kernel_metric", {{config.field.kernel.metric()(0,0), config.field.kernel.metric()(0,1), config.field.kernel.metric()(0,2)},
+                           {config.field.kernel.metric()(1,0), config.field.kernel.metric()(1,1), config.field.kernel.metric()(1,2)},
+                           {config.field.kernel.metric()(2,0), config.field.kernel.metric()(2,1), config.field.kernel.metric()(2,2)}}},
         {"domain_min", toArray(config.field.activeDomain.minimum)},
         {"domain_max", toArray(config.field.activeDomain.maximum)}};
-    const double fieldVariance = config.field.kernel.sigma() * config.field.kernel.sigma();
+    // Retain the historical key for downstream readers. For non-SE kernels it
+    // is the shared spatial metric, not the gradient covariance by itself.
+    result["derived"]["kernel_precision"] = result["derived"]["kernel_metric"];
     const Vector3 gradientStddev =
-        (fieldVariance * config.field.kernel.precision().diagonal()).cwiseMax(0.0).cwiseSqrt();
+        config.field.kernel.gradientCovarianceAtZero().diagonal().cwiseMax(0.0).cwiseSqrt();
     result["derived"]["gradient_stddev_xyz"] = toArray(gradientStddev);
     if (config.preparedAreaMajorant)
         result["derived"]["projected_area_majorant"] = *config.preparedAreaMajorant;
@@ -505,9 +508,9 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         result["material"]["roughness"] = *config.materialRoughness;
         result["material"]["roughness_definition"] =
             "Beckmann alpha convention for the isotropic generalized_gaussian gradient; "
-            "Sigma_G = roughness^2 / 2 I; correlation length = sqrt(2) * sigma / roughness";
+            "Sigma_G = roughness^2 / 2 I; correlation length is kernel-family dependent";
         result["derived"]["isotropic_correlation_length"] =
-            config.field.kernel.sigma() / (*config.materialRoughness / std::sqrt(2.0));
+            1.0 / std::sqrt(config.field.kernel.metric()(0, 0));
     }
     result["budgets"] = {{"render_width", config.render.width},
                           {"render_height", config.render.height},

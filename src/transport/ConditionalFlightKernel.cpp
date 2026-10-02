@@ -124,6 +124,12 @@ FlightState startConditionalExterior(const GPSSField& field, const Point3& entry
 ConditionalFlightKernel::ConditionalFlightKernel(const GPSSField& field,
                                                  const FlightState& state)
     : FlightKernel(field, state) {
+    if (!field.kernel.supportsAnalyticConditionalTransport()) {
+        throw std::invalid_argument(
+            std::string("global_conditional is not implemented for kernel '") +
+            covarianceKernelTypeName(field.kernel.type()) +
+            "'; the common KernelJet interface is available for a future conditioner");
+    }
     if (!state.birthGradient.allFinite() || !(state.birthValue>=0.0) || !std::isfinite(state.birthValue))
         throw std::invalid_argument("conditional flight requires a finite birth observation");
     birthMean_=field_.mean->evaluate(state.birthPosition);

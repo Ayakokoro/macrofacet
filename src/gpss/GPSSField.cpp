@@ -7,7 +7,8 @@ PointPrior GPSSField::pointPrior(const Point3& x) const {
     if (!mean) throw std::invalid_argument("GPSS field has no mean field");
     const MeanJet jet = mean->evaluate(x);
     const double variance = kernel.sigma() * kernel.sigma();
-    return {jet.value, variance, jet.gradient, variance * kernel.precision(), Vector3::Zero()};
+    return {jet.value, variance, jet.gradient,
+            kernel.gradientCovarianceAtZero(), Vector3::Zero()};
 }
 
 void GPSSField::validate() const {

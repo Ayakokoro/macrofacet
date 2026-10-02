@@ -1,7 +1,9 @@
 #include "TestHarness.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
+#include "macrofacet/integrator/MacrofacetPathTracer.h"
 #include "macrofacet/macrofacet/ClassicCoefficients.h"
 #include "macrofacet/macrofacet/GaussianNdf.h"
+#include "macrofacet/transport/DensityMajorantGrid.h"
 #include <nlohmann/json.hpp>
 #include <array>
 #include <chrono>
@@ -32,6 +34,32 @@ struct RestoreNumericPolicy {
     mf::NumericPolicy saved = mf::defaultNumericPolicy();
     ~RestoreNumericPolicy() { mf::defaultNumericPolicy() = saved; }
 };
+
+class UnitDensity final : public mf::ScalarField {
+public:
+    double sample(const mf::Point3&) const override { return 1.0; }
+    mf::ScalarBounds bounds(const mf::Bounds3&) const override {
+        return {1.0, 1.0, true};
+    }
+};
+
+bool sameRender(const mf::RenderedImage& a, const mf::RenderedImage& b) {
+    if (a.width != b.width || a.height != b.height || a.pixels.size() != b.pixels.size())
+        return false;
+    for (std::size_t i = 0; i < a.pixels.size(); ++i) {
+        if (!(a.pixels[i].array() == b.pixels[i].array()).all()) return false;
+    }
+    const mf::RenderStatistics& x = a.statistics;
+    const mf::RenderStatistics& y = b.statistics;
+    return x.paths == y.paths && x.realCollisions == y.realCollisions &&
+           x.escapedPaths == y.escapedPaths &&
+           x.rouletteTerminations == y.rouletteTerminations &&
+           x.safetyCapTerminations == y.safetyCapTerminations &&
+           x.numericalFailures == y.numericalFailures &&
+           x.accumulatedPathDepth == y.accumulatedPathDepth &&
+           x.tracking.candidates == y.tracking.candidates &&
+           x.tracking.nullCollisions == y.tracking.nullCollisions;
+}
 
 nlohmann::json roughnessConfig() {
     return nlohmann::json::parse(R"json({
@@ -87,12 +115,20 @@ void testMaterialRoughness(TestContext& context) {
                      "the local material GP uses the prescribed sigma");
         context.require((local.covarianceG - global.covarianceG).norm() < 1e-12,
                         "without an alpha field the local roughness equals the global GP roughness");
-        const double correlationLength = sigma / (roughness / std::sqrt(2.0));
+        const double correlationLength = 1.0 / std::sqrt(config.field.kernel.metric()(0, 0));
+        double expectedCorrelation = std::exp(-0.5);
+        if (config.field.kernel.type() == CovarianceKernelType::Matern32) {
+            const double a = std::sqrt(3.0);
+            expectedCorrelation = (1.0 + a) * std::exp(-a);
+        } else if (config.field.kernel.type() == CovarianceKernelType::Matern52) {
+            const double a = std::sqrt(5.0);
+            expectedCorrelation = (1.0 + a + 5.0 / 3.0) * std::exp(-a);
+        }
         for (int axis = 0; axis < 3; ++axis) {
             const KernelJet jet = config.field.kernel.evaluate(
                 Point3::Zero(), correlationLength * Vector3::Unit(axis));
-            context.near(jet.valueValue / prior.varianceF, std::exp(-0.5), 1e-12,
-                         "material roughness gives correlation length sqrt(2) sigma / alpha");
+            context.near(jet.valueValue / prior.varianceF, expectedCorrelation, 1e-12,
+                         "kernel-specific correlation length preserves material roughness");
             context.require(jet.gradientXValueY.allFinite() && jet.valueXGradientY.allFinite() &&
                                 jet.gradientXGradientY.allFinite(),
                             "roughness-derived kernel has finite covariance derivatives");
@@ -208,6 +244,54 @@ void testMaterialRoughness(TestContext& context) {
     context.require(loaded.material.ndfFamily == NdfFamily::GeneralizedGaussian,
                     "NDF family is parsed from the material block");
     checkRoughness(loaded, 0.03, 0.6);
+
+    // All three families share exactly the same one-point value/gradient law
+    // when configured by material roughness. Classic transport must therefore
+    // remain independent of the selected spatial covariance family.
+    std::array<ExperimentConfig, 3> familyConfigs;
+    const std::array<const char*, 3> familyNames{
+        "squared_exponential", "matern_3_2", "matern_5_2"};
+    const std::array<double, 3> lengthFactors{
+        1.0, std::sqrt(3.0), std::sqrt(5.0 / 3.0)};
+    for (std::size_t family = 0; family < familyConfigs.size(); ++family) {
+        nlohmann::json source = valid;
+        source["field"]["kernel_type"] = familyNames[family];
+        temporary.write(source);
+        familyConfigs[family] = loadExperimentConfig(temporary.path);
+        checkRoughness(familyConfigs[family], 0.03, 0.6);
+        context.near(1.0 / std::sqrt(familyConfigs[family].field.kernel.metric()(0, 0)),
+                     lengthFactors[family] * 0.03 / (0.6 / std::sqrt(2.0)), 1e-14,
+                     "roughness converts to the family-specific correlation length");
+    }
+
+    const auto density = std::make_shared<UnitDensity>();
+    const auto densityGrid = std::make_shared<DensityMajorantGrid>(
+        *density, familyConfigs[0].field.activeDomain, 4);
+    for (ExperimentConfig& config : familyConfigs) {
+        config.mediumDensity = density;
+        config.densityMajorantGrid = densityGrid;
+        config.render.width = 4;
+        config.render.height = 3;
+        config.render.samplesPerPixel = 8;
+        config.render.threadCount = 1;
+        config.render.safetyDepthCap = 8;
+        config.render.rouletteStartDepth = 5;
+        config.classicPhaseProposal = "target_vndf";
+        config.preparedAreaMajorant.reset();
+    }
+    for (const GpModel model : {GpModel::LocalTangent, GpModel::GlobalPointwise}) {
+        std::array<RenderedImage, 3> renders;
+        for (std::size_t family = 0; family < familyConfigs.size(); ++family) {
+            familyConfigs[family].material.gpModel = model;
+            familyConfigs[family].transportMode = model == GpModel::LocalTangent
+                ? "classic_local" : "classic_global";
+            renders[family] = renderAnalyticScene(familyConfigs[family]);
+        }
+        context.require(sameRender(renders[0], renders[1]),
+                        "SE and Matern 3/2 render identically in a roughness-matched classic mode");
+        context.require(sameRender(renders[0], renders[2]),
+                        "SE and Matern 5/2 render identically in a roughness-matched classic mode");
+    }
     nlohmann::json globalJson = valid;
     globalJson["material"]["gp_model"] = "global_pointwise";
     temporary.write(globalJson);
@@ -244,6 +328,8 @@ void testMaterialRoughness(TestContext& context) {
                         "resolved metadata records the material NDF family");
         context.require(resolved.at("material").at("gp_model") == "local_tangent",
                         "resolved metadata records the default local GP model");
+        context.require(resolved.at("derived").at("kernel_type") == "squared_exponential",
+                        "resolved metadata records the covariance kernel family");
         context.near(resolved.at("derived").at("isotropic_correlation_length").get<double>(),
                      0.01 / (0.9 / std::sqrt(2.0)), 1e-14,
                      "resolved metadata records effective correlation length");
@@ -269,6 +355,9 @@ void testMaterialRoughness(TestContext& context) {
     nlohmann::json unknownModel = valid;
     unknownModel["material"]["gp_model"] = "unknown";
     rejectsJson(unknownModel, "unknown GP model is rejected");
+    nlohmann::json unknownKernel = valid;
+    unknownKernel["field"]["kernel_type"] = "matern_7_2";
+    rejectsJson(unknownKernel, "unknown covariance kernel is rejected");
     nlohmann::json globalGgx = globalJson;
     globalGgx["material"].erase("roughness");
     globalGgx["material"]["ndf_family"] = "ggx";

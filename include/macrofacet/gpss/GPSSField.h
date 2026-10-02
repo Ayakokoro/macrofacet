@@ -1,7 +1,7 @@
 #pragma once
 
 #include "macrofacet/gpss/MeanField.h"
-#include "macrofacet/gpss/SquaredExponentialKernel.h"
+#include "macrofacet/gpss/CovarianceKernel.h"
 #include <memory>
 
 namespace mf {
@@ -17,7 +17,7 @@ struct PointPrior {
 
 struct GPSSField {
     MeanFieldPtr mean;
-    SquaredExponentialKernel kernel;
+    CovarianceKernel kernel;
     Bounds3 activeDomain;
     PointPrior pointPrior(const Point3& x) const;
     void validate() const;

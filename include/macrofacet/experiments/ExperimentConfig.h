@@ -63,7 +63,7 @@ struct TransmittanceConfig {
 struct ExperimentConfig {
     int schemaVersion = 1;
     std::uint64_t seed = 17429;
-    // Mean field, SE kernel, and active domain shared by both GP models.
+    // Mean field, covariance kernel, and active domain shared by both GP models.
     // global-pointwise mode uses the mean field directly; local-tangent mode builds a
     // tangent-plane GP at each point from the mean's gradient and Hessian.
     GPSSField field;
@@ -76,8 +76,9 @@ struct ExperimentConfig {
     // Original field description, used to identify the cached analytic bake.
     std::string sourceFieldSpec;
     std::optional<double> bakeVoxelSize;
-    // Explicit scalar Beckmann alpha, if configured. It sets the SE kernel's
-    // covarianceG = roughness^2 / 2 I and ell = sqrt(2) * sigma / roughness.
+    // Explicit scalar Beckmann alpha, if configured. It fixes
+    // covarianceG = roughness^2 / 2 I; the kernel family determines the
+    // correlation length required to realize that same pointwise roughness.
     // In local mode only, an alpha grid overrides this covariance per point.
     std::optional<double> materialRoughness;
     RenderConfig render;
