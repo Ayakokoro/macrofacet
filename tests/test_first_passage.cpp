@@ -134,5 +134,159 @@ void testFirstPassage(TestContext& context) {
                      "circulant sampler has the conditioned SE standard deviation");
     }
     stateSummary.close();
+
+    const fs::path collisionDirectory = directory / "collision_state";
+    const fs::path collisionInput = directory / "collision_input.json";
+    nlohmann::json collisionRoot = {
+        {"schema_version", 1},
+        {"seed", 9876},
+        {"first_passage", {
+            {"process", {{"mean", 0.0}, {"threshold", 0.0}}},
+            {"initial_condition", {
+                {"type", "collision_state"},
+                {"parameter_space", {
+                    {"type", "explicit"},
+                    {"states", {
+                        {{"id", "outward"}, {"beta_0", 0.0},
+                         {"beta_a", 0.5}, {"beta_g", 1.0}},
+                        {{"id", "offset"}, {"beta_0", 0.4},
+                         {"beta_a", -0.25}, {"beta_g", 0.35}}
+                    }}
+                }}
+            }},
+            {"grid", {{"max_time", 1.0}, {"step_sizes", {0.1, 0.05}}}},
+            {"curve", {{"bins", 10}}},
+            {"visualization", {
+                {"comparison", "states"},
+                {"kernel_id", "m32_l1"},
+                {"state_ids", {"outward", "offset"}}
+            }},
+            {"monte_carlo", {{"trajectories", 32}, {"thread_count", 2}}},
+            {"sampler", {{"type", "collision_state_auto"},
+                          {"minimum_step", 0.0125},
+                          {"crossing_tolerance", 1e-6},
+                          {"bridge_sigma_margin", 5.0},
+                          {"max_refinement_depth", 4}}},
+            {"rice_series", {{"enabled", false}}},
+            {"state_analysis", {{"enabled", false}}},
+            {"kernels", {
+                {{"id", "m32_l1"}, {"type", "matern_3_2"},
+                 {"variance", 1.0}, {"length_scale", 1.0}},
+                {{"id", "m32_scaled"}, {"type", "matern_3_2"},
+                 {"variance", 4.0}, {"length_scale", 2.0}},
+                {{"id", "squared_exponential"}, {"type", "squared_exponential"},
+                 {"variance", 1.0}, {"length_scale", 1.0}},
+                {{"id", "matern52"}, {"type", "matern_5_2"},
+                 {"variance", 1.0}, {"length_scale", 1.0}},
+                {{"id", "rational_quadratic"}, {"type", "rational_quadratic"},
+                 {"variance", 1.0}, {"length_scale", 1.0}, {"alpha", 4.0}}
+            }}
+        }},
+        {"output_directory", collisionDirectory.string()}
+    };
+    {
+        std::ofstream stream(collisionInput);
+        stream << collisionRoot;
+    }
+    FirstPassageExperimentConfig collisionConfig =
+        loadFirstPassageExperimentConfig(collisionInput);
+    context.require(collisionConfig.initialConditionType == "collision_state" &&
+                    collisionConfig.collisionStates.size() == 2,
+                    "collision-state parameter space is parsed");
+    context.require(collisionConfig.collisionVisualization.comparison == "states" &&
+                    collisionConfig.collisionVisualization.kernelId == "m32_l1" &&
+                    collisionConfig.collisionVisualization.stateIds.size() == 2,
+                    "same-kernel state-comparison visualization is parsed");
+    const fs::path legacyCollisionInput = directory / "legacy_collision_input.json";
+    collisionRoot["first_passage"]["initial_condition"]["type"] =
+        "collision_state_matern32";
+    {
+        std::ofstream stream(legacyCollisionInput);
+        stream << collisionRoot;
+    }
+    bool rejectedLegacyType = false;
+    try {
+        (void)loadFirstPassageExperimentConfig(legacyCollisionInput);
+    } catch (const std::invalid_argument&) {
+        rejectedLegacyType = true;
+    }
+    context.require(rejectedLegacyType,
+                    "legacy collision_state_matern32 alias is intentionally rejected");
+    runFirstPassageExperiment(collisionConfig);
+    context.require(fs::exists(collisionDirectory / "first_passage_samples.csv") &&
+                    fs::exists(collisionDirectory / "first_passage_curves.csv") &&
+                    fs::exists(collisionDirectory / "first_passage_summary.csv") &&
+                    fs::exists(collisionDirectory / "first_passage_survival.svg") &&
+                    fs::exists(collisionDirectory / "first_passage_hazard.svg") &&
+                    fs::exists(collisionDirectory / "first_passage_cumulative_hazard.svg") &&
+                    fs::exists(collisionDirectory / "resolved_first_passage_config.json"),
+                    "collision-state mode writes training and convergence outputs");
+    {
+        std::ifstream svg(collisionDirectory / "first_passage_cumulative_hazard.svg");
+        std::stringstream buffer;
+        buffer << svg.rdbuf();
+        const std::string contents = buffer.str();
+        context.require(contents.find("outward") != std::string::npos &&
+                        contents.find("offset") != std::string::npos &&
+                        contents.find("kernel: m32_l1") != std::string::npos,
+                        "state-comparison SVG labels states for the selected kernel");
+    }
+    std::ifstream collisionSamples(collisionDirectory / "first_passage_samples.csv");
+    std::string collisionHeader;
+    std::getline(collisionSamples, collisionHeader);
+    context.require(collisionHeader.find("beta_0") != std::string::npos &&
+                    collisionHeader.find("beta_a") != std::string::npos &&
+                    collisionHeader.find("beta_g") != std::string::npos &&
+                    collisionHeader.find("sampler_type") != std::string::npos &&
+                    collisionHeader.find("crossing_slope_method") != std::string::npos &&
+                    collisionHeader.find("crossing_slope") != std::string::npos &&
+                    collisionHeader.find("training_resolution") != std::string::npos,
+                    "collision-state sample schema contains all training coordinates");
+    std::size_t collisionRows = 0;
+    std::string collisionRow;
+    std::vector<std::vector<std::string>> collisionFields;
+    while (std::getline(collisionSamples, collisionRow)) {
+        if (collisionRow.empty()) continue;
+        ++collisionRows;
+        std::vector<std::string> fields;
+        std::stringstream row(collisionRow);
+        for (std::string field; std::getline(row, field, ',');) fields.push_back(field);
+        collisionFields.push_back(std::move(fields));
+    }
+    context.require(collisionRows == 5u * 2u * 2u * 32u,
+                    "collision-state output has one row per kernel/state/resolution/trajectory");
+    const std::size_t rowsPerKernel = 2u * 2u * 32u;
+    if (collisionFields.size() == 5u * rowsPerKernel) {
+        for (std::size_t row = 0; row < rowsPerKernel; ++row) {
+            const auto& first = collisionFields[row];
+            const auto& scaled = collisionFields[row + rowsPerKernel];
+            context.require(first.size() == 28 && scaled.size() == 28,
+                            "collision-state sample row has the documented schema");
+            if (first.size() != 28 || scaled.size() != 28) continue;
+            context.require(first[2] == "matern32_state_space" &&
+                            first[3] == "state_bridge_hermite",
+                            "Matérn 3/2 rows report the exact state-space backend");
+            context.near(std::stod(first[15]), std::stod(scaled[15]), 0.0,
+                         "dimensionless event q is invariant to sigma and ell");
+            context.require(first[17] == scaled[17] && first[21] == scaled[21],
+                            "dimensionless scale variants share events and RNG streams");
+            if (first[17] == "1") {
+                context.require(std::stod(first[15]) > 0.0 &&
+                                std::stod(first[19]) >= 0.0 &&
+                                std::stod(first[20]) <= 0.0,
+                                "collision events occur after birth with a downcrossing slope");
+                context.near(std::stod(first[19]), std::stod(scaled[19]), 0.0,
+                             "normalized crossing slope is scale invariant");
+            }
+        }
+        for (std::size_t kernel = 2; kernel < 5; ++kernel) {
+            const auto& row = collisionFields[kernel * rowsPerKernel];
+            context.require(row.size() == 28 &&
+                            row[2] == "conditioned_grid_circulant" &&
+                            row[3] == "grid_cubic_hermite",
+                            "non-Markov kernels use the common conditioned-grid backend");
+        }
+    }
+    collisionSamples.close();
     fs::remove_all(directory);
 }

@@ -35,8 +35,13 @@ build\Release\macrofacet_experiments.exe render --config configs\render_shader_b
 build\Release\macrofacet_experiments.exe render --config configs\macrofacet_ci.json --mode all --width 16 --height 16 --spp 8
 build\Release\macrofacet_experiments.exe curves --config configs\macrofacet_ci.json --rays 1024 --bins 64
 build\Release\macrofacet_experiments.exe first-passage --config configs\first_passage_kernels.json
+build\Release\macrofacet_experiments.exe first-passage --config configs\collision_state_kernels_training.json
+build\Release\macrofacet_experiments.exe first-passage --config configs\collision_state_matern52_parameter_study.json
+build\Release\macrofacet_experiments.exe first-passage --config configs\collision_state_matern52_training.json
 ```
 
 The renderer writes PFM images, BMP previews, `render_summary.csv`, and `resolved_config.json`. The `curves` command writes per-ray collision data and a comparison CSV/SVG. See the [configuration reference](docs/CONFIGURATION_REFERENCE.md), [conditional rendering guide](docs/CONDITIONAL_RENDERING.md), [NanoVDB tracing guide](docs/NVDB_TRACING.md), and [scene rendering guide](docs/SCENE_RENDERING.md). Earlier transport derivations and implementation reports remain as historical research notes.
 
-The independent `first-passage` command samples conditioned 1D Gaussian processes and measures the no-history-approximation survival and hazard curves for several kernels. It also records survivor \((X,X')\) states and compares the Monte Carlo hazard with the endpoint-conditioned and pointwise approximations. See [the first-passage experiment guide](docs/FIRST_PASSAGE_EXPERIMENT.md).
+The Matérn 5/2 cumulative-hazard surrogate uses C++ interval-count data and a monotone PyTorch I-spline model. Its complete generation, fitting, export, and inference workflow is documented in the [Python training guide](python/README.md).
+
+The independent `first-passage` command samples conditioned 1D Gaussian processes and measures the no-history-approximation survival and hazard curves for several kernels. Its unified `collision_state` mode emits the same censored FPT, survival, hazard, and crossing-slope schema for every supported kernel. Matérn 3/2 uses its exact two-state backend; the other kernels use conditioned circulant grids. See [the first-passage experiment guide](docs/FIRST_PASSAGE_EXPERIMENT.md).

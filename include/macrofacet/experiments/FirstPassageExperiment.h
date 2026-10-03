@@ -42,15 +42,39 @@ struct FirstPassageRiceSeriesConfig {
     double covarianceRoundoffMultiplier = 256.0;
 };
 
+struct FirstPassageCollisionState {
+    std::string id;
+    double beta0 = 0.0;
+    double betaMeanSlope = 0.0;
+    double betaCollisionSlope = 1.0;
+};
+
+struct FirstPassageCollisionSamplerConfig {
+    double minimumStep = 0.00125;
+    double crossingTolerance = 1e-8;
+    double bridgeSigmaMargin = 6.0;
+    int maximumRefinementDepth = 12;
+};
+
+struct FirstPassageCollisionVisualizationConfig {
+    // kernels: compare all kernels at one state; states: compare selected states
+    // for one kernel.
+    std::string comparison = "kernels";
+    std::optional<std::string> kernelId;
+    std::vector<std::string> stateIds;
+};
+
 struct FirstPassageExperimentConfig {
     int schemaVersion = 1;
     std::uint64_t seed = 17429;
     double processMean = 0.0;
     double threshold = 0.0;
+    std::string initialConditionType = "fixed_value";
     double initialValue = 1.0;
     double maximumTime = 10.0;
-    // The smallest entry is sampled. Larger entries must be integer multiples
-    // and are coupled subsamples used for crossing-resolution convergence.
+    // fixed_value: the smallest entry is sampled and larger entries are coupled
+    // subsamples. collision_state: each entry is an independent backend-specific
+    // state-space convergence resolution; the smallest is the training set.
     std::vector<double> stepSizes{0.04, 0.02, 0.01};
     int curveBins = 200;
     int trajectories = 16384;
@@ -61,6 +85,9 @@ struct FirstPassageExperimentConfig {
     int minimumRiskSetForError = 32;
     FirstPassageStateAnalysisConfig stateAnalysis;
     FirstPassageRiceSeriesConfig riceSeries;
+    FirstPassageCollisionSamplerConfig collisionSampler;
+    FirstPassageCollisionVisualizationConfig collisionVisualization;
+    std::vector<FirstPassageCollisionState> collisionStates;
     std::vector<FirstPassageKernelConfig> kernels;
     std::filesystem::path outputDirectory = "outputs/first_passage";
 };

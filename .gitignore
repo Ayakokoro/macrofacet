@@ -1,2 +1,5 @@
 build/
 outputs/
+python/.venv/
+python/**/__pycache__/
+python/.pytest_cache/

@@ -749,11 +749,12 @@ PDE 和 Monte Carlo 至少应在一组二维参数切片上互相验证。
 每条原始记录至少包含：
 
 ```text
-kernel_type, sigma, ell,
+kernel_id, kernel_type, sampler_type, crossing_slope_method,
+sigma, ell, alpha,
 beta_0, beta_a, beta_g,
-max_q, event_q, event,
-crossing_slope,
-seed, integrator_tolerance, base_step
+max_q, base_step, training_resolution,
+event_q, event, censored, crossing_slope,
+seed, integrator_tolerance, minimum_step
 ```
 
 ---
@@ -802,7 +803,7 @@ public:
 建议新增独立 transport mode，例如：
 
 ```text
-global_collision_state_matern32
+global_collision_state
 ```
 
 在验证完成前不要直接覆盖现有 `global_conditional`，这样可以保留 SE 解析实现作为对照。
@@ -905,7 +906,7 @@ ell
 
 ### 阶段 D：渲染模式接入
 
-1. 新增独立 `global_collision_state_matern32` mode；
+1. 新增独立 `global_collision_state` mode；
 2. 主射线先保留现有第一次碰撞方案；
 3. 次级射线使用累计消光反演；
 4. 真实碰撞处更新 birth state；
@@ -940,3 +941,48 @@ ell
 10. 在完成纵向 crossing-slope 模型前，不把该方案宣称为完整闭合的渲染 mode。
 
 这套设计保留了真正的 first-passage transmittance，避免直接微分 Monte Carlo survival 所造成的 hazard 波动，同时清楚隔离了历史丢弃、一阶 mean、拟合近似和碰撞梯度闭合四个误差来源。
+
+---
+
+## 17. 当前实现状态
+
+阶段 A 的训练数据生成器已经并入现有 `first-passage` 实验，而不是另建一套不可比较的命令。配置入口为：
+
+```json
+"initial_condition": {
+  "type": "collision_state",
+  "parameter_space": { ... }
+},
+"sampler": {
+  "type": "collision_state_auto"
+}
+```
+
+参考配置是 `configs/collision_state_kernels_training.json`。运行：
+
+```powershell
+build\Release\macrofacet_experiments.exe first-passage `
+  --config configs\collision_state_kernels_training.json
+```
+
+已实现内容包括：
+
+1. `explicit`、`cartesian` 和 `latin_hypercube` 三种 \((\beta_0,\beta_a,\beta_g)\) 参数设计；
+2. 所有受支持 kernel 使用统一的 collision-state 配置和 CSV schema，不保留旧的 `collision_state_matern32` 类型别名；
+3. Matérn \(3/2\) 从 \((y,w)=(-\beta_0,\beta_g-\beta_a)\) 启动二维精确 Gaussian transition，并使用条件 midpoint bridge、自适应 refinement 和 cubic-Hermite crossing；
+4. squared exponential、Matérn \(5/2\) 和 rational quadratic 使用起点值/有限差分导数联合条件化的 circulant grid 与 cubic-Hermite crossing，并依靠多步长检查离散收敛；
+5. FPT、right censor、无量纲 crossing slope、物理 crossing derivative、逐样本 seed 和数值诊断输出；
+6. 多 `grid.step_sizes` 收敛数据，最小步长用 `training_resolution=1` 标识；
+7. risk-set survival、density、hazard、Nelson--Aalen/product-limit 累计 hazard，以及 FPT/slope quantile 汇总；
+8. `sampler_type` 和 `crossing_slope_method` 在每类输出中记录实际数值后端；
+9. 可配置为固定状态跨 kernel，或固定 kernel 跨碰撞状态的 survival、hazard 和累计 hazard SVG；
+10. 不同 \(\sigma,\ell\) 使用同一无量纲随机流，便于直接验证尺度不变性；
+11. 旧的多 kernel `fixed_value + exact_grid_circulant` 模式保持兼容。
+
+当前输出足以训练阶段 B 的
+
+\[
+H(q\mid\beta_0,\beta_a,\beta_g)
+\]
+
+以及阶段 C 的纵向 crossing-slope 条件模型。吸收 PDE 切片验证、累计消光拟合器本身和渲染 transport mode 仍分别属于阶段 A 的独立验证项、阶段 B 和阶段 D，尚未由数据生成器替代。

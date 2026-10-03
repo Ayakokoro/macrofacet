@@ -148,7 +148,16 @@ int main(int argc, char** argv) {
             std::ofstream summary(firstPassage.outputDirectory / "run_summary.json");
             summary << "{\n  \"success\": true,\n  \"command\": \"first-passage\",\n"
                     << "  \"seed\": " << firstPassage.seed << ",\n"
-                    << "  \"trajectories\": " << firstPassage.trajectories << "\n}\n";
+                    << "  \"initial_condition_type\": \""
+                    << firstPassage.initialConditionType << "\",\n"
+                    << "  \"trajectories_per_state_and_resolution\": "
+                    << firstPassage.trajectories << ",\n"
+                    << "  \"state_count\": "
+                    << (firstPassage.initialConditionType == "collision_state"
+                            ? firstPassage.collisionStates.size() : 1) << ",\n"
+                    << "  \"kernel_count\": " << firstPassage.kernels.size() << ",\n"
+                    << "  \"resolution_count\": " << firstPassage.stepSizes.size()
+                    << "\n}\n";
             std::cout << "completed first-passage -> "
                       << firstPassage.outputDirectory.string() << '\n';
             return 0;

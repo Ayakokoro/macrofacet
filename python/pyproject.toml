@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "macrofacet-fpt"
+version = "0.1.0"
+description = "Monotone I-spline surrogate training for macrofacet first-passage data"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "torch>=2.2,<3"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["macrofacet_fpt*"]

@@ -17,5 +17,6 @@
         "string_view": "cpp",
         "utility": "cpp",
         "vector": "cpp"
-    }
+    },
+    "python-envs.defaultEnvManager": "ms-python.python:system"
 }

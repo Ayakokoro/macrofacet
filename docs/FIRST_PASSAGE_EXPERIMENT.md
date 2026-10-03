@@ -33,6 +33,95 @@ build\Release\macrofacet_experiments.exe first-passage `
 
 这个命令不构造 3D 场、不烘焙 NanoVDB，也不运行 transport。它先回答一维 GP 的真实首次穿越统计，再为后续 3D GPSS 近似提供基准。
 
+### 统一的碰撞状态多 kernel 训练数据
+
+同一个 `first-passage` 命令现在也支持碰撞状态模式：
+
+```powershell
+build\Release\macrofacet_experiments.exe first-passage `
+  --config configs\collision_state_kernels_training.json
+```
+
+低预算检查：
+
+```powershell
+build\Release\macrofacet_experiments.exe first-passage `
+  --config configs\collision_state_kernels_training.json `
+  --trials 32 --bins 40 --threads 4 `
+  --output outputs\collision_state_kernels_smoke
+```
+
+该模式由
+
+```json
+"initial_condition": {
+  "type": "collision_state",
+  "parameter_space": { ... }
+},
+"sampler": {
+  "type": "collision_state_auto"
+}
+```
+
+启用。它不再从固定正值起点出发，而是对每个 kernel 和每个
+
+\[
+(\beta_0,\beta_a,\beta_g)
+=\left(\frac{m_b}{\sigma},\frac{a_b\ell}{\sigma},
+       \frac{g_d\ell}{\sigma}\right)
+\]
+
+从确定的无量纲状态
+
+\[
+y(0)=-\beta_0,\qquad
+w(0)=\beta_g-\beta_a
+\]
+
+启动满足相应 kernel 条件分布的 realization，并检测
+
+\[
+x(q)=\beta_0+\beta_aq+y(q)
+\]
+
+的第一次向下穿越。`parameter_space.type` 支持：
+
+- `explicit`：直接给出 `states`；
+- `cartesian`：给出 `beta_0`、`beta_a`、`beta_g` 三个数组；
+- `latin_hypercube`：给出 `count` 和三个 `*_range`。
+
+所有状态都要求 `beta_g>0`，从而排除立即进入负侧以及精确 grazing 的退化起点。解析后的 Latin hypercube 状态会完整写入 `resolved_first_passage_config.json`，保证数据集可复现。
+
+`collision_state_auto` 根据 kernel 自动选择后端。Matérn 3/2 使用精确线性 SDE transition；每个 base interval 根据条件 bridge 方差递归采样中点，再用 cubic Hermite 路径定位隐藏 crossing。Squared exponential、Matérn 5/2 和 rational quadratic 使用 circulant grid，并在起点对场值和中心有限差分导数联合条件化；crossing 由出生导数和网格中心差分导数组装的 cubic Hermite 段定位。这三类后端的条件化在离散网格上是精确的，但连续 first passage 与 crossing slope 仍有网格离散误差。所有 CSV 都用相同字段，并通过 `sampler_type` 和 `crossing_slope_method` 明确记录后端。必须比较多组 `grid.step_sizes`；最小 step 的行以 `training_resolution=1` 标记。
+
+碰撞状态模式写出：
+
+- `first_passage_samples.csv`：逐 realization 的训练数据，包括 kernel/backend、`beta_0/beta_a/beta_g`、FPT/censor、无量纲 `crossing_slope`、物理 `crossing_derivative`、seed 和数值诊断；
+- `first_passage_curves.csv`：每个状态和步长的 risk-set survival、density、hazard 与两种累计 hazard；
+- `first_passage_summary.csv`：事件率、restricted mean、FPT/crossing-slope quantile 和平均 refinement 成本；
+- `resolved_first_passage_config.json`：完全展开后的状态、kernel 和数值参数；
+- `first_passage_survival.svg`、`first_passage_hazard.svg`、`first_passage_cumulative_hazard.svg`：训练分辨率下由 `visualization` 选择的跨 kernel 或跨状态对比。
+
+可视化有两种配置模式。默认的 `comparison="kernels"` 在一个状态上比较不同 kernel；下面的配置则固定一个 kernel，比较多个碰撞状态：
+
+```json
+"visualization": {
+  "comparison": "states",
+  "kernel_id": "matern52",
+  "state_ids": [
+    "baseline",
+    "beta0_negative",
+    "beta0_positive"
+  ]
+}
+```
+
+三张 SVG 都只使用 `training_resolution=1` 的曲线。`state_ids` 的顺序同时决定图例顺序；建议使用有意义的显式状态 ID，并避免一次叠加过多曲线。完整示例见 `configs/collision_state_matern52_parameter_study.json`。
+
+训练累计消光 \(H(q\mid\beta_0,\beta_a,\beta_g)\) 时应筛选 `training_resolution=1`。其他分辨率只用于检查 survival、FPT quantile 和 crossing-slope 是否收敛。`event=0,censored=1` 的 `event_q=max_q` 是右删失记录；其 crossing 字段为空。若训练只使用区间计数，可设置 `monte_carlo.write_raw_samples=false`，此时不会创建 `first_passage_samples.csv`，但 curve/summary 和可视化保持不变。
+
+Matérn 5/2 的正式训练配置是 `configs/collision_state_matern52_training.json`。它生成 512 个 Latin-hypercube 状态，并由独立 Python 包直接对 `at_risk/events` 最大化区间 likelihood，拟合单调 I-spline 累计 hazard；完整命令、模型定义、独立样条表示误差检查和渲染查询方式见 [Python training guide](../python/README.md)。
+
 ## 同一 CSV 中的三种消光率
 
 `first_passage_curves.csv` 同时写出：
@@ -200,4 +289,4 @@ X_c(t)=X(t)+\frac{c(t)}{c(0)}\bigl(a-X(0)\bigr)
 
 ## 当前边界
 
-第一版只支持 `initial_condition.type="fixed_value"` 且初值严格高于阈值。这对应建议中的 \(X(0)=a>0\) 基础实验。Macrofacet 的真实 surface birth 是 \(X(0)=0,\dot X(0)>0\) 的联合条件问题；在基础实验完成 crossing 与 hazard 收敛验证前，不应把当前结果直接称为 surface-start 的最终消光率。
+`fixed_value` 模式仍是任意受支持 kernel 的常均值基础实验。统一的 `collision_state` 模式实现了 \(F(0)=0,F'(0)>0\) 的 affine-mean surface birth 数据生成，但明确采用碰撞状态近似：它只保留最近碰撞的场值和梯度，不包含碰撞前完整 survival history。当前支持各向同性 squared exponential、Matérn \(3/2\)、Matérn \(5/2\) 和 rational quadratic。只有 Matérn \(3/2\) 具有本实现中的连续状态空间/bridge 后端；其他 kernel 必须用 step-size convergence 评估网格误差。非线性 mean、各向异性 kernel 和跨碰撞历史仍不在该训练集定义内。旧类型 `collision_state_matern32` 不作为兼容别名保留。
