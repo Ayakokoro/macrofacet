@@ -8,6 +8,42 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Eigen3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Threads REQUIRED)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+# The Python wheel ships a complete LibTorch CMake package. Querying it here
+# keeps the Python training runtime and the C++ inference ABI on exactly the
+# same PyTorch build without requiring a second standalone LibTorch download.
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -c
+            "import torch; print(torch.utils.cmake_prefix_path)"
+    RESULT_VARIABLE MACROFACET_TORCH_PREFIX_RESULT
+    OUTPUT_VARIABLE MACROFACET_TORCH_PREFIX
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT MACROFACET_TORCH_PREFIX_RESULT EQUAL 0 OR NOT MACROFACET_TORCH_PREFIX)
+    message(FATAL_ERROR
+        "Unable to query torch.utils.cmake_prefix_path from ${Python3_EXECUTABLE}")
+endif()
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -c
+            "import torch; print(torch.__version__.split('+', 1)[0])"
+    RESULT_VARIABLE MACROFACET_TORCH_VERSION_RESULT
+    OUTPUT_VARIABLE MACROFACET_TORCH_VERSION
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT MACROFACET_TORCH_VERSION_RESULT EQUAL 0 OR NOT MACROFACET_TORCH_VERSION)
+    message(FATAL_ERROR
+        "Unable to query the PyTorch version from ${Python3_EXECUTABLE}")
+endif()
+if(MACROFACET_TORCH_VERSION VERSION_LESS "2.12" OR
+   NOT MACROFACET_TORCH_VERSION VERSION_LESS "2.13")
+    message(FATAL_ERROR
+        "macrofacet requires PyTorch/LibTorch 2.12.x for C++17, but "
+        "${Python3_EXECUTABLE} provides ${MACROFACET_TORCH_VERSION}")
+endif()
+set(Torch_DIR "${MACROFACET_TORCH_PREFIX}/Torch" CACHE PATH
+    "LibTorch CMake package bundled with the selected Python interpreter" FORCE)
+find_package(Torch 2.12 CONFIG REQUIRED)
+message(STATUS
+    "Using PyTorch/LibTorch ${MACROFACET_TORCH_VERSION} from ${Torch_DIR}")
 
 add_library(macrofacet
     src/mathutility/Gaussian1D.cpp
@@ -17,6 +53,7 @@ add_library(macrofacet
     src/gpss/ShaderBallMean.cpp
     src/gpss/CovarianceKernel.cpp
     src/gpss/GPSSField.cpp
+    src/learned/FirstPassageMlp.cpp
     src/macrofacet/GaussianNdf.cpp
     src/macrofacet/GgxHeightfield.cpp
     src/macrofacet/MaterialConfig.cpp
@@ -41,7 +78,8 @@ add_library(macrofacet
 target_sources(macrofacet PRIVATE src/experiments/TransmittanceCurves.cpp)
 
 target_include_directories(macrofacet PUBLIC include)
-target_link_libraries(macrofacet PUBLIC Eigen3::Eigen nlohmann_json::nlohmann_json Threads::Threads)
+target_link_libraries(macrofacet PUBLIC
+    Eigen3::Eigen nlohmann_json::nlohmann_json Threads::Threads ${TORCH_LIBRARIES})
 if(MSVC)
     target_compile_options(macrofacet PRIVATE /W4 /permissive- /EHsc)
 else()
@@ -127,6 +165,7 @@ set(MACROFACET_TEST_SOURCES
     tests/test_cutaway_mean.cpp
     tests/test_shader_ball_mean.cpp
     tests/test_material_roughness.cpp
+    tests/test_first_passage_mlp.cpp
     tests/test_first_passage.cpp
     tests/test_transmittance_config.cpp
     tests/test_rendering_threads.cpp)
@@ -141,6 +180,21 @@ endif()
 
 add_executable(macrofacet_tests ${MACROFACET_TEST_SOURCES})
 target_link_libraries(macrofacet_tests PRIVATE ${MACROFACET_TEST_LIBRARIES})
+
+set(MACROFACET_MLP_TEST_DATA "${CMAKE_CURRENT_BINARY_DIR}/mlp_test_data")
+file(MAKE_DIRECTORY "${MACROFACET_MLP_TEST_DATA}")
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/scripts/export_cpp_test_model.py"
+            --output "${MACROFACET_MLP_TEST_DATA}"
+    RESULT_VARIABLE MACROFACET_MLP_FIXTURE_RESULT
+    ERROR_VARIABLE MACROFACET_MLP_FIXTURE_ERROR)
+if(NOT MACROFACET_MLP_FIXTURE_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to create LibTorch test fixture: ${MACROFACET_MLP_FIXTURE_ERROR}")
+endif()
+file(TO_CMAKE_PATH "${MACROFACET_MLP_TEST_DATA}" MACROFACET_MLP_TEST_DATA_CMAKE)
+target_compile_definitions(macrofacet_tests PRIVATE
+    MACROFACET_MLP_TEST_DATA="${MACROFACET_MLP_TEST_DATA_CMAKE}")
 if(MACROFACET_BUILD_FIELDS)
     target_include_directories(macrofacet_tests PRIVATE src)
     target_compile_definitions(macrofacet_tests PRIVATE MACROFACET_TEST_FIELDS=1)
@@ -148,3 +202,9 @@ endif()
 
 enable_testing()
 add_test(NAME macrofacet_tests COMMAND macrofacet_tests)
+if(WIN32)
+    # Python adds torch/lib to the DLL search path while importing torch. CTest
+    # needs the equivalent environment when it starts the C++ executable.
+    set_tests_properties(macrofacet_tests PROPERTIES ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:${TORCH_INSTALL_PREFIX}/lib")
+endif()

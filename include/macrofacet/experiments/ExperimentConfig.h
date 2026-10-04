@@ -1,6 +1,7 @@
 #pragma once
 
 #include "macrofacet/gpss/GPSSField.h"
+#include "macrofacet/learned/FirstPassageMlp.h"
 #include "macrofacet/macrofacet/MaterialConfig.h"
 #include "macrofacet/mathutility/NumericPolicy.h"
 #include "macrofacet/transport/FlightState.h"
@@ -87,6 +88,9 @@ struct ExperimentConfig {
     std::filesystem::path outputDirectory = "outputs/macrofacet_experiments";
     double beckmannMixtureWeight = 0.5;
     std::string classicPhaseProposal = "uniform";
+    // A single kernel-agnostic runtime type. Kernel identity and validity
+    // ranges live in the exported bundle, not in the config's type name.
+    std::optional<FirstPassageMlpConfig> firstPassageModel;
     // classic obeys material.gp_model; comparison modes select it explicitly.
     std::string transportMode = "classic";
 };

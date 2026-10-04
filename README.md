@@ -4,11 +4,20 @@ CPU/double transport for Gaussian-process statistical surfaces. Classic local an
 
 ## Build
 
+The project uses the LibTorch CMake package bundled with PyTorch
+`2.12.x`, the last release line supported here with C++17. Install the pinned
+CUDA 13.0 wheel into the Python interpreter that CMake will discover:
+
 ```powershell
+python -m pip install -r python\requirements-cuda.txt
 cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
 cmake --build build --config Release --parallel 4
 ctest --test-dir build -C Release --output-on-failure
 ```
+
+To select a specific Python installation, add
+`-DPython3_EXECUTABLE=B:/path/to/python.exe` to the configure command. CMake
+rejects PyTorch versions outside the `2.12.x` line.
 
 ## Render
 

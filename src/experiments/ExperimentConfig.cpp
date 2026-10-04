@@ -303,6 +303,30 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         throw std::invalid_argument("target_vndf requires a Gaussian NDF");
     }
     config.render.rouletteStartDepth = transport.value("roulette_start_depth", 5);
+    if (transport.contains("first_passage_model")) {
+        const auto& learned = transport.at("first_passage_model");
+        if (!learned.is_object()) {
+            throw std::invalid_argument("transport.first_passage_model must be an object");
+        }
+        FirstPassageMlpConfig model;
+        model.type = learned.at("type").get<std::string>();
+        if (model.type != "mlp") {
+            throw std::invalid_argument(
+                "transport.first_passage_model.type must be 'mlp'");
+        }
+        model.modulePath = learned.at("module").get<std::string>();
+        model.bundlePath = learned.at("bundle").get<std::string>();
+        model.device = learned.value("device", model.device);
+        if (model.modulePath.empty() || model.bundlePath.empty()) {
+            throw std::invalid_argument(
+                "transport.first_passage_model requires module and bundle paths");
+        }
+        if (model.device != "cpu" && model.device != "cuda") {
+            throw std::invalid_argument(
+                "transport.first_passage_model.device must be cpu or cuda");
+        }
+        config.firstPassageModel = std::move(model);
+    }
 
     const auto& numeric = root.at("numeric");
     config.numeric.relativeTolerance = numeric.at("relative_tolerance").get<double>();
@@ -518,6 +542,13 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                           {"render_threads", config.render.threadCount}};
     result["classic_phase_proposal"] = config.classicPhaseProposal;
     result["transport"]["mode"] = config.transportMode;
+    if (config.firstPassageModel) {
+        result["transport"]["first_passage_model"] = {
+            {"type", config.firstPassageModel->type},
+            {"module", config.firstPassageModel->modulePath.string()},
+            {"bundle", config.firstPassageModel->bundlePath.string()},
+            {"device", config.firstPassageModel->device}};
+    }
     result["transport"]["classic"]["sampler"] = "dda_null_tracking";
     result["transport"]["global_conditional"] = {
         {"sampler", "two_segment_delta_tracking"},
