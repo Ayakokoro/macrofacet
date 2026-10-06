@@ -85,7 +85,9 @@ void runRenderExperiments(const ExperimentConfig& config) {
     std::ofstream summary(config.outputDirectory / "render_summary.csv");
     summary << "mode,environment,width,height,spp,seconds,paths,real_collisions,escaped_paths,"
                "roulette_terminations,safety_cap_terminations,numerical_failures,mean_path_depth,"
-               "dda_candidates,null_collisions,bound_intervals,near_candidates,far_candidates,rounded_candidate_steps,adaptive_majorant_flights\n";
+               "dda_candidates,null_collisions,bound_intervals,near_candidates,far_candidates,rounded_candidate_steps,adaptive_majorant_flights,"
+               "tracking_segments,max_segment_null_collisions,max_segment_majorant,max_candidate_majorant,"
+               "max_evaluated_extinction,max_segment_majorant_optical_depth,max_conditional_interval_majorant\n";
     {
         const std::vector<std::string> modes = config.transportMode == "all"
             ? std::vector<std::string>{"classic_local", "classic_global", "global_conditional"}
@@ -135,7 +137,14 @@ void runRenderExperiments(const ExperimentConfig& config) {
                     << image.statistics.tracking.nearCandidates << ','
                     << image.statistics.tracking.farCandidates << ','
                     << image.statistics.tracking.roundedCandidateSteps << ','
-                    << image.statistics.tracking.adaptiveMajorantFlights << '\n';
+                    << image.statistics.tracking.adaptiveMajorantFlights << ','
+                    << image.statistics.tracking.trackingSegments << ','
+                    << image.statistics.tracking.maximumSegmentNullCollisions << ','
+                    << image.statistics.tracking.maximumMajorant << ','
+                    << image.statistics.tracking.maximumCandidateMajorant << ','
+                    << image.statistics.tracking.maximumEvaluatedHazard << ','
+                    << image.statistics.tracking.maximumSegmentOpticalDepth << ','
+                    << image.statistics.tracking.maximumConditionalIntervalMajorant << '\n';
         }
     }
 }

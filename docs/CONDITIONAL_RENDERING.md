@@ -1,5 +1,8 @@
 # Global conditional rendering
 
+当前完整标量公式、性能证据和上界改进方案见
+[消光公式与上界改进分析](CONDITIONAL_MAJORANT_ANALYSIS.md)。
+
 ## Model and data flow
 
 The new `global_conditional` mode implements the model in
@@ -27,19 +30,38 @@ sampled at the preceding collision. A collision reflects about its normalized
 gradient; the path weight is conductor Fresnel and Russian roulette only.
 There is no explicit transmittance sampling or multiplication.
 
-The sampler constructs two bounds per flight: an analytic birth
-envelope on `[0,h]`, and a conditional-moment interval bound on `[h,L]`.
-Ordinary flights use their two constant Poisson rates. Expensive far segments
-use certified interval thinning, with additional constant tracking intervals.
+The renderer constructs an analytic birth envelope on `[0,h]`, then proves
+conditional-moment interval bounds lazily as the flight advances. Intervals
+are split at NanoVDB interpolation-cell boundaries and refined when their
+majorant optical depth exceeds 64. Each visited interval has its own constant
+Poisson rate. `twoSegmentMajorants()` remains a compatibility interface.
 It accepts a candidate with `sigma(t)/majorant`. Constructing the bounds does
 not sample the hazard or integrate transmittance. A failed bound or other
 conditional numerical error propagates to the caller; it does not become a
 black pixel sample.
 
+`render_summary.csv` also records the maxima needed to diagnose tracking cost:
+
+| Column | Meaning |
+| --- | --- |
+| `tracking_segments` | Number of segments actually visited by the sampler, including zero-rate segments |
+| `max_segment_majorant` | Maximum rate of a visited segment, including the birth segment |
+| `max_candidate_majorant` | Maximum segment rate at which at least one candidate was evaluated |
+| `max_evaluated_extinction` | Maximum actual extinction evaluated at a candidate; this is not a certified maximum over all distances |
+| `max_segment_majorant_optical_depth` | Maximum `majorant * segment_length` of a visited segment |
+| `max_conditional_interval_majorant` | Maximum conditional interval enclosure computed, including bounds subsequently refined or tightened |
+| `max_segment_null_collisions` | Maximum number of rejected candidates in one visited segment |
+
+Rates have units of inverse scene length; majorant optical depth is dimensionless.
+The refinement threshold 64 constrains segment optical depth, not the rate.
+The reported maxima describe one finite run; the conditional birth observations
+have unbounded support, so there is no finite configuration-wide rate maximum
+covering every possible flight. See the [analysis](CONDITIONAL_MAJORANT_ANALYSIS.md).
+
 ## 两段保守上界
 
 每段 flight 固定出生观测 `H` 和出生位置，以距离 `t` 为年龄。设
-`a = w^T A w > 0`、`u = a t^2`、`sigma = sigma_h`。采样使用
+`a = w^T A w > 0`、`u = a t^2`、`sigma = sigma_h`。兼容接口可以返回
 
 $$
 \overline\Sigma(t\mid H)=
@@ -49,8 +71,8 @@ M_{\rm far},&h\le t\le L.
 \end{cases}
 $$
 
-这是两种公式对应的整体上界。普通 flight 按这两个常数采样；极端上界的后段
-会启用下文的区间 thinning 加速，此时实际采样可有更多常数区间。
+这是两种公式对应的整体上界。当前渲染器通过 `ConditionalMedium` 使用按需分段
+游标，出生段之后每个访问区间使用自己的常数上界。
 两段使用同一个条件消光系数。切换上界时不增加 GP 观测、不重置年龄，
 也不改变已经采到的完整起点梯度。到达段边界后，按下一段的上界重新采
 指数距离。空碰撞也保留原来的 `H`。
@@ -152,15 +174,16 @@ $$
 
 在 `t_*` 以对数形式求值即得到 `M_near`，并覆盖 `t=0` 的零极限。
 
-### 后段：区间界合并为一个常数
+### 后段：按需构造区间上界
 
-`t>=h>0` 后条件值方差严格为正。内部先用区间长度
-`min(t/2,ell_w/2)` 对条件矩求界，再取所有区间上界的最大值为
-`M_far`。普通路径把这些内部界合并为一个常数；极端路径会复用它们加速空碰撞采样。
-没有在内部区间取若干 hazard 样本后估计最大值。
-在 `t<ell_w` 且当前上界乘以后段长度大于 `256` 时，将求界区间减半，
-最细到 `t/16`。这使同一区间内 `t^4` 方差的变化受控，也适用于跨过首个插值单元之后。
-`256` 只决定是否多花开销收紧已经有效的界，不限制上界大小或候选点数量。
+`t>=h>0` 后条件值方差严格为正。当前游标先用区间长度
+`min(t/2,ell_w/2)`，在首个光滑区间终点和 NanoVDB 插值单元边界截断，
+对条件矩求界。若 `M_I*(b-a)>64`，则二分并重新求界；碰撞之后的区间无需构造。
+没有在内部区间取若干 hazard 样本后估计最大值。`64` 只决定是否多花开销
+收紧已经有效的界，不限制上界大小或候选点数量。
+
+兼容接口 `twoSegmentMajorants()` 仍取内部区间上界的最大值为 `M_far`，
+并在 `t<ell_w` 且当前上界乘以后段长度大于 `256` 时减半求界区间，最细到 `t/16`。
 
 NanoVDB 沿射线在插值单元边界切分。均值和方向导数在每个单元的包围盒上
 都是多重仿射函数，其范围由盒角点给出；二阶方向导数用角点混合差分求界。
@@ -183,16 +206,19 @@ f_{\min}/\sqrt{v_F(l)},&f_{\min}<0,
 $$
 
 条件标准差使用 `s<=sigma*sqrt(a)`，小 `u` 时用
-`s<=sigma*sqrt(a)*u*sqrt(2*E4(u))` 收紧。密度因子的 Mills 比率使用
+`s<=sigma*sqrt(a)*u*sqrt(2*E4(u))` 收紧。密度因子的 Mills 比率在
+`z_min>-8` 时直接使用 `phi(z_min)/Phi(z_min)`；更深的负尾仍使用不等式
 
 $$
-\frac{\phi(z)}{\Phi(z)}\le
-\begin{cases}2\phi(z),&z\ge0,\\1-z,&z<0.\end{cases}
+\frac{\phi(z)}{\Phi(z)}\le 1-z,\qquad z<0.
 $$
 
 将上述密度界与负通量界相乘即可得到整个内部区间的上界。
-当 `mu_min>=0` 时，还使用更紧的负通量界
-`B<=smax*phi(mu_min/smax)`，保留正方向条件梯度下负通量的指数抑制。
+当 `mu_min<0` 时，负通量使用
+`B<=-mu_min*Phi(-mu_min/smax)+smax*phi(-mu_min/smax)`；
+当 `0<=mu_min/smax<=4` 时，也使用精确负通量
+`B<=smax*phi(q)-mu_min*Phi(-q)`，其中 `q=mu_min/smax`；
+更大的正 `q` 使用稳定的界 `B<=smax*phi(q)`，保留指数抑制。
 靠近起点且仍在首个光滑区间内时，使用前述 Taylor 余项界处理均值，避免
 相近量相减造成的界退化。
 

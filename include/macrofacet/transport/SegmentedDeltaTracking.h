@@ -32,6 +32,14 @@ struct DdaTrackingDiagnostics {
     std::uint64_t farCandidates = 0;
     std::uint64_t roundedCandidateSteps = 0;
     std::uint64_t adaptiveMajorantFlights = 0;
+    std::uint64_t trackingSegments = 0;
+    std::uint64_t maximumSegmentNullCollisions = 0;
+    double maximumMajorant = 0.0;
+    double maximumCandidateMajorant = 0.0;
+    double maximumEvaluatedHazard = 0.0;
+    double maximumSegmentOpticalDepth = 0.0;
+    // Includes conditional interval bounds computed before refinement.
+    double maximumConditionalIntervalMajorant = 0.0;
 };
 
 // The cursor supplies certified, ordered intervals only as they are consumed.
@@ -51,8 +59,17 @@ FlightSample sampleSegmentedDeltaTracking(const FlightKernel& kernel, Cursor& cu
               std::isfinite(segment.majorant)))
             throw NumericError(NumericStatus::InvalidMajorant, "invalid extinction segment");
         covered = segment.endAge;
+        if (diagnostics) {
+            ++diagnostics->trackingSegments;
+            diagnostics->maximumMajorant = std::max(diagnostics->maximumMajorant,
+                                                     segment.majorant);
+            diagnostics->maximumSegmentOpticalDepth = std::max(
+                diagnostics->maximumSegmentOpticalDepth,
+                segment.majorant * (segment.endAge - segment.beginAge));
+        }
         if (segment.majorant == 0.0) continue;
         CompensatedSum travelled(segment.beginAge);
+        std::uint64_t segmentNullCollisions = 0;
         while (true) {
             const double previous = travelled.value();
             const double distance = -std::log1p(-rng.openUniform01()) / segment.majorant;
@@ -65,6 +82,8 @@ FlightSample sampleSegmentedDeltaTracking(const FlightKernel& kernel, Cursor& cu
             if (!(age < segment.endAge)) break;
             if (diagnostics) {
                 ++diagnostics->candidates;
+                diagnostics->maximumCandidateMajorant = std::max(
+                    diagnostics->maximumCandidateMajorant, segment.majorant);
                 if (age == previous) ++diagnostics->roundedCandidateSteps;
                 if (segment.nearBirth) ++diagnostics->nearCandidates;
                 else ++diagnostics->farCandidates;
@@ -73,9 +92,23 @@ FlightSample sampleSegmentedDeltaTracking(const FlightKernel& kernel, Cursor& cu
             if (!(hazard >= 0.0 && hazard <= segment.majorant))
                 throw NumericError(NumericStatus::InvalidMajorant,
                                    "extinction exceeds segment majorant");
-            if (rng.openUniform01() < hazard / segment.majorant) return {true, age};
-            if (diagnostics) ++diagnostics->nullCollisions;
+            if (diagnostics)
+                diagnostics->maximumEvaluatedHazard = std::max(
+                    diagnostics->maximumEvaluatedHazard, hazard);
+            if (rng.openUniform01() < hazard / segment.majorant) {
+                if (diagnostics)
+                    diagnostics->maximumSegmentNullCollisions = std::max(
+                        diagnostics->maximumSegmentNullCollisions, segmentNullCollisions);
+                return {true, age};
+            }
+            if (diagnostics) {
+                ++diagnostics->nullCollisions;
+                ++segmentNullCollisions;
+            }
         }
+        if (diagnostics)
+            diagnostics->maximumSegmentNullCollisions = std::max(
+                diagnostics->maximumSegmentNullCollisions, segmentNullCollisions);
     }
     if (std::abs(covered-end)>boundaryTolerance)
         throw NumericError(NumericStatus::InvalidMajorant,

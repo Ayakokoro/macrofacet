@@ -19,7 +19,15 @@ bool sameStatistics(const mf::RenderStatistics& a, const mf::RenderStatistics& b
            a.tracking.nearCandidates == b.tracking.nearCandidates &&
            a.tracking.farCandidates == b.tracking.farCandidates &&
            a.tracking.roundedCandidateSteps == b.tracking.roundedCandidateSteps &&
-           a.tracking.adaptiveMajorantFlights == b.tracking.adaptiveMajorantFlights;
+           a.tracking.adaptiveMajorantFlights == b.tracking.adaptiveMajorantFlights &&
+           a.tracking.trackingSegments == b.tracking.trackingSegments &&
+           a.tracking.maximumSegmentNullCollisions == b.tracking.maximumSegmentNullCollisions &&
+           a.tracking.maximumMajorant == b.tracking.maximumMajorant &&
+           a.tracking.maximumCandidateMajorant == b.tracking.maximumCandidateMajorant &&
+           a.tracking.maximumEvaluatedHazard == b.tracking.maximumEvaluatedHazard &&
+           a.tracking.maximumSegmentOpticalDepth == b.tracking.maximumSegmentOpticalDepth &&
+           a.tracking.maximumConditionalIntervalMajorant ==
+               b.tracking.maximumConditionalIntervalMajorant;
 }
 
 class ThrowingMean final : public mf::MeanField {

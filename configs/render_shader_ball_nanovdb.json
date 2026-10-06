@@ -3,7 +3,7 @@
   "seed": 17429,
   "field": {
     "mean_type": "nanovdb",
-    "grid_file": "outputs/fields/shader_ball_sigma_0.001.nvdb",
+    "grid_file": "outputs/fields/shader_ball_sigma_0.001_full.nvdb",
     "use_alpha_grid": false,
     "outside_domain": "vacuum"
   },

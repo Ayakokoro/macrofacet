@@ -193,6 +193,27 @@ void testFlightKernels(TestContext& context) {
             }
         }
     }
+    // Check the finite-interval bound directly across both signs of the
+    // conditional value and slope means, rather than only its far maximum.
+    for (double slope : {0.2,0.002,0.00001}) {
+        for (double exteriorValue : {0.0,0.03}) {
+            FlightState observed=surface;
+            observed.birthGradient.x()=slope;
+            observed.birthValue=exteriorValue;
+            const ConditionalFlightKernel intervalKernel(field,observed);
+            for (double lo : {0.002,0.01,0.05,0.2}) {
+                const double hi=1.5*lo;
+                const double majorant=intervalKernel.intervalMajorant(lo,hi);
+                context.require(std::isfinite(majorant) && majorant>=0.0,
+                                "conditional interval has a finite nonnegative bound");
+                for (int i=0;i<=64;++i) {
+                    const double t=lo+(hi-lo)*i/64.0;
+                    context.require(intervalKernel.evaluate(t).hazard.value<=majorant,
+                                    "tightened conditional interval covers dense hazard probes");
+                }
+            }
+        }
+    }
     // Empirical survival must match independent integration of the actual
     // hazard, including a resumed flight whose birth age remains unchanged.
     for (double begin : {0.0,0.04}) {

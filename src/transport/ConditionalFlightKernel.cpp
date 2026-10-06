@@ -93,13 +93,16 @@ double momentIntervalMajorant(double fmin, double fmax, double kmin,
     const double zmin=fmin/(fmin>=0.0 ? sdmax : sdmin);
     const double muMin=kmin-std::max(left.regression*fmax,right.regression*fmax);
     const double smax=slopeStddevBound(sigma2,a,hi);
-    // For positive conditional slope retain the Gaussian suppression of the
-    // negative flux. The earlier s/sqrt(2*pi) bound lost this suppression.
-    const double logFlux=muMin>=0.0
-        ? std::log(smax)+normalLogPdf(muMin/smax)+std::log(boundGuard)
-        : std::log(upward(-muMin+smax*kInvSqrtTwoPi));
-    const double logDensity=zmin>=0.0
-        ? std::log(2.0)+normalLogPdf(zmin)-std::log(sdmin)
+    // Negative-part expectation increases as its mean falls or its standard
+    // deviation rises. Use its exact value where the subtraction is stable.
+    const double q=muMin/smax;
+    const double logFlux=muMin<0.0
+        ? std::log(upward(-muMin*normalCdf(-q)+smax*normalPdf(-q)))
+        : q<=4.0
+            ? std::log(smax)+std::log(upward(normalPdf(q)-q*normalCdf(-q)))
+            : std::log(smax)+normalLogPdf(q)+std::log(boundGuard);
+    const double logDensity=zmin>-8.0
+        ? normalLogPdf(zmin)-normalLogCdf(zmin)-std::log(sdmin)
         : std::log1p(-zmin)-std::log(sdmin);
     return upward(std::exp(logDensity+logFlux));
 }

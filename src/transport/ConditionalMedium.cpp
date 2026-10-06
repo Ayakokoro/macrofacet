@@ -20,9 +20,13 @@ ConditionalMajorantCursor::ConditionalMajorantCursor(const ConditionalFlightKern
 
 double ConditionalMajorantCursor::bound(double begin, double end) {
     if (diagnostics_) ++diagnostics_->boundIntervals;
-    return end <= birth_.smoothEnd
+    const double maximum = end <= birth_.smoothEnd
         ? flight_.birthAdjacentMajorant(begin,end,birth_)
         : flight_.intervalMajorant(begin,end);
+    if (diagnostics_)
+        diagnostics_->maximumConditionalIntervalMajorant = std::max(
+            diagnostics_->maximumConditionalIntervalMajorant, maximum);
+    return maximum;
 }
 
 std::optional<ExtinctionSegment> ConditionalMajorantCursor::next() {

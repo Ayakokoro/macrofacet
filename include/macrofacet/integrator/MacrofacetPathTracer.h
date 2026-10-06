@@ -3,6 +3,7 @@
 #include "macrofacet/core/Random.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/transport/ClassicNullTracking.h"
+#include <algorithm>
 #include <atomic>
 #include <vector>
 
@@ -36,6 +37,21 @@ inline void mergeInto(RenderStatistics& destination, const RenderStatistics& sou
     destination.tracking.farCandidates += source.tracking.farCandidates;
     destination.tracking.roundedCandidateSteps += source.tracking.roundedCandidateSteps;
     destination.tracking.adaptiveMajorantFlights += source.tracking.adaptiveMajorantFlights;
+    destination.tracking.trackingSegments += source.tracking.trackingSegments;
+    destination.tracking.maximumSegmentNullCollisions = std::max(
+        destination.tracking.maximumSegmentNullCollisions,
+        source.tracking.maximumSegmentNullCollisions);
+    destination.tracking.maximumMajorant = std::max(destination.tracking.maximumMajorant,
+                                                   source.tracking.maximumMajorant);
+    destination.tracking.maximumCandidateMajorant = std::max(
+        destination.tracking.maximumCandidateMajorant, source.tracking.maximumCandidateMajorant);
+    destination.tracking.maximumEvaluatedHazard = std::max(
+        destination.tracking.maximumEvaluatedHazard, source.tracking.maximumEvaluatedHazard);
+    destination.tracking.maximumSegmentOpticalDepth = std::max(
+        destination.tracking.maximumSegmentOpticalDepth, source.tracking.maximumSegmentOpticalDepth);
+    destination.tracking.maximumConditionalIntervalMajorant = std::max(
+        destination.tracking.maximumConditionalIntervalMajorant,
+        source.tracking.maximumConditionalIntervalMajorant);
 }
 
 struct RenderedImage {
