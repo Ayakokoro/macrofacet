@@ -1203,6 +1203,33 @@ void testMeshFullDomainBake(TestContext& context) {
     const auto sidecar = readSidecar(path);
     context.require(sidecar && sidecar->fullDomain,
                     "mesh field records its full-domain coverage");
+    bool covered = true;
+    try { sampled->requireFullRayCoverage(Point3(0.4, 0.013, 0.027), Vector3::UnitZ(), 0.2); }
+    catch (...) { covered = false; }
+    context.require(covered, "full-domain first-passage ray checks every interpolation cell");
+    bool rejected = false;
+    try { sampled->requireFullRayCoverage(Point3(0.4, 0.013, 0.027), Vector3::UnitZ(), 4.0); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    context.require(rejected, "first passage rejects a ray leaving the stored domain");
+    rejected = false;
+    try { NanoVdbMean::open(sphereField().path)->requireFullRayCoverage(
+        Point3(1.0, 0.013, 0.027), Vector3::UnitZ(), 0.01); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    context.require(rejected, "first passage rejects narrow-band coverage before sampling");
+
+    // A full_domain label alone cannot certify the data in a sparse file.
+    const auto mislabeled = tempFieldPath("mislabeled_full_domain.nvdb");
+    std::filesystem::copy_file(sphereField().path, mislabeled,
+                               std::filesystem::copy_options::overwrite_existing);
+    nlohmann::json metadata;
+    { std::ifstream input(sphereField().path.string() + ".json"); input >> metadata; }
+    metadata["coverage"] = "full_domain";
+    { std::ofstream output(mislabeled.string() + ".json"); output << metadata; }
+    rejected = false;
+    try { NanoVdbMean::open(mislabeled)->requireFullRayCoverage(
+        Point3(1.0, 0.013, 0.027), -Vector3::UnitX(), 2.0); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    context.require(rejected, "full-domain metadata cannot hide a hole in the actual SDF grid");
 }
 
 void testNarrowBandTransport(TestContext& context) {

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "input_directory": "outputs/first_passage_kernels",
+  "output_directory": "outputs/first_passage_kernels",
+  "minimum_risk_set": 64,
+  "plots": {
+    "survival": true,
+    "hazard": true,
+    "rice_density": true
+  }
+}
+

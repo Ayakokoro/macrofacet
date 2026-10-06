@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 void testFirstPassage(TestContext& context) {
     using namespace mf;
@@ -57,6 +58,7 @@ void testFirstPassage(TestContext& context) {
 
     const fs::path directory = fs::temp_directory_path() / "macrofacet_first_passage_test";
     const fs::path input = directory / "input.json";
+    fs::remove_all(directory);
     fs::create_directories(directory);
     nlohmann::json root = {
         {"schema_version", 1},
@@ -98,11 +100,12 @@ void testFirstPassage(TestContext& context) {
     context.require(fs::exists(directory / "first_passage_curves.csv") &&
                     fs::exists(directory / "first_passage_summary.csv") &&
                     fs::exists(directory / "first_passage_state_hazard.csv") &&
-                    fs::exists(directory / "first_passage_hazard.svg") &&
-                    fs::exists(directory / "first_passage_survival.svg") &&
-                    fs::exists(directory / "first_passage_rice_density.svg") &&
                     fs::exists(directory / "resolved_first_passage_config.json"),
-                    "first-passage experiment writes curve, state, plot, and provenance outputs");
+                    "first-passage experiment writes data and provenance outputs");
+    context.require(!fs::exists(directory / "first_passage_hazard.svg") &&
+                    !fs::exists(directory / "first_passage_survival.svg") &&
+                    !fs::exists(directory / "first_passage_rice_density.svg"),
+                    "C++ first-passage generation does not write visualizations");
     std::ifstream curves(directory / "first_passage_curves.csv");
     std::string header;
     std::getline(curves, header);
@@ -156,11 +159,6 @@ void testFirstPassage(TestContext& context) {
             }},
             {"grid", {{"max_time", 1.0}, {"step_sizes", {0.1, 0.05}}}},
             {"curve", {{"bins", 10}}},
-            {"visualization", {
-                {"comparison", "states"},
-                {"kernel_id", "m32_l1"},
-                {"state_ids", {"outward", "offset"}}
-            }},
             {"monte_carlo", {{"trajectories", 32}, {"thread_count", 2}}},
             {"sampler", {{"type", "collision_state_auto"},
                           {"minimum_step", 0.0125},
@@ -193,10 +191,6 @@ void testFirstPassage(TestContext& context) {
     context.require(collisionConfig.initialConditionType == "collision_state" &&
                     collisionConfig.collisionStates.size() == 2,
                     "collision-state parameter space is parsed");
-    context.require(collisionConfig.collisionVisualization.comparison == "states" &&
-                    collisionConfig.collisionVisualization.kernelId == "m32_l1" &&
-                    collisionConfig.collisionVisualization.stateIds.size() == 2,
-                    "same-kernel state-comparison visualization is parsed");
     const fs::path legacyCollisionInput = directory / "legacy_collision_input.json";
     collisionRoot["first_passage"]["initial_condition"]["type"] =
         "collision_state_matern32";
@@ -216,21 +210,15 @@ void testFirstPassage(TestContext& context) {
     context.require(fs::exists(collisionDirectory / "first_passage_samples.csv") &&
                     fs::exists(collisionDirectory / "first_passage_curves.csv") &&
                     fs::exists(collisionDirectory / "first_passage_summary.csv") &&
-                    fs::exists(collisionDirectory / "first_passage_survival.svg") &&
-                    fs::exists(collisionDirectory / "first_passage_hazard.svg") &&
-                    fs::exists(collisionDirectory / "first_passage_cumulative_hazard.svg") &&
                     fs::exists(collisionDirectory / "resolved_first_passage_config.json"),
                     "collision-state mode writes training and convergence outputs");
-    {
-        std::ifstream svg(collisionDirectory / "first_passage_cumulative_hazard.svg");
-        std::stringstream buffer;
-        buffer << svg.rdbuf();
-        const std::string contents = buffer.str();
-        context.require(contents.find("outward") != std::string::npos &&
-                        contents.find("offset") != std::string::npos &&
-                        contents.find("kernel: m32_l1") != std::string::npos,
-                        "state-comparison SVG labels states for the selected kernel");
-    }
+    context.require(!fs::exists(collisionDirectory / "first_passage_survival.svg") &&
+                    !fs::exists(collisionDirectory / "first_passage_hazard.svg") &&
+                    !fs::exists(collisionDirectory /
+                                "first_passage_cumulative_hazard.svg") &&
+                    !fs::exists(collisionDirectory /
+                                "first_passage_crossing_slope_density.csv"),
+                    "C++ collision-state generation leaves analysis to Python");
     std::ifstream collisionSamples(collisionDirectory / "first_passage_samples.csv");
     std::string collisionHeader;
     std::getline(collisionSamples, collisionHeader);
@@ -288,5 +276,158 @@ void testFirstPassage(TestContext& context) {
         }
     }
     collisionSamples.close();
+    // The spatial-mean implementation must reduce to the existing affine SE
+    // result with the same seeds when its mean is a plane.
+    auto planeRoot = collisionRoot;
+    planeRoot["first_passage"]["kernels"] = nlohmann::json::array(
+        {collisionRoot["first_passage"]["kernels"][2]});
+    planeRoot["first_passage"]["process"]["mean_field"] = {
+        {"mean_type", "plane"}, {"plane_normal", {0.0, 0.0, 1.0}}, {"plane_offset", 0.0}};
+    planeRoot["first_passage"]["initial_condition"] = {
+        {"type", "collision_state"}, {"rays", {
+            {{"id", "outward"}, {"origin", {0.0, 0.0, 0.0}},
+             {"direction", {1.7320508075688772, 0.0, 1.0}},
+             {"gradient", {0.0, 0.0, 2.0}}}}}};
+    planeRoot["output_directory"] = (directory / "physical_plane").string();
+    { std::ofstream output(collisionInput); output << planeRoot; }
+    const auto plane = loadFirstPassageExperimentConfig(collisionInput);
+    runFirstPassageExperiment(plane);
+    std::ifstream planeSamples(plane.outputDirectory / "first_passage_samples.csv");
+    std::string planeRow;
+    std::getline(planeSamples, planeRow);
+    std::size_t planeIndex = 0;
+    while (std::getline(planeSamples, planeRow)) {
+        if (planeRow.empty()) continue;
+        std::vector<std::string> fields;
+        std::stringstream row(planeRow);
+        for (std::string field; std::getline(row, field, ',');) fields.push_back(field);
+        const auto& reference = collisionFields[2 * rowsPerKernel + planeIndex];
+        context.require(fields[17] == reference[17], "physical plane matches affine SE event flags");
+        context.near(std::stod(fields[15]), std::stod(reference[15]), 1e-10,
+                     "physical plane matches affine SE first-passage times");
+        ++planeIndex;
+    }
+    context.require(planeIndex == 64, "physical plane checks every realization and resolution");
+    planeSamples.close();
+    // The birth value is fixed at zero even off the deterministic mean surface.
+    auto curvedRoot = collisionRoot;
+    curvedRoot["first_passage"]["process"]["mean_field"] = {
+        {"mean_type", "sphere"}, {"sphere_center", {0.0, 0.0, 0.0}}, {"sphere_radius", 1.0}};
+    curvedRoot["first_passage"]["initial_condition"] = {
+        {"type", "collision_state"}, {"rays", {
+            {{"id", "sphere_ray"}, {"origin", {0.0, 0.0, 1.1}},
+             {"direction", {1.0, 0.0, 0.2}}, {"gradient", {0.0, 0.0, 0.5}}}}}};
+    curvedRoot["output_directory"] = (directory / "curved").string();
+    { std::ofstream output(collisionInput); output << curvedRoot; }
+    auto curved = loadFirstPassageExperimentConfig(collisionInput);
+    context.require(curved.processMeanField && curved.collisionStates[0].ray.has_value(),
+                    "curved mean config loads physical ray conditions");
+    context.near(curved.collisionStates[0].ray->direction.norm(), 1.0, 1e-14,
+                 "physical ray directions are normalized");
+    runFirstPassageExperiment(curved);
+    context.require(fs::exists(curved.outputDirectory / "first_passage_mean_profiles.csv"),
+                    "curved mean writes the complete deterministic profile");
+    nlohmann::json resolvedCurved;
+    { std::ifstream inputCurved(curved.outputDirectory / "resolved_first_passage_config.json");
+      inputCurved >> resolvedCurved; }
+    context.require(resolvedCurved["mean_profile"]["ray_coverage_validated"].get<bool>() &&
+                    resolvedCurved["first_passage"]["initial_condition"].contains("rays"),
+                    "curved resolved config records conditioning and preflight checks");
+    curvedRoot["first_passage"]["initial_condition"]["rays"][0]["gradient"] = {0.0, 0.0, -1.0};
+    { std::ofstream output(collisionInput); output << curvedRoot; }
+    bool birthRejected = false;
+    try { (void)loadFirstPassageExperimentConfig(collisionInput); }
+    catch (const std::invalid_argument&) { birthRejected = true; }
+    context.require(birthRejected, "curved surface birth must have positive outgoing slope");
+
+    auto endpointRoot = planeRoot;
+    endpointRoot["first_passage"]["grid"]["max_time"] = 2.0;
+    endpointRoot["first_passage"]["fixed_endpoint"] = {
+        {"enabled", true}, {"only", true}, {"distances", {2.0}}, {"trajectories", 4096}};
+    endpointRoot["output_directory"] = (directory / "endpoint").string();
+    { std::ofstream output(collisionInput); output << endpointRoot; }
+    const auto endpoint = loadFirstPassageExperimentConfig(collisionInput);
+    runFirstPassageExperiment(endpoint);
+    context.require(!fs::exists(endpoint.outputDirectory / "first_passage_curves.csv"),
+                    "fixed endpoint only skips ordinary first-passage generation");
+    const auto readTable = [](const fs::path& path) {
+        std::ifstream inputTable(path);
+        std::string line;
+        std::getline(inputTable, line);
+        std::unordered_map<std::string, std::size_t> header;
+        std::stringstream columns(line);
+        for (std::string field; std::getline(columns, field, ',');) header[field] = header.size();
+        std::vector<std::vector<std::string>> rows;
+        while (std::getline(inputTable, line)) {
+            std::stringstream values(line);
+            std::vector<std::string> row;
+            for (std::string value; std::getline(values, value, ',');) row.push_back(value);
+            if (!row.empty()) rows.push_back(std::move(row));
+        }
+        return std::make_pair(header, rows);
+    };
+    const auto endpointRows = readTable(endpoint.outputDirectory / "fixed_endpoint_samples.csv");
+    context.require(endpointRows.second.size() == 2u * 4096u,
+                    "fixed endpoint writes every proposal for every convergence resolution");
+    for (const auto& row : endpointRows.second) {
+        const auto number = [&](const std::string& field) { return std::stod(row.at(endpointRows.first.at(field))); };
+        context.near(number("target_distance"), 2.0, 0.0, "fixed endpoint distance is not a distance bin");
+        context.near(number("start_value"), 0.0, 1e-13, "endpoint conditioning preserves birth value");
+        context.near(number("endpoint_value"), 0.0, 1e-13, "endpoint value is pinned to zero");
+        context.near(number("birth_slope_error"), 0.0, 1e-9, "endpoint correction preserves birth derivative observation");
+        const double expected = number("survived_to_endpoint") != 0.0
+            ? std::max(0.0, -number("endpoint_slope")) : 0.0;
+        context.near(number("flux_weight_q"), expected, 1e-13, "first-hit samples include survival and negative-slope flux");
+    }
+    const auto endpointSummary = readTable(endpoint.outputDirectory / "fixed_endpoint_summary.csv");
+    for (const auto& row : endpointSummary.second) {
+        const auto number = [&](const std::string& field) { return std::stod(row.at(endpointSummary.first.at(field))); };
+        const double expectedMean = number("endpoint_slope_gaussian_mean");
+        const double expectedStddev = number("endpoint_slope_gaussian_stddev");
+        context.near(number("endpoint_slope_mean"), expectedMean, 7.0 * expectedStddev / 64.0,
+                     "unselected endpoint slopes match analytic Schur mean");
+        context.near(number("endpoint_slope_stddev"), expectedStddev, 0.08 * expectedStddev,
+                     "unselected endpoint slopes match analytic Schur variance");
+        context.require(number("effective_samples") > 0.0 && number("effective_samples") <= number("proposals"),
+                        "weighted first-hit summary reports a valid effective sample count");
+        context.near(number("first_passage_density_distance"),
+                     number("target_field_density") * number("sigma") * number("sum_weight_q") /
+                         number("proposals") / number("ell"), 1e-12,
+                     "weighted endpoint flux estimates first-passage density in scene distance");
+    }
+    auto endpointSerial = endpoint;
+    endpointSerial.threadCount = 1;
+    endpointSerial.outputDirectory = directory / "endpoint_serial";
+    runFirstPassageExperiment(endpointSerial);
+    const auto serialRows = readTable(endpointSerial.outputDirectory / "fixed_endpoint_samples.csv");
+    context.require(serialRows.second == endpointRows.second, "fixed endpoint proposals are reproducible across worker counts");
+
+    // The endpoint conditioner is kernel-independent, also for the kernels
+    // whose ordinary affine FPT sampler uses a different backend.
+    auto endpointKernels = collisionConfig;
+    endpointKernels.maximumTime = 2.0;
+    endpointKernels.collisionStates.resize(1);
+    endpointKernels.trajectories = 32;
+    endpointKernels.fixedEndpoint = {true, false, {1.0, 2.0}, 256};
+    for (auto& kernel : endpointKernels.kernels) kernel.lengthScale = 1.0;
+    endpointKernels.outputDirectory = directory / "endpoint_kernels";
+    runFirstPassageExperiment(endpointKernels);
+    context.require(fs::exists(endpointKernels.outputDirectory / "first_passage_curves.csv"),
+                    "fixed endpoint supplementary mode retains ordinary first-passage outputs");
+    const auto kernelRows = readTable(endpointKernels.outputDirectory / "fixed_endpoint_samples.csv");
+    context.require(kernelRows.second.size() == endpointKernels.kernels.size() * 2u * 2u * 256u,
+                    "all kernels generate each requested fixed distance and resolution");
+    for (const auto& row : kernelRows.second) {
+        const auto number = [&](const std::string& field) { return std::stod(row.at(kernelRows.first.at(field))); };
+        context.near(number("start_value"), 0.0, 1e-13, "all kernels preserve fixed birth value");
+        context.near(number("endpoint_value"), 0.0, 1e-13, "all kernels enforce fixed endpoint value");
+        context.near(number("birth_slope_error"), 0.0, 1e-9, "all kernels preserve birth derivative observation");
+    }
+    endpointRoot["first_passage"]["fixed_endpoint"]["distances"] = {0.83};
+    { std::ofstream output(collisionInput); output << endpointRoot; }
+    bool endpointRejected = false;
+    try { (void)loadFirstPassageExperimentConfig(collisionInput); }
+    catch (const std::invalid_argument&) { endpointRejected = true; }
+    context.require(endpointRejected, "off-grid endpoint distances are rejected instead of silently rounded");
     fs::remove_all(directory);
 }

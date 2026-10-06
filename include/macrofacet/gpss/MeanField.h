@@ -60,6 +60,10 @@ public:
     virtual double voxelSizeHint() const { return 0.0; }
     virtual void appendRayBreakpoints(const Point3&, const Vector3&, double, double,
                                       std::vector<double>&) const {}
+    // Analytic means are defined everywhere. Sampled means must certify that
+    // this entire segment is covered by stored data, not background values.
+    // Used by GP first-passage experiments; does not change renderer vacuum rules.
+    virtual void requireFullRayCoverage(const Point3&, const Vector3&, double) const {}
 };
 
 class PlaneMean final : public MeanField {

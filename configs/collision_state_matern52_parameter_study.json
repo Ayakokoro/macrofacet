@@ -63,19 +63,6 @@
     "curve": {
       "bins": 200
     },
-    "visualization": {
-      "comparison": "states",
-      "kernel_id": "matern52",
-      "state_ids": [
-        "baseline",
-        "beta0_negative",
-        "beta0_positive",
-        "betaA_negative",
-        "betaA_positive",
-        "betaG_small",
-        "betaG_large"
-      ]
-    },
     "monte_carlo": {
       "trajectories": 8192,
       "thread_count": 0,

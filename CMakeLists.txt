@@ -15,24 +15,25 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 # same PyTorch build without requiring a second standalone LibTorch download.
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" -c
-            "import torch; print(torch.utils.cmake_prefix_path)"
-    RESULT_VARIABLE MACROFACET_TORCH_PREFIX_RESULT
-    OUTPUT_VARIABLE MACROFACET_TORCH_PREFIX
+            "import json; from pathlib import Path; import torch; print(json.dumps({'prefix': torch.utils.cmake_prefix_path, 'version': torch.__version__.split('+', 1)[0], 'runtime_directory': str(Path(torch.__file__).resolve().parent / 'lib')}))"
+    RESULT_VARIABLE MACROFACET_TORCH_QUERY_RESULT
+    OUTPUT_VARIABLE MACROFACET_TORCH_INFO
+    ERROR_VARIABLE MACROFACET_TORCH_QUERY_ERROR
     OUTPUT_STRIP_TRAILING_WHITESPACE)
-if(NOT MACROFACET_TORCH_PREFIX_RESULT EQUAL 0 OR NOT MACROFACET_TORCH_PREFIX)
+if(NOT MACROFACET_TORCH_QUERY_RESULT EQUAL 0 OR NOT MACROFACET_TORCH_INFO)
     message(FATAL_ERROR
-        "Unable to query torch.utils.cmake_prefix_path from ${Python3_EXECUTABLE}")
+        "Unable to locate PyTorch/LibTorch using ${Python3_EXECUTABLE}.\n"
+        "Install python/requirements-cuda.txt into that interpreter, or select "
+        "another interpreter with -DPython3_EXECUTABLE=<python.exe>.\n"
+        "${MACROFACET_TORCH_QUERY_ERROR}")
 endif()
-execute_process(
-    COMMAND "${Python3_EXECUTABLE}" -c
-            "import torch; print(torch.__version__.split('+', 1)[0])"
-    RESULT_VARIABLE MACROFACET_TORCH_VERSION_RESULT
-    OUTPUT_VARIABLE MACROFACET_TORCH_VERSION
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-if(NOT MACROFACET_TORCH_VERSION_RESULT EQUAL 0 OR NOT MACROFACET_TORCH_VERSION)
-    message(FATAL_ERROR
-        "Unable to query the PyTorch version from ${Python3_EXECUTABLE}")
-endif()
+string(JSON MACROFACET_TORCH_PREFIX GET "${MACROFACET_TORCH_INFO}" prefix)
+string(JSON MACROFACET_TORCH_VERSION GET "${MACROFACET_TORCH_INFO}" version)
+string(JSON MACROFACET_TORCH_RUNTIME_DIRECTORY
+    GET "${MACROFACET_TORCH_INFO}" runtime_directory)
+file(TO_CMAKE_PATH "${MACROFACET_TORCH_PREFIX}" MACROFACET_TORCH_PREFIX)
+file(TO_CMAKE_PATH "${MACROFACET_TORCH_RUNTIME_DIRECTORY}"
+    MACROFACET_TORCH_RUNTIME_DIRECTORY)
 if(MACROFACET_TORCH_VERSION VERSION_LESS "2.12" OR
    NOT MACROFACET_TORCH_VERSION VERSION_LESS "2.13")
     message(FATAL_ERROR
@@ -181,6 +182,29 @@ endif()
 add_executable(macrofacet_tests ${MACROFACET_TEST_SOURCES})
 target_link_libraries(macrofacet_tests PRIVATE ${MACROFACET_TEST_LIBRARIES})
 
+if(WIN32)
+    # Windows resolves imported DLLs before main(), so a launcher must set the
+    # search path before starting the executable. Reuse the Python wheel's DLLs
+    # in place rather than copying them into every build configuration.
+    set(MACROFACET_TORCH_EXECUTABLES macrofacet_experiments macrofacet_tests)
+    if(MACROFACET_BUILD_FIELDS)
+        list(APPEND MACROFACET_TORCH_EXECUTABLES macrofacet_fieldgen)
+    endif()
+    file(TO_NATIVE_PATH "${MACROFACET_TORCH_RUNTIME_DIRECTORY}"
+        MACROFACET_TORCH_RUNTIME_DIRECTORY_NATIVE)
+    foreach(executable IN LISTS MACROFACET_TORCH_EXECUTABLES)
+        file(GENERATE
+            OUTPUT "$<TARGET_FILE_DIR:${executable}>/${executable}.cmd"
+            CONTENT "@echo off\nsetlocal\nset \"PATH=${MACROFACET_TORCH_RUNTIME_DIRECTORY_NATIVE};%PATH%\"\n\"$<TARGET_FILE:${executable}>\" %*\nexit /b %errorlevel%\n"
+            NEWLINE_STYLE CRLF)
+        set_target_properties(${executable} PROPERTIES
+            VS_DEBUGGER_ENVIRONMENT
+                "PATH=${MACROFACET_TORCH_RUNTIME_DIRECTORY_NATIVE};%PATH%")
+    endforeach()
+    message(STATUS
+        "LibTorch runtime: generated .cmd launchers use ${MACROFACET_TORCH_RUNTIME_DIRECTORY}")
+endif()
+
 set(MACROFACET_MLP_TEST_DATA "${CMAKE_CURRENT_BINARY_DIR}/mlp_test_data")
 file(MAKE_DIRECTORY "${MACROFACET_MLP_TEST_DATA}")
 execute_process(
@@ -202,9 +226,13 @@ endif()
 
 enable_testing()
 add_test(NAME macrofacet_tests COMMAND macrofacet_tests)
+add_test(
+    NAME macrofacet_data_analysis_tests
+    COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s data_analysis/tests -v)
+set_tests_properties(macrofacet_data_analysis_tests PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 if(WIN32)
-    # Python adds torch/lib to the DLL search path while importing torch. CTest
-    # needs the equivalent environment when it starts the C++ executable.
     set_tests_properties(macrofacet_tests PROPERTIES ENVIRONMENT_MODIFICATION
-        "PATH=path_list_prepend:${TORCH_INSTALL_PREFIX}/lib")
+        "PATH=path_list_prepend:${MACROFACET_TORCH_RUNTIME_DIRECTORY}")
 endif()

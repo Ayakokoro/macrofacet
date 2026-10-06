@@ -86,6 +86,27 @@ public:
     const Bounds3& worldBounds() const { return worldBounds_; }
     const Bounds3& activeNodeBounds() const { return activeNodeBounds_; }
 
+    bool hasCompleteInterpolationCell(const Point3& x) const {
+        const auto u = continuousIndex(x);
+        const auto bbox = grid_->indexBBox();
+        int base[3];
+        for (int axis = 0; axis < 3; ++axis) {
+            // Check bounds before conversion to avoid overflow for far queries.
+            if (!std::isfinite(u[axis]) || u[axis] < bbox.min()[axis] ||
+                u[axis] >= bbox.max()[axis]) return false;
+            base[axis] = static_cast<int>(std::floor(u[axis]));
+        }
+        auto accessor = grid_->getAccessor();
+        for (int k = 0; k < 2; ++k)
+            for (int j = 0; j < 2; ++j)
+                for (int i = 0; i < 2; ++i) {
+                    const nanovdb::Coord node(base[0] + i, base[1] + j, base[2] + k);
+                    if (!accessor.isActive(node) || !std::isfinite(accessor.getValue(node)))
+                        return false;
+                }
+        return true;
+    }
+
     // With shared trilinear weights, positive density can only occur where
     // alpha is positive if that implication holds at every grid node.
     bool positiveAtEveryPositiveNodeOf(const GridView& density) const {

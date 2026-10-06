@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "seed": 20261005,
+  "first_passage": {
+    "process": {
+      "mean": 0.0,
+      "threshold": 0.0,
+      "mean_field": {
+        "mean_type": "sphere",
+        "sphere_center": [0.00013, -0.0274, 0.041],
+        "sphere_radius": 0.01
+      }
+    },
+    "initial_condition": {
+      "type": "collision_state",
+      "rays": [
+        {"id": "g025", "origin": [0.00013, -0.0374, 0.041],
+         "direction": [1.0, -0.2, 0.05], "gradient": [0.0, -0.25, 0.0]},
+        {"id": "g100", "origin": [0.00013, -0.0374, 0.041],
+         "direction": [1.0, -0.2, 0.05], "gradient": [0.0, -1.0, 0.0]}
+      ]
+    },
+    "fixed_endpoint": {"enabled": true, "only": true, "distances": [0.004], "trajectories": 0},
+    "grid": {"max_time": 2.0, "step_sizes": [0.08, 0.04, 0.02]},
+    "curve": {"bins": 120},
+    "monte_carlo": {"trajectories": 2000000, "thread_count": 0, "write_raw_samples": true},
+    "sampler": {"type": "collision_state_auto", "max_embedding_expansions": 8},
+    "rice_series": {"enabled": false},
+    "state_analysis": {"enabled": false},
+    "kernels": [
+      {"id": "se", "type": "squared_exponential", "variance": 0.000001, "length_scale": 0.002}
+    ]
+  },
+  "output_directory": "outputs/sphere_fixed_endpoint_se"
+}

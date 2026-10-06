@@ -45,6 +45,8 @@ public:
     void appendRayBreakpoints(const Point3& origin, const Vector3& direction,
                               double begin, double end,
                               std::vector<double>& knots) const override;
+    void requireFullRayCoverage(const Point3& origin, const Vector3& direction,
+                                double maximumDistance) const override;
 
     ~NanoVdbMean() override;
 

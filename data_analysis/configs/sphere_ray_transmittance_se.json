@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "input_directory": "outputs/sphere_ray_transmittance_se",
+  "output_directory": "outputs/sphere_ray_transmittance_se",
+  "comparison": "states",
+  "kernel_id": "se",
+  "state_ids": ["g025", "g100"],
+  "x_axis": "distance",
+  "minimum_risk_set": 64,
+  "plots": {
+    "survival": true,
+    "density": false,
+    "hazard": true,
+    "cumulative_hazard": true,
+    "mean_profile": true,
+    "crossing_slope_density": {"enabled": false}
+  }
+}

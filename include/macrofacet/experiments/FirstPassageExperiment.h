@@ -1,5 +1,7 @@
 #pragma once
 
+#include "macrofacet/gpss/MeanField.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -42,11 +44,19 @@ struct FirstPassageRiceSeriesConfig {
     double covarianceRoundoffMultiplier = 256.0;
 };
 
+struct FirstPassageRayCondition {
+    Point3 origin = Point3::Zero();
+    Vector3 direction = Vector3::UnitZ();
+    // Unnormalized observed gradient of F, not the mean gradient or a normal.
+    Vector3 gradient = Vector3::UnitZ();
+};
+
 struct FirstPassageCollisionState {
     std::string id;
     double beta0 = 0.0;
     double betaMeanSlope = 0.0;
     double betaCollisionSlope = 1.0;
+    std::optional<FirstPassageRayCondition> ray;
 };
 
 struct FirstPassageCollisionSamplerConfig {
@@ -56,18 +66,23 @@ struct FirstPassageCollisionSamplerConfig {
     int maximumRefinementDepth = 12;
 };
 
-struct FirstPassageCollisionVisualizationConfig {
-    // kernels: compare all kernels at one state; states: compare selected states
-    // for one kernel.
-    std::string comparison = "kernels";
-    std::optional<std::string> kernelId;
-    std::vector<std::string> stateIds;
+struct FirstPassageFixedEndpointConfig {
+    bool enabled = false;
+    // Skip ordinary FPT generation; write only fixed-endpoint proposals/statistics.
+    bool only = false;
+    // Physical scene distances, converted to q independently for each kernel.
+    std::vector<double> distances;
+    // 0 reuses monte_carlo.trajectories (and the CLI --trials override).
+    int trajectories = 0;
 };
 
 struct FirstPassageExperimentConfig {
     int schemaVersion = 1;
     std::uint64_t seed = 17429;
     double processMean = 0.0;
+    // Optional full spatial mean. Physical ray conditions replace beta inputs.
+    MeanFieldPtr processMeanField;
+    std::string meanFieldConfiguration;
     double threshold = 0.0;
     std::string initialConditionType = "fixed_value";
     double initialValue = 1.0;
@@ -86,7 +101,7 @@ struct FirstPassageExperimentConfig {
     FirstPassageStateAnalysisConfig stateAnalysis;
     FirstPassageRiceSeriesConfig riceSeries;
     FirstPassageCollisionSamplerConfig collisionSampler;
-    FirstPassageCollisionVisualizationConfig collisionVisualization;
+    FirstPassageFixedEndpointConfig fixedEndpoint;
     std::vector<FirstPassageCollisionState> collisionStates;
     std::vector<FirstPassageKernelConfig> kernels;
     std::filesystem::path outputDirectory = "outputs/first_passage";

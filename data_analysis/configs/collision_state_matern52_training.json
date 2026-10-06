@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "input_directory": "outputs/collision_state_matern52_training",
+  "output_directory": "outputs/collision_state_matern52_training",
+  "comparison": "states",
+  "kernel_id": "matern52",
+  "state_ids": ["lhs_0", "lhs_1", "lhs_2", "lhs_3", "lhs_4", "lhs_5"],
+  "minimum_risk_set": 64,
+  "plots": {
+    "survival": true,
+    "density": false,
+    "hazard": true,
+    "cumulative_hazard": true,
+    "crossing_slope_density": {
+      "enabled": false
+    }
+  }
+}
+

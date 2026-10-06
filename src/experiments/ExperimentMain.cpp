@@ -141,7 +141,11 @@ int main(int argc, char** argv) {
             mf::FirstPassageExperimentConfig firstPassage =
                 mf::loadFirstPassageExperimentConfig(options.configPath);
             if (options.outputDirectory) firstPassage.outputDirectory = *options.outputDirectory;
-            if (options.trials) firstPassage.trajectories = *options.trials;
+            if (options.trials) {
+                firstPassage.trajectories = *options.trials;
+                if (firstPassage.fixedEndpoint.trajectories > 0)
+                    firstPassage.fixedEndpoint.trajectories = *options.trials;
+            }
             if (options.bins) firstPassage.curveBins = *options.bins;
             if (options.threadCount.has_value()) firstPassage.threadCount = *options.threadCount;
             mf::runFirstPassageExperiment(firstPassage);
@@ -152,6 +156,11 @@ int main(int argc, char** argv) {
                     << firstPassage.initialConditionType << "\",\n"
                     << "  \"trajectories_per_state_and_resolution\": "
                     << firstPassage.trajectories << ",\n"
+                    << "  \"fixed_endpoint_enabled\": " << (firstPassage.fixedEndpoint.enabled ? "true" : "false") << ",\n"
+                    << "  \"fixed_endpoint_only\": " << (firstPassage.fixedEndpoint.only ? "true" : "false") << ",\n"
+                    << "  \"fixed_endpoint_proposals_per_target_and_resolution\": "
+                    << (firstPassage.fixedEndpoint.enabled ? (firstPassage.fixedEndpoint.trajectories > 0
+                        ? firstPassage.fixedEndpoint.trajectories : firstPassage.trajectories) : 0) << ",\n"
                     << "  \"state_count\": "
                     << (firstPassage.initialConditionType == "collision_state"
                             ? firstPassage.collisionStates.size() : 1) << ",\n"

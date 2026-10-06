@@ -99,26 +99,25 @@ x(q)=\beta_0+\beta_aq+y(q)
 - `first_passage_samples.csv`：逐 realization 的训练数据，包括 kernel/backend、`beta_0/beta_a/beta_g`、FPT/censor、无量纲 `crossing_slope`、物理 `crossing_derivative`、seed 和数值诊断；
 - `first_passage_curves.csv`：每个状态和步长的 risk-set survival、density、hazard 与两种累计 hazard；
 - `first_passage_summary.csv`：事件率、restricted mean、FPT/crossing-slope quantile 和平均 refinement 成本；
-- `resolved_first_passage_config.json`：完全展开后的状态、kernel 和数值参数；
-- `first_passage_survival.svg`、`first_passage_hazard.svg`、`first_passage_cumulative_hazard.svg`：训练分辨率下由 `visualization` 选择的跨 kernel 或跨状态对比。
+- `resolved_first_passage_config.json`：完全展开后的状态、kernel 和数值参数。
 
-可视化有两种配置模式。默认的 `comparison="kernels"` 在一个状态上比较不同 kernel；下面的配置则固定一个 kernel，比较多个碰撞状态：
+这些是 C++ 生成器的全部职责；C++ 不再写 SVG，也不计算仅供画图使用的
+斜率直方图。可视化统一由 `data_analysis/plot_first_passage.py` 读取 CSV 完成。
+例如，生成多 kernel 曲线和分区间斜率密度：
 
-```json
-"visualization": {
-  "comparison": "states",
-  "kernel_id": "matern52",
-  "state_ids": [
-    "baseline",
-    "beta0_negative",
-    "beta0_positive"
-  ]
-}
+```powershell
+python data_analysis\plot_first_passage.py `
+  --config data_analysis\configs\collision_state_kernels.json
 ```
 
-三张 SVG 都只使用 `training_resolution=1` 的曲线。`state_ids` 的顺序同时决定图例顺序；建议使用有意义的显式状态 ID，并避免一次叠加过多曲线。完整示例见 `configs/collision_state_matern52_parameter_study.json`。
+独立的分析配置提供两种选择方式：`comparison="kernels"` 固定一个状态并比较
+不同 kernel；`comparison="states"` 固定一个 kernel 并按给定顺序比较多个状态。
+斜率密度仍使用 `event_q in (q_begin, q_end]` 的事件，在每个“区间 ×
+kernel/state”内独立归一化，使 `sum(density * bin_width)=1`。脚本只使用
+`training_resolution=1` 的曲线和样本。完整配置说明见
+[`data_analysis/README.md`](../data_analysis/README.md)。
 
-训练累计消光 \(H(q\mid\beta_0,\beta_a,\beta_g)\) 时应筛选 `training_resolution=1`。其他分辨率只用于检查 survival、FPT quantile 和 crossing-slope 是否收敛。`event=0,censored=1` 的 `event_q=max_q` 是右删失记录；其 crossing 字段为空。若训练只使用区间计数，可设置 `monte_carlo.write_raw_samples=false`，此时不会创建 `first_passage_samples.csv`，但 curve/summary 和可视化保持不变。
+训练累计消光 \(H(q\mid\beta_0,\beta_a,\beta_g)\) 时应筛选 `training_resolution=1`。其他分辨率只用于检查 survival、FPT quantile 和 crossing-slope 是否收敛。`event=0,censored=1` 的 `event_q=max_q` 是右删失记录；其 crossing 字段为空。若训练只使用区间计数，可设置 `monte_carlo.write_raw_samples=false`，此时不会创建 `first_passage_samples.csv`；curve/summary 仍会生成，但 Python 斜率密度图需要原始样本，因而不能启用。
 
 Matérn 5/2 的正式训练配置是 `configs/collision_state_matern52_training.json`。它生成 512 个 Latin-hypercube 状态，并由独立 Python 包直接对 `at_risk/events` 最大化区间 likelihood，拟合单调 I-spline 累计 hazard；完整命令、模型定义、独立样条表示误差检查和渲染查询方式见 [Python training guide](../python/README.md)。
 
@@ -205,7 +204,7 @@ s^2-\frac{c(t)^2}{s^2}
 \right)
 \]
 
-解析求值。`first_passage_survival.svg` 中，同一颜色表示同一个 kernel：实线是真实 Monte Carlo first-passage survival，虚线是 \(S_{\Sigma_1}\)，点线是直接端点概率。后者对零均值平稳过程最终趋向 \(1/2\)，而真实 survival 最终趋向零，这个差异正是“当前点仍为正”不能替代“此前整段都为正”的直观表现。
+解析求值。运行 Python 可视化后，`first_passage_survival.svg` 中同一颜色表示同一个 kernel：实线是真实 Monte Carlo first-passage survival，虚线是 \(S_{\Sigma_1}\)，点线是直接端点概率。后者对零均值平稳过程最终趋向 \(1/2\)，而真实 survival 最终趋向零，这个差异正是“当前点仍为正”不能替代“此前整段都为正”的直观表现。
 
 `first_passage_summary.csv` 的 `endpoint_survival_rmse`、`sigma1_survival_rmse` 和 `sigma2_survival_rmse` 汇总三种近似相对于 Monte Carlo survival 的误差。
 
@@ -251,7 +250,7 @@ CSV 中新增：
 - `rice_survival_order1/2` 和 `rice_hazard_order1/2`：分别由对应截断密度积分得到的自洽 survival 和 hazard；
 - `rice_w2_absolute_error`、`rice_w2_converged`：外层 Gauss--Kronrod 积分诊断。
 
-`first_passage_rice_density.svg` 将 Monte Carlo density、Rice 一阶和 Rice 二阶画在同一张图中。有限阶 Rice 密度在较晚时间变负是截断失效的诊断，不会被裁剪为零。Matérn 3/2 的速度协方差在零时间差处有 cusp；在低于二阶协方差条件化可靠分辨范围的对角邻域，代码使用单侧最近可分辨值，避免把理论半正定的 Schur complement 误判成非 PSD。
+Python 可视化生成的 `first_passage_rice_density.svg` 将 Monte Carlo density、Rice 一阶和 Rice 二阶画在同一张图中。有限阶 Rice 密度在较晚时间变负是截断失效的诊断，不会被裁剪为零。Matérn 3/2 的速度协方差在零时间差处有 cusp；在低于二阶协方差条件化可靠分辨范围的对角邻域，代码使用单侧最近可分辨值，避免把理论半正定的 Schur complement 误判成非 PSD。
 
 ## 多 kernel 与 crossing 收敛
 
@@ -289,4 +288,4 @@ X_c(t)=X(t)+\frac{c(t)}{c(0)}\bigl(a-X(0)\bigr)
 
 ## 当前边界
 
-`fixed_value` 模式仍是任意受支持 kernel 的常均值基础实验。统一的 `collision_state` 模式实现了 \(F(0)=0,F'(0)>0\) 的 affine-mean surface birth 数据生成，但明确采用碰撞状态近似：它只保留最近碰撞的场值和梯度，不包含碰撞前完整 survival history。当前支持各向同性 squared exponential、Matérn \(3/2\)、Matérn \(5/2\) 和 rational quadratic。只有 Matérn \(3/2\) 具有本实现中的连续状态空间/bridge 后端；其他 kernel 必须用 step-size convergence 评估网格误差。非线性 mean、各向异性 kernel 和跨碰撞历史仍不在该训练集定义内。旧类型 `collision_state_matern32` 不作为兼容别名保留。
+`fixed_value` 模式仍是任意受支持 kernel 的常均值基础实验。统一的 `collision_state` 模式实现了 \(F(0)=0,F'(0)>0\) 的 affine-mean surface birth 数据生成，但明确采用碰撞状态近似：它只保留最近碰撞的场值和梯度，不包含碰撞前完整 survival history。当前支持各向同性 squared exponential、Matérn \(3/2\)、Matérn \(5/2\) 和 rational quadratic。affine 模式的 Matérn \(3/2\) 具有连续状态空间/bridge 后端；其他 kernel 必须用 step-size convergence 评估网格误差。完整空间 mean 可通过 `process.mean_field` 和 `initial_condition.rays` 接入，包括已有的 `shader_ball_full.nvdb`，详见 [全域 SDF 实验说明](FIRST_PASSAGE_FULL_FIELD.md)；空间 mean 模式统一使用网格条件化后端，不属于三 beta 的 affine 训练集。各向异性 kernel 和跨碰撞历史仍不支持。旧类型 `collision_state_matern32` 不作为兼容别名保留。

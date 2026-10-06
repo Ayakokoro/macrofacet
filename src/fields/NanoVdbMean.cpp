@@ -18,6 +18,7 @@ struct NanoVdbMean::Impl {
     std::filesystem::path path;
     double sigma = 0.0;
     double cachedMaximumGradientNorm = 0.0;
+    bool fullDomain = false;
 
     double maximumGradientNorm() const {
         return cachedMaximumGradientNorm;
@@ -37,6 +38,7 @@ std::shared_ptr<const NanoVdbMean> NanoVdbMean::open(const std::filesystem::path
     }
     auto result = std::shared_ptr<NanoVdbMean>(new NanoVdbMean());
     result->impl_->path = gridFile;
+    result->impl_->fullDomain = sidecar && sidecar->fullDomain;
     result->impl_->view = detail::GridView::open(gridFile, "sdf");
 
     // The primitive generator writes only sdf/density/alpha, without sigma
@@ -151,6 +153,36 @@ void NanoVdbMean::appendRayBreakpoints(const Point3& origin, const Vector3& dire
 }
 
 double NanoVdbMean::sigma() const { return impl_->sigma; }
+
+void NanoVdbMean::requireFullRayCoverage(const Point3& origin, const Vector3& direction,
+                                        double maximumDistance) const {
+    if (!impl_->fullDomain) {
+        throw std::invalid_argument("GP first passage requires NanoVDB coverage=full_domain "
+                                    "in its sidecar: " + impl_->path.string());
+    }
+    if (!origin.allFinite() || !direction.allFinite() ||
+        !(direction.squaredNorm() > 0.0) || !std::isfinite(maximumDistance) ||
+        !(maximumDistance > 0.0)) {
+        throw std::invalid_argument("invalid NanoVDB first-passage ray");
+    }
+    const auto covered = [&](double t) {
+        if (!impl_->view.hasCompleteInterpolationCell(origin + t * direction)) {
+            throw std::invalid_argument("NanoVDB first-passage ray reaches missing/non-finite "
+                "SDF interpolation nodes at distance " + std::to_string(t) +
+                "; shorten the ray or re-bake a larger full domain: " + impl_->path.string());
+        }
+    };
+    covered(0.0);
+    covered(maximumDistance);
+    std::vector<double> knots{0.0, maximumDistance};
+    appendRayBreakpoints(origin, direction, 0.0, maximumDistance, knots);
+    std::sort(knots.begin(), knots.end());
+    // Every open interval is one interpolation cell. Check corners, not just
+    // interpolated values: a zero SDF at a stored node is perfectly valid.
+    for (std::size_t i = 1; i < knots.size(); ++i) {
+        if (knots[i] > knots[i - 1]) covered(0.5 * (knots[i] + knots[i - 1]));
+    }
+}
 
 // Exactly sigma(), offered through the interface a config can consult without
 // knowing what a NanoVdbMean is.

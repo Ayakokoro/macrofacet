@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "input_directory": "outputs/shader_ball_fixed_endpoint_se",
+  "output_directory": "outputs/shader_ball_fixed_endpoint_se",
+  "comparison": "states",
+  "kernel_id": "se",
+  "state_ids": ["g025", "g100"],
+  "distances": [0.004],
+  "bins": 100,
+  "slope_units": "physical"
+}

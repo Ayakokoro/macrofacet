@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "input_directory": "outputs/collision_state_matern52_parameter_study",
+  "output_directory": "outputs/collision_state_matern52_parameter_study",
+  "comparison": "states",
+  "kernel_id": "matern52",
+  "state_ids": [
+    "baseline",
+    "beta0_negative",
+    "beta0_positive",
+    "betaA_negative",
+    "betaA_positive",
+    "betaG_small",
+    "betaG_large"
+  ],
+  "minimum_risk_set": 64,
+  "plots": {
+    "survival": true,
+    "density": false,
+    "hazard": true,
+    "cumulative_hazard": true,
+    "crossing_slope_density": {
+      "enabled": false
+    }
+  }
+}
+

@@ -3,3 +3,4 @@ outputs/
 python/.venv/
 python/**/__pycache__/
 python/.pytest_cache/
+data_analysis/**/__pycache__/

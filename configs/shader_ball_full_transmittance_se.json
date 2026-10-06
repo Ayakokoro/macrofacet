@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "seed": 20261005,
+  "first_passage": {
+    "process": {
+      "mean": 0.0,
+      "threshold": 0.0,
+      "mean_field": {
+        "mean_type": "nanovdb",
+        "grid_file": "outputs/fields/shader_ball_full.nvdb",
+        "use_alpha_grid": false
+      }
+    },
+    "initial_condition": {
+      "type": "collision_state",
+      "rays": [
+        {
+          "id": "g025",
+          "origin": [0.00013, -0.0374, 0.041],
+          "direction": [1.0, -0.2, 0.05],
+          "gradient": [0.0, -0.25, 0.0]
+        },
+        {
+          "id": "g100",
+          "origin": [0.00013, -0.0374, 0.041],
+          "direction": [1.0, -0.2, 0.05],
+          "gradient": [0.0, -1.0, 0.0]
+        }
+      ]
+    },
+    "grid": {"max_time": 6.0, "step_sizes": [0.08, 0.04, 0.02]},
+    "curve": {"bins": 2000},
+    "monte_carlo": {
+      "trajectories": 2000000,
+      "thread_count": 0,
+      "confidence_level": 0.95,
+      "write_raw_samples": true,
+      "minimum_risk_set_for_error": 64
+    },
+    "sampler": {"type": "collision_state_auto", "max_embedding_expansions": 8},
+    "rice_series": {"enabled": false},
+    "state_analysis": {"enabled": false},
+    "kernels": [
+      {"id": "se", "type": "squared_exponential", "variance": 0.000001, "length_scale": 0.002}
+    ]
+  },
+  "output_directory": "outputs/shader_ball_full_transmittance_se"
+}
