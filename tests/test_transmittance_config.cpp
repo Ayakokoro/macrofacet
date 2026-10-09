@@ -22,13 +22,7 @@ void testTransmittanceConfig(TestContext& context) {
         {"material", {
             {"ndf_family", "generalized_gaussian"},
             {"eta_rgb", {0.2, 0.9, 1.1}}, {"k_rgb", {3.9, 2.5, 2.2}}}},
-        {"transport", {
-            {"roulette_start_depth", 4},
-            {"first_passage_model", {
-                {"type", "mlp"},
-                {"module", "outputs/models/example/coefficient_net.pt"},
-                {"bundle", "outputs/models/example/model_bundle.json"},
-                {"device", "cpu"}}}}},
+        {"transport", {{"roulette_start_depth", 4}}},
         {"numeric", {
             {"relative_tolerance", 1e-6}, {"absolute_tolerance", 1e-9},
             {"max_quadrature_subdivisions", 1024}, {"max_root_iterations", 64}}},
@@ -66,10 +60,6 @@ void testTransmittanceConfig(TestContext& context) {
     const ExperimentConfig config = loadExperimentConfig(input);
     context.require(config.transmittance.has_value(),
                     "transmittance block is parsed");
-    context.require(config.firstPassageModel.has_value() &&
-                    config.firstPassageModel->type == "mlp" &&
-                    config.firstPassageModel->device == "cpu",
-                    "kernel-independent MLP first-passage config is parsed");
     if (config.transmittance) {
         const TransmittanceConfig& transmittance = *config.transmittance;
         context.require(transmittance.bins == 32 && transmittance.trialsPerRay == 123,
@@ -95,9 +85,26 @@ void testTransmittanceConfig(TestContext& context) {
                     written.at("transmittance").at("monte_carlo")
                         .at("trials_per_ray").get<int>() == 123,
                     "resolved config preserves the transmittance experiment");
-    context.require(written.at("transport").at("first_passage_model")
-                        .at("type").get<std::string>() == "mlp",
-                    "resolved config preserves the generic MLP model type");
+    root["transport"]["renewal"] = {{"model","unused.json"},{"profile_mode","point_linear"}};
+    { std::ofstream stream(input); stream << root; }
+    const auto pointConfig = loadExperimentConfig(input);
+    context.require(pointConfig.renewal.profileMode == "point_linear","point profile config parsed");
+    writeResolvedConfig(pointConfig,resolved);
+    { std::ifstream stream(resolved); stream >> written; }
+    context.require(written["transport"]["renewal"]["profile_mode"] == "point_linear",
+                    "resolved config records the approximation explicitly");
+    root["transport"]["renewal"]["profile_mode"] = "unknown";
+    { std::ofstream stream(input); stream << root; }
+    bool rejectedProfile = false;
+    try { (void)loadExperimentConfig(input); } catch (const std::invalid_argument&) { rejectedProfile = true; }
+    context.require(rejectedProfile,"unknown mean profile mode rejected");
+    root["transport"].erase("renewal");
+    root["transport"]["first_passage_model"] = {{"type", "mlp"}};
+    { std::ofstream stream(input); stream << root; }
+    bool rejectedRemovedModel=false;
+    try { (void)loadExperimentConfig(input); }
+    catch (const std::invalid_argument&) { rejectedRemovedModel=true; }
+    context.require(rejectedRemovedModel, "removed learned-model configuration is rejected explicitly");
     fs::remove(input);
     fs::remove(resolved);
 }

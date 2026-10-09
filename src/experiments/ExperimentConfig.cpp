@@ -1,6 +1,8 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
+#include "macrofacet/learned/RenewalBatchSession.h"
 #include "macrofacet/fields/MeanFactory.h"
 #include "macrofacet/gpss/ShaderBallMean.h"
+#include "macrofacet/transport/RenewalMedium.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
@@ -115,6 +117,24 @@ void requireNanoVdbField(const ExperimentConfig& config) {
         !(config.field.mean->voxelSizeHint() > 0.0)) {
         throw std::invalid_argument("experiment tracing requires a prepared NanoVDB field");
     }
+}
+
+void prepareRenewalModel(ExperimentConfig& config) {
+    if (config.transportMode != "neural_renewal") return;
+    if (config.renewal.batchSize < 1 || config.renewal.batchSize > 65536)
+        throw std::invalid_argument("transport.renewal.batch_size must be 1..65536");
+    config.renewal.resolvedBackend = resolveRenewalBackend(config.renewal.backend);
+    if (config.material.ndfFamily != NdfFamily::GeneralizedGaussian || config.material.alphaField)
+        throw std::invalid_argument("neural_renewal requires generalized_gaussian and field.use_alpha_grid=false");
+    if (!config.renewal.model) {
+        if (config.renewal.modelPath.empty())
+            throw std::invalid_argument("neural_renewal requires transport.renewal.model");
+        config.renewal.model = std::make_shared<const RenewalHazardModel>(
+            RenewalHazardModel::load(config.renewal.modelPath));
+    }
+    (void)RenewalMedium(config.field, *config.renewal.model, config.renewal.profileMaximumStep,
+                        config.renewal.profileMode);
+    config.material.gpModel = GpModel::GlobalPointwise;
 }
 
 void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
@@ -284,8 +304,24 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.transportMode = transport.value("mode", "classic");
     if (config.transportMode != "classic" && config.transportMode != "classic_local" &&
         config.transportMode != "classic_global" &&
-        config.transportMode != "global_conditional" && config.transportMode != "all")
+        config.transportMode != "global_conditional" && config.transportMode != "neural_renewal" && config.transportMode != "all")
         throw std::invalid_argument("unknown transport.mode: " + config.transportMode);
+    if (transport.contains("renewal")) {
+        const auto& renewal = transport.at("renewal");
+        config.renewal.modelPath = renewal.at("model").get<std::string>();
+        config.renewal.profileMaximumStep = renewal.value("profile_maximum_step", 0.25);
+        config.renewal.profileMode = renewal.value("profile_mode", "cubic");
+        if (config.renewal.profileMode != "cubic" && config.renewal.profileMode != "point_linear")
+            throw std::invalid_argument("transport.renewal.profile_mode must be cubic or point_linear");
+        requirePositiveFinite(config.renewal.profileMaximumStep, "transport.renewal.profile_maximum_step");
+        config.renewal.backend = renewal.value("backend", "scalar");
+        config.renewal.batchSize = renewal.value("batch_size", 4096);
+        if (config.renewal.backend != "scalar" && config.renewal.backend != "torch_cpu" &&
+            config.renewal.backend != "torch_cuda" && config.renewal.backend != "auto")
+            throw std::invalid_argument("unknown transport.renewal.backend");
+        if (config.renewal.batchSize < 1 || config.renewal.batchSize > 65536)
+            throw std::invalid_argument("transport.renewal.batch_size must be 1..65536");
+    }
     for (const char* obsolete : {"conditional29", "correlated_sampler", "external_policy",
                                  "hard_depth_cap", "next_event_estimation"}) {
         if (transport.contains(obsolete))
@@ -304,28 +340,7 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     }
     config.render.rouletteStartDepth = transport.value("roulette_start_depth", 5);
     if (transport.contains("first_passage_model")) {
-        const auto& learned = transport.at("first_passage_model");
-        if (!learned.is_object()) {
-            throw std::invalid_argument("transport.first_passage_model must be an object");
-        }
-        FirstPassageMlpConfig model;
-        model.type = learned.at("type").get<std::string>();
-        if (model.type != "mlp") {
-            throw std::invalid_argument(
-                "transport.first_passage_model.type must be 'mlp'");
-        }
-        model.modulePath = learned.at("module").get<std::string>();
-        model.bundlePath = learned.at("bundle").get<std::string>();
-        model.device = learned.value("device", model.device);
-        if (model.modulePath.empty() || model.bundlePath.empty()) {
-            throw std::invalid_argument(
-                "transport.first_passage_model requires module and bundle paths");
-        }
-        if (model.device != "cpu" && model.device != "cuda") {
-            throw std::invalid_argument(
-                "transport.first_passage_model.device must be cpu or cuda");
-        }
-        config.firstPassageModel = std::move(model);
+        throw std::invalid_argument("transport.first_passage_model was removed; the legacy learned model is no longer supported");
     }
 
     const auto& numeric = root.at("numeric");
@@ -350,6 +365,7 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     if (render.contains("flight_table_cells"))
         throw std::invalid_argument("obsolete render.flight_table_cells setting");
     config.render.threadCount = render.value("thread_count", 0);
+    config.render.safetyDepthCap = render.value("safety_depth_cap", config.render.safetyDepthCap);
 
     if (root.contains("transmittance")) {
         const auto& experiment = root.at("transmittance");
@@ -462,7 +478,7 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.outputDirectory = root.at("output_directory").get<std::string>();
 
     if (config.render.width < 1 || config.render.height < 1 || config.render.samplesPerPixel < 1 ||
-        config.render.threadCount < 0 ||
+        config.render.threadCount < 0 || config.render.safetyDepthCap < 1 ||
         config.render.rouletteStartDepth < 1 || config.numeric.maxRootIterations < 1 ||
         config.numeric.maxQuadratureSubdivisions < 1 ||
         !(config.numeric.distanceAbsoluteTolerance > 0.0) || !(config.numeric.distanceRelativeTolerance > 0.0) ||
@@ -514,6 +530,8 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
     // Retain the historical key for downstream readers. For non-SE kernels it
     // is the shared spatial metric, not the gradient covariance by itself.
     result["derived"]["kernel_precision"] = result["derived"]["kernel_metric"];
+    if (config.field.kernel.type()==CovarianceKernelType::Matern32)
+        result["derived"]["kernel_parameterization"]="unit_decay";
     const Vector3 gradientStddev =
         config.field.kernel.gradientCovarianceAtZero().diagonal().cwiseMax(0.0).cwiseSqrt();
     result["derived"]["gradient_stddev_xyz"] = toArray(gradientStddev);
@@ -542,13 +560,19 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                           {"render_threads", config.render.threadCount}};
     result["classic_phase_proposal"] = config.classicPhaseProposal;
     result["transport"]["mode"] = config.transportMode;
-    if (config.firstPassageModel) {
-        result["transport"]["first_passage_model"] = {
-            {"type", config.firstPassageModel->type},
-            {"module", config.firstPassageModel->modulePath.string()},
-            {"bundle", config.firstPassageModel->bundlePath.string()},
-            {"device", config.firstPassageModel->device}};
+    if (!config.renewal.modelPath.empty() || config.renewal.model) {
+        result["transport"]["renewal"] = {
+            {"model", config.renewal.modelPath.string()},
+            {"profile_maximum_step", config.renewal.profileMaximumStep},
+            {"profile_mode", config.renewal.profileMode},
+            {"backend", config.renewal.backend}, {"resolved_backend", config.renewal.resolvedBackend},
+            {"batch_size", config.renewal.batchSize},
+            {"sampler", "cumulative_inversion"}, {"normal", "full_renewal_plus"}};
+        if (config.renewal.model)
+            result["transport"]["renewal"]["checkpoint_sha256"] = config.renewal.model->checkpointSha256();
     }
+    result["budgets"]["safety_depth_cap"] = config.render.safetyDepthCap;
+    result["budgets"]["roulette_start_depth"] = config.render.rouletteStartDepth;
     result["transport"]["classic"]["sampler"] = "dda_null_tracking";
     result["transport"]["global_conditional"] = {
         {"sampler", "two_segment_delta_tracking"},

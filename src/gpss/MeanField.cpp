@@ -6,6 +6,20 @@
 
 namespace mf {
 
+MeanRayPoint MeanField::queryRayPoint(const Point3& origin, const Vector3& direction,
+                                    double begin, double maximumEnd) const {
+    if (!origin.allFinite() || !direction.allFinite() || !(begin >= 0) ||
+        !std::isfinite(maximumEnd) || !(maximumEnd > begin))
+        throw std::invalid_argument("invalid point-query interval");
+    std::vector<double> knots;
+    appendRayBreakpoints(origin,direction,begin,maximumEnd,knots);
+    double end = maximumEnd;
+    for (double t : knots) if (t > begin && t < end) end = t;
+    const Point3 point = origin+begin*direction;
+    requireFullRayCoverage(point,direction,end-begin);
+    return {evaluateInCell(point,origin+(begin+0.5*(end-begin))*direction),end};
+}
+
 MeanRayBounds MeanField::rayBounds(const Point3& origin, const Vector3& w,
                                     double begin, double end) const {
     const Point3 first = origin + begin * w, last = origin + end * w;

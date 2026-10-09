@@ -3,7 +3,7 @@
   "seed": 17429,
   "field": {
     "mean_type": "nanovdb",
-    "grid_file": "outputs/fields/shader_ball_sigma_0.001_full.nvdb",
+    "grid_file": "outputs/fields/shader_ball_full_0.02.nvdb",
     "use_alpha_grid": false,
     "outside_domain": "vacuum"
   },
@@ -20,8 +20,8 @@
       2.5,
       2.2
     ],
-    "force_unit_fresnel_for_energy_test": false,
-    "roughness": 0.5
+    "roughness": 0.5,
+    "force_unit_fresnel_for_energy_test": false
   },
   "transport": {
     "mode": "global_conditional",
@@ -44,16 +44,16 @@
     "height": 512,
     "samples_per_pixel": 256,
     "camera_position": [
-      0.134,
-      -0.4,
-      0.2
+      2.27,
+      -1.09,
+      1.42
     ],
     "camera_target": [
       0.0,
-      0.0,
-      0.041
+      -0.0,
+      0.35
     ],
-    "vertical_fov_degrees": 16.0,
+    "vertical_fov_degrees": 25.0,
     "environment": "directional_gradient",
     "linear_output_format": "pfm"
   },
@@ -115,5 +115,5 @@
       }
     ]
   },
-  "output_directory": "outputs/render_shader_ball_nanovdb_sigma_0.001"
+  "output_directory": "outputs/render_shader_ball_nanovdb_sigma_0.02"
 }

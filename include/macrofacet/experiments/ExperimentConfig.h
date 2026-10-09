@@ -1,7 +1,6 @@
 #pragma once
 
 #include "macrofacet/gpss/GPSSField.h"
-#include "macrofacet/learned/FirstPassageMlp.h"
 #include "macrofacet/macrofacet/MaterialConfig.h"
 #include "macrofacet/mathutility/NumericPolicy.h"
 #include "macrofacet/transport/FlightState.h"
@@ -13,6 +12,19 @@
 #include <vector>
 
 namespace mf {
+
+class RenewalHazardModel;
+
+struct RenewalRenderConfig {
+    std::filesystem::path modelPath;
+    double profileMaximumStep = 0.25;
+    std::string profileMode = "cubic"; // cubic (exact cells), point_linear (lazy tangent approximation)
+    std::string backend = "scalar"; // scalar, torch_cpu, torch_cuda, auto
+    std::string resolvedBackend = "scalar";
+    int batchSize = 4096;
+    // Loaded once, immutable and shared by every render worker.
+    std::shared_ptr<const RenewalHazardModel> model;
+};
 
 struct RenderConfig {
     int width = 64;
@@ -88,14 +100,13 @@ struct ExperimentConfig {
     std::filesystem::path outputDirectory = "outputs/macrofacet_experiments";
     double beckmannMixtureWeight = 0.5;
     std::string classicPhaseProposal = "uniform";
-    // A single kernel-agnostic runtime type. Kernel identity and validity
-    // ranges live in the exported bundle, not in the config's type name.
-    std::optional<FirstPassageMlpConfig> firstPassageModel;
     // classic obeys material.gp_model; comparison modes select it explicitly.
     std::string transportMode = "classic";
+    RenewalRenderConfig renewal;
 };
 
 ExperimentConfig loadExperimentConfig(const std::filesystem::path& path);
+void prepareRenewalModel(ExperimentConfig& config);
 void requireNanoVdbField(const ExperimentConfig& config);
 void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
                          std::optional<double> roughness, bool preserveSlope);

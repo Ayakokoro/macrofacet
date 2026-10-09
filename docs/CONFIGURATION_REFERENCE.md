@@ -1,6 +1,42 @@
 # Configuration reference
 
-The renderer supports Classic local/global DDA null tracking and global conditional GP delta tracking. Commands are `render`, `curves`, and the independent 1D `first-passage` experiment. Old `fixed_flight`, `modes`, `reference`, `render.flight_table_cells`, and legacy Conditional29 transport settings are rejected.
+The renderer supports Classic local/global DDA null tracking and global conditional GP delta tracking. Commands are `render`, `curves`, `bake-field`, the independent 1D `first-passage` experiment, and neural `renewal-query`. Old `fixed_flight`, `modes`, `reference`, `render.flight_table_cells`, and legacy Conditional29 transport settings are rejected.
+
+`renewal-query --config <A/B-first-passage-config> --model <hazard-bundle.json>`
+evaluates the trained Matern-3/2 model and samples its cumulative law. It accepts
+`--trials`, `--bins`, and `--output`; optional top-level `renewal_query` fields
+select normalized query distances, survival intervals, and optical depths.
+See [Renewal C++ queries](RENEWAL_CPP.md) for export commands, units, and output.
+
+`transport.mode="neural_renewal"` enables full Renewal+ neural path tracing.
+Set `transport.renewal.model` to the JSON from `export-model` and optionally
+`transport.renewal.profile_maximum_step` (default `0.25`). This mode requires
+unit-decay `matern_3_2`, a positive-definite stationary kernel metric,
+`generalized_gaussian`, and no alpha grid. NanoVDB inputs must contain full-domain
+SDF data. `render.safety_depth_cap` defaults to `64`; the neural example uses
+`128`. See [the neural scene](../configs/render_neural_renewal_shader_ball.json).
+
+`transport.renewal.profile_mode` selects `cubic` (default, full piecewise-cubic
+mean profile) or `point_linear` (lazy current-point value/gradient queries with
+local tangent extrapolation). The latter reuses the model but approximates the
+mean field; it is not an equivalent replacement. NanoVDB steps stop at the next
+cell face or the normalized `profile_maximum_step`, whichever comes first.
+Only visited cells are checked and sampled. Scalar, LibTorch CPU/CUDA and model
+transmittance share this option. See [point-query rendering](RENEWAL_CPP.md#当前点查询point_linear)
+and [the PLY example](../configs/render_neural_renewal_shader_ball_ply_point_linear.json).
+
+`transport.renewal.backend` accepts `scalar` (default: Eigen), `torch_cpu`,
+`torch_cuda`, or `auto` (CUDA if available, otherwise LibTorch CPU or scalar
+when built without LibTorch). Explicit unavailable backends fail instead of
+silently switching devices. `transport.renewal.batch_size` is the maximum number
+of active ray slots, from 1 to 65536, default 4096. The neural example uses `auto`.
+`resolved_config.json` records both requested and resolved backend;
+`render_summary.csv` records the actual backend and inference batch counts.
+The wavefront scheduler uses one host coordinator and LibTorch's device execution;
+`render.thread_count` controls the original scalar renderer, not the number of CUDA
+inference workers. Ray profiles, cumulative inversion and gradient sampling remain
+on the CPU. Batch size changes do not alter the segmentation or stochastic model,
+but GEMM rounding can change individual Monte Carlo paths.
 
 A config contains `schema_version`, `seed`, `field`, `material`, `transport`, `numeric`, `render`, and `output_directory`. See `configs/macrofacet_ci.json` for a complete small example.
 
@@ -73,7 +109,7 @@ ray. `--trials` and `--bins` override the JSON budgets for quick checks;
 
 For `initial_condition.type="fixed_value"`, `grid.max_time` and `grid.step_sizes` define a finest exact Gaussian grid and coupled coarser crossing checks. Every step must divide `max_time` and be an integer multiple of the finest step. `monte_carlo.trajectories`, `monte_carlo.thread_count`, `curve.bins`, and `state_analysis` control the risk-set hazard, parallelism, survivor-state snapshots, and \((X,X')\)-conditioned future-event grid. `rice_series` enables the start-conditioned Rice expansion; `max_order` currently accepts 1 or 2, while its tolerances and subdivision budget control the nested Gaussian-CDF and time quadratures.
 
-`initial_condition.type="collision_state"` reuses the same command and output contract for all supported kernels. Its `parameter_space` accepts `explicit`, `cartesian`, or `latin_hypercube` sampling of dimensionless `beta_0`, `beta_a`, and strictly positive `beta_g`; the sampler type is `collision_state_auto`. Matérn 3/2 automatically uses the exact two-state SDE plus conditional bridges and cubic-Hermite crossing localization. Squared exponential, Matérn 5/2, and rational quadratic automatically use a jointly value/finite-difference-derivative-conditioned circulant grid and cubic-Hermite crossing localization. `sampler_type` and `crossing_slope_method` in every CSV row make this numerical distinction explicit. `minimum_step`, `crossing_tolerance`, `bridge_sigma_margin`, and `max_refinement_depth` apply to the Matérn-3/2 backend; `max_embedding_expansions` applies to conditioned grids. Rice and legacy survivor-state diagnostics must be disabled. Each `grid.step_sizes` entry is an independent convergence resolution and the smallest is marked `training_resolution=1`. The old `collision_state_matern32` type is intentionally not accepted. See `configs/collision_state_kernels_training.json`.
+`initial_condition.type="collision_state"` reuses the same command and output contract for all supported kernels. Its `parameter_space` accepts `explicit`, `cartesian`, or `latin_hypercube` sampling of dimensionless `beta_0`, `beta_a`, and strictly positive `beta_g`; the sampler type is `collision_state_auto`. Matérn 3/2 automatically uses the exact two-state SDE (including spatial means) plus conditional bridges and cubic-Hermite crossing localization. Squared exponential, Matérn 5/2, and rational quadratic automatically use a jointly value/finite-difference-derivative-conditioned circulant grid and cubic-Hermite crossing localization. `sampler_type` and `crossing_slope_method` in every CSV row make this numerical distinction explicit. `minimum_step`, `crossing_tolerance`, `bridge_sigma_margin`, and `max_refinement_depth` apply to the Matérn-3/2 backend; `max_embedding_expansions` applies to conditioned grids. Rice and legacy survivor-state diagnostics must be disabled. Each `grid.step_sizes` entry is an independent convergence resolution and the smallest is marked `training_resolution=1`. The old `collision_state_matern32` type is intentionally not accepted. See `configs/collision_state_kernels_training.json`.
 
 C++ first-passage configs contain only data-generation settings. Plot selection is
 kept separately under `data_analysis/configs/` and is consumed by
@@ -86,3 +122,19 @@ it requires C++ generation with `monte_carlo.write_raw_samples=true`. See
 A zero thread count selects hardware concurrency without changing per-trajectory random streams. The CLI accepts `--trials`, `--bins`, `--threads`, and `--output` overrides.
 
 Fixed-value outputs include `first_passage_curves.csv`, `first_passage_summary.csv`, survivor-state CSV files, optional raw samples, and a resolved config. The curve CSV reports Monte Carlo first-passage hazard beside the endpoint-conditioned \(\Sigma_1\), pointwise \(\Sigma_2\), ordinary Rice downcrossing intensity, and the start-conditioned Rice terms \(\bar W_1(t)\), \(\int_0^t\bar W_2(u,t)du\), and their order-two density. Collision-state mode writes common-schema long-form samples (when enabled), curves, summaries, and the resolved state design. SVGs and the derived crossing-slope histogram CSV are Python analysis outputs, not C++ generator outputs. Full schemas, definitions, and limitations are in [FIRST_PASSAGE_EXPERIMENT.md](FIRST_PASSAGE_EXPERIMENT.md).
+
+## Renewal reference foundation
+
+See [RENEWAL_REFERENCE.md](RENEWAL_REFERENCE.md) for `positive_exterior`,
+`profile.maximum_step`, the segment-feature CSV, and the spatial Matern-3/2
+state-space sampler. `matern_3_2` now uses `rho(x)=(1+x)exp(-x)`, with unit
+normalized derivative variance. To preserve a GP specified with the old explicit
+Matern-3/2 length, divide that length by sqrt(3). SE and Matern-5/2 are unchanged.
+The removed `transport.first_passage_model` setting is rejected explicitly.
+
+The old Matern-3/2 entries have been removed from `first_passage_kernels.json`
+and `collision_state_kernels_training.json`. New reference and training configs
+declare `unit_decay` explicitly. [Sequence training](../python/README.md) lives
+under `python/configs/` and does not change the rendering transport selection.
+`bake-field --config <render-config>` prepares the full NanoVDB field and resolved
+configuration without tracing; the sequence collector uses it before reference sampling.

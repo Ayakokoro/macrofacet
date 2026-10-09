@@ -47,7 +47,7 @@ struct FirstPassageRiceSeriesConfig {
 struct FirstPassageRayCondition {
     Point3 origin = Point3::Zero();
     Vector3 direction = Vector3::UnitZ();
-    // Unnormalized observed gradient of F, not the mean gradient or a normal.
+    // Unnormalized observed gradient of F in surface mode; unused in exterior mode.
     Vector3 gradient = Vector3::UnitZ();
 };
 
@@ -87,9 +87,11 @@ struct FirstPassageExperimentConfig {
     std::string initialConditionType = "fixed_value";
     double initialValue = 1.0;
     double maximumTime = 10.0;
+    // Geometry/network partition, independent of GP reference resolution.
+    double profileMaximumStep = 0.25;
     // fixed_value: the smallest entry is sampled and larger entries are coupled
-    // subsamples. collision_state: each entry is an independent backend-specific
-    // state-space convergence resolution; the smallest is the training set.
+    // subsamples. collision_state/positive_exterior: each entry is an independent
+    // backend-specific convergence resolution; the smallest is the training set.
     std::vector<double> stepSizes{0.04, 0.02, 0.01};
     int curveBins = 200;
     int trajectories = 16384;

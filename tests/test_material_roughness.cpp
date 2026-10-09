@@ -118,7 +118,7 @@ void testMaterialRoughness(TestContext& context) {
         const double correlationLength = 1.0 / std::sqrt(config.field.kernel.metric()(0, 0));
         double expectedCorrelation = std::exp(-0.5);
         if (config.field.kernel.type() == CovarianceKernelType::Matern32) {
-            const double a = std::sqrt(3.0);
+            const double a = 1.0;
             expectedCorrelation = (1.0 + a) * std::exp(-a);
         } else if (config.field.kernel.type() == CovarianceKernelType::Matern52) {
             const double a = std::sqrt(5.0);
@@ -252,7 +252,7 @@ void testMaterialRoughness(TestContext& context) {
     const std::array<const char*, 3> familyNames{
         "squared_exponential", "matern_3_2", "matern_5_2"};
     const std::array<double, 3> lengthFactors{
-        1.0, std::sqrt(3.0), std::sqrt(5.0 / 3.0)};
+        1.0, 1.0, std::sqrt(5.0 / 3.0)};
     for (std::size_t family = 0; family < familyConfigs.size(); ++family) {
         nlohmann::json source = valid;
         source["field"]["kernel_type"] = familyNames[family];

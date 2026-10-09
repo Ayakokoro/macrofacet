@@ -12,6 +12,11 @@ struct MeanJet {
     Vector3 gradient = Vector3::Zero();
 };
 
+struct MeanRayPoint {
+    MeanJet jet;
+    double end = 0; // physical ray distance; first cell boundary or requested end
+};
+
 struct BoundsSummary {
     double minimumValue = 0.0;
     double maximumGradientNorm = 0.0;
@@ -46,6 +51,13 @@ public:
     // derived from the resolved value either way.
     virtual std::optional<double> intrinsicSigma() const { return std::nullopt; }
     virtual MeanJet evaluate(const Point3& x) const = 0;
+    // Evaluate the interpolant selected by an interior point of the ray segment.
+    // At a grid face this preserves that segment's one-sided gradient.
+    virtual MeanJet evaluateInCell(const Point3& x, const Point3&) const { return evaluate(x); }
+    // Query only the current point, choosing the forward cell at a boundary.
+    // The returned interval never crosses an interpolation-cell boundary.
+    virtual MeanRayPoint queryRayPoint(const Point3& origin, const Vector3& direction,
+                                      double begin, double maximumEnd) const;
     virtual double valueDifference(const Point3& x, const Vector3& displacement) const {
         if (const auto gradient = affineGradient()) return gradient->dot(displacement);
         return evaluate(x + displacement).value - evaluate(x).value;

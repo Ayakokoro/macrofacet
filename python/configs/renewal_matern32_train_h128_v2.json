@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "seed": 20261008,
+  "dataset": "outputs/renewal_dataset_v2/dataset.pt",
+  "output_directory": "outputs/models/renewal_matern32_h128_v2",
+  "device": "cuda",
+  "cpu_threads": 4,
+  "batch_size": 128,
+  "epochs": 16,
+  "patience": 5,
+  "learning_rate": 0.0003,
+  "weight_decay": 0.00001,
+  "gradient_clip": 1.0,
+  "model": {
+    "embedding": 64,
+    "hidden": 128,
+    "hazard_width": 64,
+    "mixture_width": 128,
+    "components": 8,
+    "sigma_floor": 0.01
+  }
+}

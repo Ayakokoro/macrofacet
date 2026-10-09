@@ -4,28 +4,18 @@ CPU/double transport for Gaussian-process statistical surfaces. Classic local an
 
 ## Build
 
-The project uses the LibTorch CMake package bundled with PyTorch
-`2.12.x`, the last release line supported here with C++17. Install the pinned
-CUDA 13.0 wheel into the Python interpreter that CMake will discover:
+Build the C++ renderer with CMake and the existing vcpkg dependencies.
+Python is used by the data-analysis tests. LibTorch is enabled by default for batched
+Renewal inference; CMake reuses `Torch_DIR` or discovers the selected Python's PyTorch
+installation. Set `-DMACROFACET_ENABLE_TORCH=OFF` for an Eigen-only build.
 
 ```powershell
-python -m pip install -r python\requirements-cuda.txt
 cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
 cmake --build build --config Release --parallel 4
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-To select a specific Python installation, add
-`-DPython3_EXECUTABLE=B:/path/to/python.exe` to the configure command. CMake
-rejects PyTorch versions outside the `2.12.x` line.
-
-CMake automatically locates LibTorch through the selected Python interpreter.
-On Windows, it generates `.cmd` launchers alongside the executables. These
-temporarily add the wheel's `torch/lib` directory to the child process's `PATH`,
-using the installed DLLs without copying them or changing the system environment.
-CTest and Visual Studio debugging receive that search path automatically.
-Use the `.cmd` launchers for terminal commands; launching an `.exe` directly
-still requires `torch/lib` in that terminal's `PATH`.
+Windows builds retain `.cmd` launchers alongside the executables.
 
 ## Render
 
@@ -71,7 +61,6 @@ not in the C++ experiment configs. See the
 
 The renderer writes PFM images, BMP previews, `render_summary.csv`, and `resolved_config.json`. The `curves` command writes per-ray collision data and a comparison CSV/SVG. See the [configuration reference](docs/CONFIGURATION_REFERENCE.md), [conditional rendering guide](docs/CONDITIONAL_RENDERING.md), [NanoVDB tracing guide](docs/NVDB_TRACING.md), and [scene rendering guide](docs/SCENE_RENDERING.md). Earlier transport derivations and implementation reports remain as historical research notes.
 
-The Matérn 5/2 cumulative-hazard surrogate uses C++ interval-count data and a monotone PyTorch I-spline model. Its complete generation, fitting, export, and inference workflow is documented in the [Python training guide](python/README.md).
 
 First-passage experiments can also use the complete NanoVDB SDF along a ray.
 The [full-field experiment guide](docs/FIRST_PASSAGE_FULL_FIELD.md) uses the
@@ -83,3 +72,22 @@ endpoint condition, rejects earlier crossings, and uses slope-flux weights to
 visualize the first-hit slope distribution at a specified physical distance.
 
 The independent `first-passage` command samples conditioned 1D Gaussian processes and measures the no-history-approximation survival and hazard curves for several kernels. Its unified `collision_state` mode emits the same censored FPT, survival, hazard, and crossing-slope schema for every supported kernel. Matérn 3/2 uses its exact two-state backend; the other kernels use conditioned circulant grids. See [the first-passage experiment guide](docs/FIRST_PASSAGE_EXPERIMENT.md).
+
+The [Renewal+ reference foundation](docs/RENEWAL_REFERENCE.md) provides shared
+cell-wise cubic ray profiles and Matern-3/2 first-passage sampling for positive
+exterior and known surface starts. Matern-3/2 now uses `rho(x)=(1+x)*exp(-x)`;
+see the guide for length migration and example commands. Existing rendering
+modes remain available; the GP reference remains a separate 1D experiment.
+
+[Renewal+ sequence training](python/README.md) collects geometry-disjoint NanoVDB
+ray profiles, trains a causal GRU with monotone cumulative hazard and positive
+truncated Gaussian mixtures, and evaluates censored distance/speed likelihoods.
+Python training uses PyTorch. Batched C++ rendering uses LibTorch on CPU or CUDA;
+the scalar Eigen inference backend remains available for comparison.
+
+[Renewal+ C++ rendering](docs/RENEWAL_CPP.md) loads the trained JSON model,
+samples distances, crossing speeds and full gradients, and traces multiple
+conductor reflections in the `neural_renewal` mode. The `renewal-query` command
+evaluates A/B distance, transmittance and speed distributions. See
+`configs/render_neural_renewal_shader_ball.json` for a complete scene.
+That scene selects `backend="auto"` and `batch_size=4096`, using CUDA when available.

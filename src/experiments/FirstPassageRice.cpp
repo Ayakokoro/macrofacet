@@ -200,7 +200,7 @@ double FirstPassageStationaryKernel::covariance(double lag) const {
         return config_.variance * std::exp(-0.5 * x * x);
     }
     if (config_.type == "matern_3_2") {
-        const double y = std::sqrt(3.0) * x;
+        const double y = x;
         return config_.variance * (1.0 + y) * std::exp(-y);
     }
     if (config_.type == "matern_5_2") {
@@ -218,7 +218,7 @@ double FirstPassageStationaryKernel::firstDerivative(double lag) const {
         return -lag * covariance(lag) / (ell * ell);
     }
     if (config_.type == "matern_3_2") {
-        const double a = std::sqrt(3.0) / ell;
+        const double a = 1.0 / ell;
         return -config_.variance * a * a * lag * std::exp(-a * lag);
     }
     if (config_.type == "matern_5_2") {
@@ -240,7 +240,7 @@ double FirstPassageStationaryKernel::secondDerivative(double lag) const {
                covariance(r);
     }
     if (config_.type == "matern_3_2") {
-        const double a = std::sqrt(3.0) / ell;
+        const double a = 1.0 / ell;
         return config_.variance * a * a * (a * r - 1.0) * std::exp(-a * r);
     }
     if (config_.type == "matern_5_2") {

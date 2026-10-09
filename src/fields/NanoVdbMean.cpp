@@ -98,8 +98,50 @@ BoundsSummary NanoVdbMean::bounds(const Bounds3& domain) const {
     return summary;
 }
 
+MeanJet NanoVdbMean::evaluateInCell(const Point3& x, const Point3& interior) const {
+    MeanJet jet;
+    impl_->view.sampleWithGradientInCell(x, interior, jet.value, jet.gradient);
+    if (!std::isfinite(jet.value) || !jet.gradient.allFinite())
+        throw std::runtime_error("nonfinite NanoVDB ray-cell mean");
+    return jet;
+}
+
 double NanoVdbMean::valueDifference(const Point3& x, const Vector3& displacement) const {
     return impl_->view.valueDifference(x, displacement);
+}
+
+MeanRayPoint NanoVdbMean::queryRayPoint(const Point3& origin, const Vector3& direction,
+                                      double begin, double maximumEnd) const {
+    if (!impl_->fullDomain)
+        throw std::invalid_argument("point_linear requires NanoVDB coverage=full_domain");
+    if (!origin.allFinite() || !direction.allFinite() || !(begin >= 0) ||
+        !(direction.squaredNorm() > 0) || !std::isfinite(maximumEnd) || !(maximumEnd > begin))
+        throw std::invalid_argument("invalid NanoVDB point-query interval");
+    const double dx = impl_->view.voxelSize();
+    const Point3 point = origin+begin*direction;
+    double end = maximumEnd;
+    for (int a = 0; a < 3; ++a) {
+        if (direction[a] == 0) continue;
+        double u = (point[a]-impl_->view.origin()[a])/dx;
+        const double nearest = std::round(u);
+        // Include the operands' scale: near index zero, origin + t*direction
+        // cancels and abs(u) alone severely underestimates roundoff.
+        const double coordinateScale = 1+(std::abs(origin[a])+std::abs(begin*direction[a])+
+                                          std::abs(impl_->view.origin()[a]))/dx;
+        if (std::abs(u-nearest) <= 32*std::numeric_limits<double>::epsilon()*coordinateScale)
+            u = nearest;
+        const double face = direction[a] > 0 ? std::floor(u)+1 : std::ceil(u)-1;
+        const double t = (impl_->view.origin()[a]+face*dx-origin[a])/direction[a];
+        if (t > begin) end = std::min(end,t);
+    }
+    MeanRayPoint result;
+    result.end = end;
+    const Point3 interior = origin+(begin+0.5*(end-begin))*direction;
+    // Validate and interpolate the same eight corners in one current-point query.
+    impl_->view.sampleWithGradientInCell(point,interior,result.jet.value,result.jet.gradient,true);
+    if (!std::isfinite(result.jet.value) || !result.jet.gradient.allFinite())
+        throw std::runtime_error("nonfinite NanoVDB point query");
+    return result;
 }
 
 MeanRayBounds NanoVdbMean::rayBounds(const Point3& origin, const Vector3& direction,
@@ -172,13 +214,12 @@ void NanoVdbMean::requireFullRayCoverage(const Point3& origin, const Vector3& di
                 "; shorten the ray or re-bake a larger full domain: " + impl_->path.string());
         }
     };
-    covered(0.0);
-    covered(maximumDistance);
     std::vector<double> knots{0.0, maximumDistance};
     appendRayBreakpoints(origin, direction, 0.0, maximumDistance, knots);
     std::sort(knots.begin(), knots.end());
-    // Every open interval is one interpolation cell. Check corners, not just
-    // interpolated values: a zero SDF at a stored node is perfectly valid.
+    // Every open interval is one interpolation cell. Its eight stored corners
+    // cover its CLOSED endpoints too. Do not select an unrelated outside cell
+    // by flooring an endpoint on the outermost stored node / upper grid face.
     for (std::size_t i = 1; i < knots.size(); ++i) {
         if (knots[i] > knots[i - 1]) covered(0.5 * (knots[i] + knots[i - 1]));
     }

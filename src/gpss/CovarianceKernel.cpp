@@ -27,7 +27,7 @@ Matrix3 validatePsd(Matrix3 matrix, const char* name) {
 double kernelRadialGradientFactor(CovarianceKernelType type) {
     switch (type) {
     case CovarianceKernelType::SquaredExponential: return 1.0;
-    case CovarianceKernelType::Matern32: return 3.0;
+    case CovarianceKernelType::Matern32: return 1.0;
     case CovarianceKernelType::Matern52: return 5.0 / 3.0;
     }
     throw std::invalid_argument("unknown covariance kernel type");
@@ -133,7 +133,7 @@ KernelJet CovarianceKernel::evaluate(const Point3& x, const Point3& y) const {
 
     const double q = std::sqrt(q2);
     if (type_ == CovarianceKernelType::Matern32) {
-        const double a = std::sqrt(3.0);
+        const double a = 1.0;
         const double e = std::exp(-a * q);
         const double k = sigma2 * (1.0 + a * q) * e;
         const Vector3 gx = -sigma2 * a * a * e * v;

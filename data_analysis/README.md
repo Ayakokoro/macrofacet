@@ -56,12 +56,9 @@ if ($LASTEXITCODE -ne 0) { throw "First-passage data generation failed" }
 python data_analysis\plot_first_passage.py --config data_analysis\configs\plane_ray_transmittance_se.json
 ```
 
-CMake 从选定的 Python 中自动查找 LibTorch，并为 Windows 构建生成 `.cmd`
-启动脚本。该脚本仅在启动程序时临时设置 DLL 搜索路径，直接使用 Python 安装目录中的
-DLL，不复制文件，也不修改系统 PATH。请使用上述 `.cmd`；直接运行 `.exe` 时仍需要
-自行设置当前终端的 PATH。旧构建请先执行
-`cmake --build build --config Release --parallel 4`。
-上面的退出码检查会在生成失败时停止，避免随后用旧 CSV 重新绘图。
+C++ no longer requires LibTorch. Windows `.cmd` launchers and direct `.exe`
+invocation are both supported. Reconfigure and rebuild older build trees before
+running the commands above. The Python analysis scripts use the standard library.
 
 该示例设 mean 平面法线为 `(0, 0, 1)`，起点位于 mean 平面上，射线方向为
 `(sqrt(3)/2, 0, 1/2)`，观测到 `F(b)=0`、`grad F(b)=(0, 0, 1.2)`。

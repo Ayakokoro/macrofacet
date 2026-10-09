@@ -10,6 +10,7 @@
 #include "macrofacet/fields/NanoVdbSampledField.h"
 #include "macrofacet/fields/PrepareNanoVdbField.h"
 #include "macrofacet/gpss/GPSSField.h"
+#include "macrofacet/gpss/Matern32Reference.h"
 #include "macrofacet/macrofacet/ClassicCoefficients.h"
 #include "macrofacet/macrofacet/GaussianNdf.h"
 #include "macrofacet/transport/FlightKernel.h"
@@ -1159,6 +1160,67 @@ void testAnalyticFullDomainBake(TestContext& context) {
     context.near(sampled->evaluate(Point3(1.0, 0.0, 0.0)).value, 0.5, 0.01,
                  "full-domain bake covers the active-domain boundary");
 
+    // Share exactly the renderer's interpolation, including its cell faces.
+    const Point3 profileOrigin(0.61,0.013,0.027);
+    const Vector3 profileDirection=normalizedOrThrow(Vector3(-1.0,0.21,0.13));
+    const auto profile=RayMeanProfile::fromField(*sampled,profileOrigin,profileDirection,
+                                               0.1,0.25,0.8,0.25);
+    for (const auto& segment : profile.segments()) {
+        for (double u : {0.13,0.51,0.87}) {
+            const double x=segment.begin+u*(segment.end-segment.begin);
+            const auto jet=sampled->evaluate(profileOrigin+0.25*x*profileDirection);
+            context.near(segment.value(x),jet.value/0.1,1e-11,
+                         "shared profile matches NanoVDB trilinear values");
+            context.near(segment.derivative(x),2.5*jet.gradient.dot(profileDirection),1e-9,
+                         "shared profile matches NanoVDB interpolated derivatives");
+        }
+    }
+    Random referenceRng(10392);
+    const double cancellationBegin = std::nextafter(1000.0,0.0);
+    const auto cancellationPoint = sampled->queryRayPoint(Point3(1000,0.013,0.027),
+        -Vector3::UnitX(),cancellationBegin,cancellationBegin+0.05);
+    context.require(cancellationPoint.end-cancellationBegin > 0.049,
+                    "DDA face snapping accounts for origin/travel cancellation near index zero");
+    // Current-point DDA queries agree with the selected cell's one-sided jet,
+    // including negative directions, exact faces, edges and corners.
+    for (const Vector3& direction : std::vector<Vector3>{Vector3::UnitX(),-Vector3::UnitX(),
+             normalizedOrThrow(Vector3(1,1,1)),normalizedOrThrow(Vector3(-1,-1,-1)),profileDirection}) {
+        const Point3 origin(0.5,0.1,0.1);
+        auto points = RayMeanProfile::pointLinear(sampled,origin,direction,0.1,0.25,0.35,0.25);
+        double previous = 0;
+        for (const auto& s : points.segments()) {
+            context.near(s.begin,previous,0,"point DDA segments remain contiguous");
+            const Point3 interior = origin+0.25*(s.begin+0.5*(s.end-s.begin))*direction;
+            const auto jet = sampled->evaluateInCell(origin+0.25*s.begin*direction,interior);
+            context.near(s.value(s.begin),jet.value/0.1,1e-12,"point DDA queries the current value");
+            context.near(s.derivative(s.begin),2.5*jet.gradient.dot(direction),1e-11,
+                         "point DDA uses the forward cell gradient at faces");
+            std::vector<double> boundaries;
+            sampled->appendRayBreakpoints(origin,direction,s.begin*0.25,s.end*0.25,boundaries);
+            for (double t : boundaries)
+                context.require(std::min(t-s.begin*0.25,s.end*0.25-t) < 1e-12,
+                                "point segment never crosses a cell face");
+            previous = s.end;
+        }
+        context.near(previous,0.35/0.25,1e-14,"point DDA reaches the clipped ray end");
+    }
+    for (const auto& segment : profile.segments()) {
+        const Point3 interior = profileOrigin+0.25*(0.5*(segment.begin+segment.end))*profileDirection;
+        for (double x : {segment.begin, segment.end}) {
+            const auto jet = sampled->evaluateInCell(profileOrigin+0.25*x*profileDirection, interior);
+            context.near(2.5*jet.gradient.dot(profileDirection), segment.derivative(x), 1e-8,
+                         "one-sided NanoVDB gradient matches the incoming/outgoing mean segment");
+        }
+    }
+    for (RayStartMode mode : {RayStartMode::PositiveExterior,RayStartMode::SurfaceOutward}) {
+        for (int i=0;i<8;++i) {
+            const auto sample=sampleMatern32FirstPassage(profile,{mode,0.5},{},referenceRng);
+            context.require(sample.distance>0 && sample.distance<=profile.maximumX() &&
+                            (!sample.hit || sample.speed>0),
+                            "Matern reference crosses actual NanoVDB cells in both start modes");
+        }
+    }
+
     GPSSField field;
     field.mean = sampled;
     field.kernel = SquaredExponentialKernel::fromCorrelationLengths(
@@ -1207,6 +1269,12 @@ void testMeshFullDomainBake(TestContext& context) {
     try { sampled->requireFullRayCoverage(Point3(0.4, 0.013, 0.027), Vector3::UnitZ(), 0.2); }
     catch (...) { covered = false; }
     context.require(covered, "full-domain first-passage ray checks every interpolation cell");
+    const auto box = sampled->activeNodeBounds();
+    const Point3 face(0.5*(box.minimum.x()+box.maximum.x()), 0.5*(box.minimum.y()+box.maximum.y()), box.maximum.z());
+    covered = true;
+    try { sampled->requireFullRayCoverage(face, -Vector3::UnitZ(), box.maximum.z()-box.minimum.z()); }
+    catch (...) { covered = false; }
+    context.require(covered, "full-domain coverage includes closed entry/exit faces using interior cells");
     bool rejected = false;
     try { sampled->requireFullRayCoverage(Point3(0.4, 0.013, 0.027), Vector3::UnitZ(), 4.0); }
     catch (const std::invalid_argument&) { rejected = true; }
@@ -1230,6 +1298,14 @@ void testMeshFullDomainBake(TestContext& context) {
         Point3(1.0, 0.013, 0.027), -Vector3::UnitX(), 2.0); }
     catch (const std::invalid_argument&) { rejected = true; }
     context.require(rejected, "full-domain metadata cannot hide a hole in the actual SDF grid");
+    rejected = false;
+    try { NanoVdbMean::open(sphereField().path)->queryRayPoint(Point3(1,0.013,0.027),-Vector3::UnitX(),0,0.01); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    context.require(rejected,"point mode rejects narrow-band coverage");
+    rejected = false;
+    try { NanoVdbMean::open(mislabeled)->queryRayPoint(Point3::Zero(),Vector3::UnitX(),0,0.01); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    context.require(rejected,"point mode checks stored nodes even with a false full-domain label");
 }
 
 void testNarrowBandTransport(TestContext& context) {

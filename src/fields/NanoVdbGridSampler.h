@@ -297,10 +297,22 @@ public:
     // keeps evaluate() and any caller that differentiates it consistent, and
     // costs no extra grid lookups.
     void sampleWithGradient(const Point3& x, double& value, Vector3& gradient) const {
+        sampleWithGradientInCell(x, x, value, gradient);
+    }
+
+    void sampleWithGradientInCell(const Point3& x, const Point3& interior,
+                                  double& value, Vector3& gradient, bool requireComplete = false) const {
         const nanovdb::Vec3d u = continuousIndex(x);
-        const nanovdb::Coord base(static_cast<int>(std::floor(u[0])),
-                                  static_cast<int>(std::floor(u[1])),
-                                  static_cast<int>(std::floor(u[2])));
+        const nanovdb::Vec3d cell = continuousIndex(interior);
+        if (requireComplete) {
+            const auto bbox = grid_->indexBBox();
+            for (int a = 0; a < 3; ++a)
+                if (!std::isfinite(cell[a]) || cell[a] < bbox.min()[a] || cell[a] >= bbox.max()[a])
+                    throw std::invalid_argument("point query reaches outside stored SDF interpolation cells");
+        }
+        const nanovdb::Coord base(static_cast<int>(std::floor(cell[0])),
+                                  static_cast<int>(std::floor(cell[1])),
+                                  static_cast<int>(std::floor(cell[2])));
         const nanovdb::Vec3d f(u[0] - base[0], u[1] - base[1], u[2] - base[2]);
 
         auto accessor = grid_->getAccessor();
@@ -308,8 +320,11 @@ public:
         for (int dk = 0; dk < 2; ++dk) {
             for (int dj = 0; dj < 2; ++dj) {
                 for (int di = 0; di < 2; ++di) {
-                    corner[di][dj][dk] = static_cast<double>(accessor.getValue(
-                        nanovdb::Coord(base[0] + di, base[1] + dj, base[2] + dk)));
+                    const nanovdb::Coord node(base[0] + di, base[1] + dj, base[2] + dk);
+                    const double sample = static_cast<double>(accessor.getValue(node));
+                    if (requireComplete && (!accessor.isActive(node) || !std::isfinite(sample)))
+                        throw std::invalid_argument("point query reaches missing/non-finite SDF interpolation nodes");
+                    corner[di][dj][dk] = sample;
                 }
             }
         }

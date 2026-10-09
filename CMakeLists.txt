@@ -10,42 +10,6 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-# The Python wheel ships a complete LibTorch CMake package. Querying it here
-# keeps the Python training runtime and the C++ inference ABI on exactly the
-# same PyTorch build without requiring a second standalone LibTorch download.
-execute_process(
-    COMMAND "${Python3_EXECUTABLE}" -c
-            "import json; from pathlib import Path; import torch; print(json.dumps({'prefix': torch.utils.cmake_prefix_path, 'version': torch.__version__.split('+', 1)[0], 'runtime_directory': str(Path(torch.__file__).resolve().parent / 'lib')}))"
-    RESULT_VARIABLE MACROFACET_TORCH_QUERY_RESULT
-    OUTPUT_VARIABLE MACROFACET_TORCH_INFO
-    ERROR_VARIABLE MACROFACET_TORCH_QUERY_ERROR
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-if(NOT MACROFACET_TORCH_QUERY_RESULT EQUAL 0 OR NOT MACROFACET_TORCH_INFO)
-    message(FATAL_ERROR
-        "Unable to locate PyTorch/LibTorch using ${Python3_EXECUTABLE}.\n"
-        "Install python/requirements-cuda.txt into that interpreter, or select "
-        "another interpreter with -DPython3_EXECUTABLE=<python.exe>.\n"
-        "${MACROFACET_TORCH_QUERY_ERROR}")
-endif()
-string(JSON MACROFACET_TORCH_PREFIX GET "${MACROFACET_TORCH_INFO}" prefix)
-string(JSON MACROFACET_TORCH_VERSION GET "${MACROFACET_TORCH_INFO}" version)
-string(JSON MACROFACET_TORCH_RUNTIME_DIRECTORY
-    GET "${MACROFACET_TORCH_INFO}" runtime_directory)
-file(TO_CMAKE_PATH "${MACROFACET_TORCH_PREFIX}" MACROFACET_TORCH_PREFIX)
-file(TO_CMAKE_PATH "${MACROFACET_TORCH_RUNTIME_DIRECTORY}"
-    MACROFACET_TORCH_RUNTIME_DIRECTORY)
-if(MACROFACET_TORCH_VERSION VERSION_LESS "2.12" OR
-   NOT MACROFACET_TORCH_VERSION VERSION_LESS "2.13")
-    message(FATAL_ERROR
-        "macrofacet requires PyTorch/LibTorch 2.12.x for C++17, but "
-        "${Python3_EXECUTABLE} provides ${MACROFACET_TORCH_VERSION}")
-endif()
-set(Torch_DIR "${MACROFACET_TORCH_PREFIX}/Torch" CACHE PATH
-    "LibTorch CMake package bundled with the selected Python interpreter" FORCE)
-find_package(Torch 2.12 CONFIG REQUIRED)
-message(STATUS
-    "Using PyTorch/LibTorch ${MACROFACET_TORCH_VERSION} from ${Torch_DIR}")
-
 add_library(macrofacet
     src/mathutility/Gaussian1D.cpp
     src/mathutility/GaussianMoments1D.cpp
@@ -54,7 +18,13 @@ add_library(macrofacet
     src/gpss/ShaderBallMean.cpp
     src/gpss/CovarianceKernel.cpp
     src/gpss/GPSSField.cpp
-    src/learned/FirstPassageMlp.cpp
+    src/mathutility/CubicPolynomial.cpp
+    src/gpss/RayMeanProfile.cpp
+    src/gpss/Matern32Reference.cpp
+    src/learned/RenewalHazardModel.cpp
+    src/learned/RenewalBatchSession.cpp
+    src/transport/RenewalRayDistribution.cpp
+    src/transport/RenewalMedium.cpp
     src/macrofacet/GaussianNdf.cpp
     src/macrofacet/GgxHeightfield.cpp
     src/macrofacet/MaterialConfig.cpp
@@ -72,15 +42,40 @@ add_library(macrofacet
     src/transport/NarrowBandMedium.cpp
     src/transport/CollisionGradientSampler.cpp
     src/integrator/MacrofacetPathTracer.cpp
+    src/integrator/RenewalWavefront.cpp
     src/experiments/ExperimentConfig.cpp
     src/experiments/FirstPassageRice.cpp
     src/experiments/FirstPassageExperiment.cpp
+    src/experiments/RenewalModelExperiment.cpp
     src/experiments/RenderExperiment.cpp)
 target_sources(macrofacet PRIVATE src/experiments/TransmittanceCurves.cpp)
 
 target_include_directories(macrofacet PUBLIC include)
 target_link_libraries(macrofacet PUBLIC
-    Eigen3::Eigen nlohmann_json::nlohmann_json Threads::Threads ${TORCH_LIBRARIES})
+    Eigen3::Eigen nlohmann_json::nlohmann_json Threads::Threads)
+
+option(MACROFACET_ENABLE_TORCH "Enable LibTorch CPU/CUDA batched Renewal inference" ON)
+if(MACROFACET_ENABLE_TORCH)
+    if(NOT Torch_DIR)
+        execute_process(COMMAND "${Python3_EXECUTABLE}" -c
+            "import pathlib,torch; print(pathlib.Path(torch.__file__).parent/'share/cmake/Torch')"
+            OUTPUT_VARIABLE MACROFACET_TORCH_DIR OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE MACROFACET_TORCH_DISCOVERY)
+        if(MACROFACET_TORCH_DISCOVERY EQUAL 0)
+            set(Torch_DIR "${MACROFACET_TORCH_DIR}" CACHE PATH "LibTorch CMake package")
+        endif()
+    endif()
+    find_package(Torch CONFIG REQUIRED)
+    # Isolate LibTorch's headers and C++20 requirement from the C++17 renderer.
+    add_library(macrofacet_torch STATIC src/learned/RenewalTorchBackend.cpp)
+    target_compile_features(macrofacet_torch PRIVATE cxx_std_20)
+    target_link_libraries(macrofacet_torch PRIVATE ${TORCH_LIBRARIES})
+    if(MSVC)
+        target_compile_options(macrofacet_torch PRIVATE /EHsc /utf-8 /bigobj)
+    endif()
+    target_link_libraries(macrofacet PRIVATE macrofacet_torch)
+    target_compile_definitions(macrofacet PRIVATE MACROFACET_HAS_TORCH=1)
+endif()
 if(MSVC)
     target_compile_options(macrofacet PRIVATE /W4 /permissive- /EHsc)
 else()
@@ -89,6 +84,8 @@ endif()
 
 add_executable(macrofacet_experiments src/experiments/ExperimentMain.cpp)
 target_link_libraries(macrofacet_experiments PRIVATE macrofacet)
+add_executable(macrofacet_verify_renewal_batch EXCLUDE_FROM_ALL tools/verify_renewal_batch.cpp)
+target_link_libraries(macrofacet_verify_renewal_batch PRIVATE macrofacet)
 
 # ---------------------------------------------------------------------------
 # macrofacet_field: the NanoVDB-backed field library.
@@ -154,6 +151,41 @@ if(MACROFACET_BUILD_FIELDS)
     # binary that builds and runs every procedural config.
     target_link_libraries(macrofacet_experiments PRIVATE macrofacet_field)
     target_compile_definitions(macrofacet_experiments PRIVATE MACROFACET_HAS_FIELDS=1)
+    # Optional profiling executable; no timers are added to the renderer.
+    add_executable(macrofacet_renewal_benchmark EXCLUDE_FROM_ALL tools/benchmark_renewal.cpp)
+    target_link_libraries(macrofacet_renewal_benchmark PRIVATE macrofacet_field)
+    if(MACROFACET_ENABLE_TORCH)
+        # Diagnostic copies override the corresponding static-library objects.
+        # The production executable has no profiling scopes or CUDA barriers.
+        find_package(CUDAToolkit QUIET)
+        if(CUDAToolkit_FOUND)
+            set(RENEWAL_PROFILE_DIR "${CMAKE_CURRENT_BINARY_DIR}/renewal_profile")
+            add_custom_command(
+                OUTPUT "${RENEWAL_PROFILE_DIR}/RenewalWavefrontProfile.cpp"
+                       "${RENEWAL_PROFILE_DIR}/RenewalTorchProfile.cpp"
+                       "${RENEWAL_PROFILE_DIR}/RenewalBatchSessionProfile.cpp"
+                       "${RENEWAL_PROFILE_DIR}/RayMeanProfileProfile.cpp"
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/profiling/generate_renewal_profile.py"
+                        "${CMAKE_CURRENT_SOURCE_DIR}" "${RENEWAL_PROFILE_DIR}"
+                DEPENDS tools/profiling/generate_renewal_profile.py
+                        src/integrator/RenewalWavefront.cpp src/learned/RenewalTorchBackend.cpp
+                        src/learned/RenewalBatchSession.cpp src/gpss/RayMeanProfile.cpp
+                VERBATIM)
+            add_executable(macrofacet_profile_renewal EXCLUDE_FROM_ALL
+                tools/profiling/profile_renewal_main.cpp
+                "${RENEWAL_PROFILE_DIR}/RenewalWavefrontProfile.cpp"
+                "${RENEWAL_PROFILE_DIR}/RenewalTorchProfile.cpp"
+                "${RENEWAL_PROFILE_DIR}/RenewalBatchSessionProfile.cpp"
+                "${RENEWAL_PROFILE_DIR}/RayMeanProfileProfile.cpp")
+            target_include_directories(macrofacet_profile_renewal PRIVATE tools/profiling src/learned)
+            target_compile_features(macrofacet_profile_renewal PRIVATE cxx_std_20)
+            target_compile_definitions(macrofacet_profile_renewal PRIVATE MACROFACET_HAS_TORCH=1)
+            target_link_libraries(macrofacet_profile_renewal PRIVATE macrofacet_field ${TORCH_LIBRARIES} CUDA::cudart)
+            if(MSVC)
+                target_compile_options(macrofacet_profile_renewal PRIVATE /EHsc /utf-8 /bigobj)
+            endif()
+        endif()
+    endif()
 endif()
 
 set(MACROFACET_TEST_SOURCES
@@ -166,7 +198,8 @@ set(MACROFACET_TEST_SOURCES
     tests/test_cutaway_mean.cpp
     tests/test_shader_ball_mean.cpp
     tests/test_material_roughness.cpp
-    tests/test_first_passage_mlp.cpp
+    tests/test_renewal_reference.cpp
+    tests/test_renewal_transport.cpp
     tests/test_first_passage.cpp
     tests/test_transmittance_config.cpp
     tests/test_rendering_threads.cpp)
@@ -183,42 +216,36 @@ add_executable(macrofacet_tests ${MACROFACET_TEST_SOURCES})
 target_link_libraries(macrofacet_tests PRIVATE ${MACROFACET_TEST_LIBRARIES})
 
 if(WIN32)
-    # Windows resolves imported DLLs before main(), so a launcher must set the
-    # search path before starting the executable. Reuse the Python wheel's DLLs
-    # in place rather than copying them into every build configuration.
-    set(MACROFACET_TORCH_EXECUTABLES macrofacet_experiments macrofacet_tests)
+    # Keep direct .exe and .cmd launches usable without a Python process.
+    set(MACROFACET_EXECUTABLES macrofacet_experiments macrofacet_tests)
     if(MACROFACET_BUILD_FIELDS)
-        list(APPEND MACROFACET_TORCH_EXECUTABLES macrofacet_fieldgen)
+        list(APPEND MACROFACET_EXECUTABLES macrofacet_fieldgen)
     endif()
-    file(TO_NATIVE_PATH "${MACROFACET_TORCH_RUNTIME_DIRECTORY}"
-        MACROFACET_TORCH_RUNTIME_DIRECTORY_NATIVE)
-    foreach(executable IN LISTS MACROFACET_TORCH_EXECUTABLES)
-        file(GENERATE
-            OUTPUT "$<TARGET_FILE_DIR:${executable}>/${executable}.cmd"
-            CONTENT "@echo off\nsetlocal\nset \"PATH=${MACROFACET_TORCH_RUNTIME_DIRECTORY_NATIVE};%PATH%\"\n\"$<TARGET_FILE:${executable}>\" %*\nexit /b %errorlevel%\n"
+    foreach(executable IN LISTS MACROFACET_EXECUTABLES)
+        file(GENERATE OUTPUT "$<TARGET_FILE_DIR:${executable}>/${executable}.cmd"
+            CONTENT "@echo off\n\"%~dp0${executable}.exe\" %*\nexit /b %errorlevel%\n"
             NEWLINE_STYLE CRLF)
-        set_target_properties(${executable} PROPERTIES
-            VS_DEBUGGER_ENVIRONMENT
-                "PATH=${MACROFACET_TORCH_RUNTIME_DIRECTORY_NATIVE};%PATH%")
     endforeach()
-    message(STATUS
-        "LibTorch runtime: generated .cmd launchers use ${MACROFACET_TORCH_RUNTIME_DIRECTORY}")
 endif()
 
-set(MACROFACET_MLP_TEST_DATA "${CMAKE_CURRENT_BINARY_DIR}/mlp_test_data")
-file(MAKE_DIRECTORY "${MACROFACET_MLP_TEST_DATA}")
-execute_process(
-    COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/python/scripts/export_cpp_test_model.py"
-            --output "${MACROFACET_MLP_TEST_DATA}"
-    RESULT_VARIABLE MACROFACET_MLP_FIXTURE_RESULT
-    ERROR_VARIABLE MACROFACET_MLP_FIXTURE_ERROR)
-if(NOT MACROFACET_MLP_FIXTURE_RESULT EQUAL 0)
-    message(FATAL_ERROR "Failed to create LibTorch test fixture: ${MACROFACET_MLP_FIXTURE_ERROR}")
+if(WIN32 AND MACROFACET_ENABLE_TORCH)
+    file(GLOB MACROFACET_TORCH_DLLS CONFIGURE_DEPENDS "${TORCH_INSTALL_PREFIX}/lib/*.dll")
+    set(MACROFACET_TORCH_RUNTIME_STAMP "${CMAKE_CURRENT_BINARY_DIR}/torch-runtime-$<CONFIG>.stamp")
+    add_custom_command(OUTPUT "${MACROFACET_TORCH_RUNTIME_STAMP}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:macrofacet_experiments>"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${MACROFACET_TORCH_DLLS}
+            "$<TARGET_FILE_DIR:macrofacet_experiments>"
+        COMMAND "${CMAKE_COMMAND}" -E touch "${MACROFACET_TORCH_RUNTIME_STAMP}"
+        DEPENDS ${MACROFACET_TORCH_DLLS}
+        COMMENT "Deploying LibTorch runtime DLLs" VERBATIM)
+    add_custom_target(macrofacet_torch_runtime DEPENDS "${MACROFACET_TORCH_RUNTIME_STAMP}")
+    foreach(executable macrofacet_experiments macrofacet_tests macrofacet_fieldgen macrofacet_renewal_benchmark macrofacet_verify_renewal_batch macrofacet_profile_renewal)
+        if(TARGET ${executable})
+            add_dependencies(${executable} macrofacet_torch_runtime)
+        endif()
+    endforeach()
 endif()
-file(TO_CMAKE_PATH "${MACROFACET_MLP_TEST_DATA}" MACROFACET_MLP_TEST_DATA_CMAKE)
-target_compile_definitions(macrofacet_tests PRIVATE
-    MACROFACET_MLP_TEST_DATA="${MACROFACET_MLP_TEST_DATA_CMAKE}")
+
 if(MACROFACET_BUILD_FIELDS)
     target_include_directories(macrofacet_tests PRIVATE src)
     target_compile_definitions(macrofacet_tests PRIVATE MACROFACET_TEST_FIELDS=1)
@@ -232,7 +259,13 @@ add_test(
             -s data_analysis/tests -v)
 set_tests_properties(macrofacet_data_analysis_tests PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-if(WIN32)
-    set_tests_properties(macrofacet_tests PROPERTIES ENVIRONMENT_MODIFICATION
-        "PATH=path_list_prepend:${MACROFACET_TORCH_RUNTIME_DIRECTORY}")
+
+# Python neural tests remain optional, independently of the C++ LibTorch backend.
+option(MACROFACET_TEST_NEURAL "Run Renewal+ Python tests (requires torch and numpy)" OFF)
+if(MACROFACET_TEST_NEURAL)
+    add_test(NAME macrofacet_renewal_tests
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s python/tests -v)
+    set_tests_properties(macrofacet_renewal_tests PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        ENVIRONMENT "MACROFACET_RENEWAL_EXE=$<TARGET_FILE:macrofacet_experiments>")
 endif()

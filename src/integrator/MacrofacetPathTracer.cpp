@@ -1,4 +1,5 @@
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
+#include "macrofacet/integrator/RenewalWavefront.h"
 #include "macrofacet/macrofacet/ConductorPhase.h"
 #include "macrofacet/transport/FlightKernel.h"
 #include "macrofacet/transport/ConditionalFlightKernel.h"
@@ -31,11 +32,63 @@ int resolveWorkerCount(int requested, int rows) {
     return std::max(1, std::min(available, rows));
 }
 
+Spectrum traceRenewalCameraPath(const Ray& input, const ExperimentConfig& config,
+    const RenewalMedium& medium, Random& rng, RenderStatistics& statistics) {
+    Ray ray{input.origin, normalizedOrThrow(input.direction)};
+    const auto interval = config.field.activeDomain.intersect(ray);
+    if (!interval.hit || !(interval.exit > interval.entry)) {
+        ++statistics.escapedPaths;
+        return environmentEmission(ray.direction, config.render.environment);
+    }
+    ray.origin += interval.entry*ray.direction;
+    ray.origin = ray.origin.cwiseMax(config.field.activeDomain.minimum).cwiseMin(config.field.activeDomain.maximum);
+    std::optional<Vector3> gradient; // A: positive exterior, no hidden sampled initial values.
+    Spectrum throughput = Spectrum::Ones();
+    for (int depth = 0; depth < config.render.safetyDepthCap; ++depth) {
+        const auto flight = medium.beginFlight(ray, gradient);
+        const auto hit = flight ? medium.sample(*flight, rng,
+            config.numeric.distanceAbsoluteTolerance, &statistics.renewal) : RenewalSurfaceSample{};
+        if (!hit.hit) {
+            ++statistics.escapedPaths;
+            statistics.accumulatedPathDepth += depth;
+            return throughput.cwiseProduct(environmentEmission(ray.direction, config.render.environment));
+        }
+        ++statistics.realCollisions;
+        throughput = throughput.cwiseProduct(conductorFresnel(-ray.direction.dot(hit.normal), config.material.conductor));
+        const Vector3 outgoing = normalizedOrThrow(reflectTravelDirection(ray.direction, hit.normal));
+        if (!(outgoing.dot(hit.gradient) > 0))
+            throw std::runtime_error("Renewal reflection must leave the sampled surface");
+        // The sampled geometry is part of the target model: no inverse hit PDF
+        // or extra Rice factor. A new direction starts B with the FULL gradient.
+        ray = {hit.position, outgoing};
+        gradient = hit.gradient;
+        if (depth+1 >= config.render.rouletteStartDepth) {
+            const double probability = std::clamp(throughput.maxCoeff(), 0.05, 0.95);
+            if (rng.openUniform01() >= probability) {
+                ++statistics.rouletteTerminations;
+                statistics.accumulatedPathDepth += depth+1;
+                return Spectrum::Zero();
+            }
+            throughput /= probability;
+        }
+    }
+    ++statistics.safetyCapTerminations;
+    statistics.accumulatedPathDepth += config.render.safetyDepthCap;
+    return Spectrum::Zero();
+}
+
 } // namespace
 
 Spectrum traceCameraPath(const Ray& initialRay,
                          const ExperimentConfig& config, Random& rng,
                          RenderStatistics& statistics) {
+    if (config.transportMode == "neural_renewal") {
+        ExperimentConfig prepared = config;
+        prepareRenewalModel(prepared);
+        const RenewalMedium medium(prepared.field, *prepared.renewal.model, prepared.renewal.profileMaximumStep,
+                                   prepared.renewal.profileMode);
+        return traceRenewalCameraPath(initialRay, prepared, medium, rng, statistics);
+    }
     const NarrowBandMedium medium(config.field, config.material, config.mediumDensity,
                                   config.densityMajorantGrid, config.preparedAreaMajorant);
     return traceCameraPath(initialRay, config, medium, rng, statistics);
@@ -44,6 +97,8 @@ Spectrum traceCameraPath(const Ray& initialRay,
 Spectrum traceCameraPath(const Ray& initialRay,
                          const ExperimentConfig& config, const NarrowBandMedium& medium,
                          Random& rng, RenderStatistics& statistics) {
+    if (config.transportMode == "neural_renewal")
+        return traceCameraPath(initialRay, config, rng, statistics);
     const Vector3 initialDirection = normalizedOrThrow(initialRay.direction);
     const DomainInterval firstInterval = config.field.activeDomain.intersect(
         {initialRay.origin, initialDirection});
@@ -123,8 +178,19 @@ RenderedImage renderAnalyticScene(const ExperimentConfig& config,
                                  std::atomic<std::uint64_t>* completedCameraRays) {
     // Prepare the local extinction bound before tracing any paths. All worker
     // threads share this immutable medium and its baked DDA majorant.
-    const NarrowBandMedium medium(config.field, config.material, config.mediumDensity,
-                                  config.densityMajorantGrid, config.preparedAreaMajorant);
+    ExperimentConfig prepared = config;
+    std::unique_ptr<NarrowBandMedium> medium;
+    std::unique_ptr<RenewalMedium> renewal;
+    if (config.transportMode == "neural_renewal") {
+        prepareRenewalModel(prepared);
+        if (prepared.renewal.resolvedBackend != "scalar")
+            return renderRenewalWavefront(prepared,completedCameraRays);
+        renewal = std::make_unique<RenewalMedium>(prepared.field, *prepared.renewal.model,
+                                                prepared.renewal.profileMaximumStep, prepared.renewal.profileMode);
+    } else {
+        medium = std::make_unique<NarrowBandMedium>(config.field, config.material, config.mediumDensity,
+                                                   config.densityMajorantGrid, config.preparedAreaMajorant);
+    }
     RenderedImage result;
     result.width = config.render.width;
     result.height = config.render.height;
@@ -154,8 +220,9 @@ RenderedImage renderAnalyticScene(const ExperimentConfig& config,
                 const double py = (1.0 - 2.0 * ((y + rng.openUniform01()) / result.height)) * scale;
                 const Vector3 direction = normalizedOrThrow(forward + px * right + py * up);
                 ++statistics.paths;
-                sum += traceCameraPath({config.render.cameraPosition, direction},
-                                       config, medium, rng, statistics);
+                const Ray ray{config.render.cameraPosition, direction};
+                sum += renewal ? traceRenewalCameraPath(ray, prepared, *renewal, rng, statistics)
+                               : traceCameraPath(ray, config, *medium, rng, statistics);
                 if (completedCameraRays)
                     completedCameraRays->fetch_add(1, std::memory_order_relaxed);
             }

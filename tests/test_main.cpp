@@ -24,8 +24,10 @@ int main() {
     catch (const std::exception& e) { context.require(false, std::string("shader ball mean threw: ") + e.what()); }
     try { testMaterialRoughness(context); }
     catch (const std::exception& e) { context.require(false, std::string("material roughness threw: ") + e.what()); }
-    try { testFirstPassageMlp(context); }
-    catch (const std::exception& e) { context.require(false, std::string("first passage MLP threw: ") + e.what()); }
+    try { testRenewalReference(context); }
+    catch (const std::exception& e) { context.require(false, std::string("renewal reference threw: ") + e.what()); }
+    try { testRenewalTransport(context); }
+    catch (const std::exception& e) { context.require(false, std::string("renewal transport threw: ") + e.what()); }
     try { testFirstPassage(context); }
     catch (const std::exception& e) { context.require(false, std::string("first passage threw: ") + e.what()); }
 #if defined(MACROFACET_TEST_FIELDS)

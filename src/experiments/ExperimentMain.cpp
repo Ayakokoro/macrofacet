@@ -1,5 +1,6 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/experiments/FirstPassageExperiment.h"
+#include "macrofacet/experiments/RenewalModelExperiment.h"
 #include "macrofacet/experiments/RenderExperiment.h"
 #include "macrofacet/experiments/TransmittanceCurves.h"
 #if defined(MACROFACET_HAS_FIELDS)
@@ -30,6 +31,7 @@ struct CommandLine {
     std::optional<int> rays;
     std::optional<int> bins;
     std::optional<int> trials;
+    std::optional<std::filesystem::path> model;
     bool preserveSlope = false;
 };
 
@@ -65,7 +67,8 @@ CommandLine parseCommandLine(int argc, char** argv) {
     CommandLine options;
     options.command = argv[1];
     if (options.command != "render" && options.command != "curves" &&
-        options.command != "first-passage")
+        options.command != "first-passage" && options.command != "bake-field" &&
+        options.command != "renewal-query")
         throw std::invalid_argument("unknown command: " + options.command);
     for (int i = 2; i < argc; ++i) {
         const std::string argument = argv[i];
@@ -81,6 +84,7 @@ CommandLine parseCommandLine(int argc, char** argv) {
         } else if (argument == "--roughness") {
             options.roughness = parsePositiveNumber(argument, value);
         } else if (argument == "--output") options.outputDirectory = value;
+        else if (argument == "--model") options.model = value;
         else if (argument == "--spp") {
             options.samplesPerPixel = parsePositiveInteger(argument, value);
         } else if (argument == "--width") {
@@ -100,6 +104,8 @@ CommandLine parseCommandLine(int argc, char** argv) {
         } else throw std::invalid_argument("unknown option: " + argument);
     }
     if (options.configPath.empty()) throw std::invalid_argument("missing --config <path>");
+    if ((options.command == "renewal-query") != options.model.has_value())
+        throw std::invalid_argument("--model is required only for renewal-query");
     if (options.preserveSlope && !options.sigma) {
         throw std::invalid_argument("--preserve-slope requires --sigma");
     }
@@ -123,6 +129,9 @@ int main(int argc, char** argv) {
                      "[--threads <count>] [--output <directory>]\n"
                      "       macrofacet_experiments curves --config <file> "
                      "[--trials <count>] [--bins <count>] [--output <directory>]\n"
+                     "       macrofacet_experiments bake-field --config <file> [--output <directory>]\n"
+                     "       macrofacet_experiments renewal-query --config <reference-config> --model <bundle.json> "
+                     "[--trials <count>] [--bins <count>] [--output <directory>]\n"
                      "       macrofacet_experiments first-passage --config <file> "
                      "[--trials <count>] [--bins <count>] [--threads <count>] "
                      "[--output <directory>]\n";
@@ -131,6 +140,18 @@ int main(int argc, char** argv) {
     try {
         const CommandLine options = parseCommandLine(argc, argv);
         const std::string& command = options.command;
+        if (command == "renewal-query") {
+            if (options.sigma || options.roughness || options.preserveSlope || options.samplesPerPixel ||
+                options.width || options.height || options.mode || options.rays || options.threadCount)
+                throw std::invalid_argument("renewal-query accepts --config, --model, --trials, --bins and --output");
+            auto config = mf::loadFirstPassageExperimentConfig(options.configPath);
+            if (options.outputDirectory) config.outputDirectory = *options.outputDirectory;
+            if (options.trials) config.trajectories = *options.trials;
+            if (options.bins) config.curveBins = *options.bins;
+            mf::runRenewalModelExperiment(config, *options.model, options.configPath);
+            std::cout << "completed renewal-query -> " << config.outputDirectory.string() << '\n';
+            return 0;
+        }
         if (command == "first-passage") {
             if (options.sigma || options.roughness || options.preserveSlope ||
                 options.samplesPerPixel || options.width || options.height ||
@@ -162,7 +183,7 @@ int main(int argc, char** argv) {
                     << (firstPassage.fixedEndpoint.enabled ? (firstPassage.fixedEndpoint.trajectories > 0
                         ? firstPassage.fixedEndpoint.trajectories : firstPassage.trajectories) : 0) << ",\n"
                     << "  \"state_count\": "
-                    << (firstPassage.initialConditionType == "collision_state"
+                    << (firstPassage.initialConditionType != "fixed_value"
                             ? firstPassage.collisionStates.size() : 1) << ",\n"
                     << "  \"kernel_count\": " << firstPassage.kernels.size() << ",\n"
                     << "  \"resolution_count\": " << firstPassage.stepSizes.size()
@@ -181,8 +202,11 @@ int main(int argc, char** argv) {
         if (options.mode) config.transportMode = *options.mode;
         if (config.transportMode != "classic" && config.transportMode != "classic_local" &&
             config.transportMode != "classic_global" &&
-            config.transportMode != "global_conditional" && config.transportMode != "all")
+            config.transportMode != "global_conditional" && config.transportMode != "neural_renewal" && config.transportMode != "all")
             throw std::invalid_argument("unknown transport mode: " + config.transportMode);
+        if (command == "curves" && config.transportMode == "neural_renewal")
+            throw std::invalid_argument("use renewal-query for neural curves and render for neural path tracing");
+        mf::prepareRenewalModel(config);
         if (command == "curves" && config.transmittance) {
             if (options.rays) {
                 throw std::invalid_argument(
@@ -206,7 +230,7 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(config.outputDirectory);
         mf::writeResolvedConfig(config, config.outputDirectory / "resolved_config.json");
         if (command == "render") mf::runRenderExperiments(config);
-        else mf::runTransmittanceCurves(config, options.rays.value_or(1024),
+        else if (command == "curves") mf::runTransmittanceCurves(config, options.rays.value_or(1024),
                                         options.bins.value_or(64));
         std::ofstream summary(config.outputDirectory / "run_summary.json");
         summary << "{\n  \"success\": true,\n  \"command\": \"" << command

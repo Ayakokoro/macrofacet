@@ -1,5 +1,7 @@
 # 无第一、第二假设的 first-passage Monte Carlo 实验
 
+Current Renewal+ reference APIs, positive-exterior starts, unit-decay Matérn-3/2 convention, and migration are documented in [RENEWAL_REFERENCE.md](RENEWAL_REFERENCE.md). Spatial Matérn-3/2 now uses the state-space backend; legacy grid descriptions below apply to the other kernels.
+
 `macrofacet_experiments first-passage` 在一维射线上直接采样平稳 GP，并把第一次到达阈值的时间
 
 \[
@@ -119,7 +121,6 @@ kernel/state”内独立归一化，使 `sum(density * bin_width)=1`。脚本只
 
 训练累计消光 \(H(q\mid\beta_0,\beta_a,\beta_g)\) 时应筛选 `training_resolution=1`。其他分辨率只用于检查 survival、FPT quantile 和 crossing-slope 是否收敛。`event=0,censored=1` 的 `event_q=max_q` 是右删失记录；其 crossing 字段为空。若训练只使用区间计数，可设置 `monte_carlo.write_raw_samples=false`，此时不会创建 `first_passage_samples.csv`；curve/summary 仍会生成，但 Python 斜率密度图需要原始样本，因而不能启用。
 
-Matérn 5/2 的正式训练配置是 `configs/collision_state_matern52_training.json`。它生成 512 个 Latin-hypercube 状态，并由独立 Python 包直接对 `at_risk/events` 最大化区间 likelihood，拟合单调 I-spline 累计 hazard；完整命令、模型定义、独立样条表示误差检查和渲染查询方式见 [Python training guide](../python/README.md)。
 
 ## 同一 CSV 中的三种消光率
 
@@ -261,7 +262,7 @@ Python 可视化生成的 `first_passage_rice_density.svg` 将 Monte Carlo densi
 - `matern_5_2`
 - `rational_quadratic`（额外参数 `alpha`）
 
-`variance` 是 \(c(0)\)，`length_scale` 使用各 kernel 的标准参数化。相同 `length_scale` 不代表相同梯度方差：SE 和 RQ 的 \(q=\sigma^2/\ell^2\)，Matérn 3/2 的 \(q=3\sigma^2/\ell^2\)，Matérn 5/2 的 \(q=5\sigma^2/(3\ell^2)\)。若要只比较相关形状，应调整长度尺度令 \(q\) 相同。
+`variance` 是 \(c(0)\)。Matérn 3/2 现在采用方案中的单位衰减定义 \(\rho(r)=(1+r)e^{-r}\)，因此它与 SE、RQ 都有 \(q=\sigma^2/\ell^2\)。Matérn 5/2 仍为 \(q=5\sigma^2/(3\ell^2)\)。若要保留旧 Matérn 3/2 配置的物理 GP，应将旧 `length_scale` 除以 \(\sqrt3\)；比较不同核的相关形状时应匹配 \(q\)。
 
 `grid.step_sizes` 的最小值决定实际采样网格；其他步长从同一 realization 做耦合下采样。每个步长都有独立的 curve/summary 行，因此可以检查有限网格是否漏掉“正到负再回正”的 crossing。若 0.02 与 0.01 的曲线仍明显不同，应继续加入 0.005，而不能把 0.01 当作连续过程真值。
 
@@ -288,4 +289,4 @@ X_c(t)=X(t)+\frac{c(t)}{c(0)}\bigl(a-X(0)\bigr)
 
 ## 当前边界
 
-`fixed_value` 模式仍是任意受支持 kernel 的常均值基础实验。统一的 `collision_state` 模式实现了 \(F(0)=0,F'(0)>0\) 的 affine-mean surface birth 数据生成，但明确采用碰撞状态近似：它只保留最近碰撞的场值和梯度，不包含碰撞前完整 survival history。当前支持各向同性 squared exponential、Matérn \(3/2\)、Matérn \(5/2\) 和 rational quadratic。affine 模式的 Matérn \(3/2\) 具有连续状态空间/bridge 后端；其他 kernel 必须用 step-size convergence 评估网格误差。完整空间 mean 可通过 `process.mean_field` 和 `initial_condition.rays` 接入，包括已有的 `shader_ball_full.nvdb`，详见 [全域 SDF 实验说明](FIRST_PASSAGE_FULL_FIELD.md)；空间 mean 模式统一使用网格条件化后端，不属于三 beta 的 affine 训练集。各向异性 kernel 和跨碰撞历史仍不支持。旧类型 `collision_state_matern32` 不作为兼容别名保留。
+`fixed_value` 模式仍是任意受支持 kernel 的常均值基础实验。统一的 `collision_state` 模式实现了 \(F(0)=0,F'(0)>0\) 的 surface birth 数据生成，但明确采用碰撞状态近似：它只保留最近碰撞的场值和梯度，不包含碰撞前完整 survival history。当前支持各向同性 squared exponential、Matérn \(3/2\)、Matérn \(5/2\) 和 rational quadratic。Matérn \(3/2\) 的仿射和空间均值均使用状态空间/bridge 后端；其他 kernel 使用网格条件化后端。所有后端都必须检查首达距离和速度的分辨率收敛。完整空间 mean 可通过 `process.mean_field` 和 `initial_condition.rays` 接入，包括已有的 `shader_ball_full.nvdb`，详见 [全域 SDF 实验说明](FIRST_PASSAGE_FULL_FIELD.md)。空间均值不属于三 beta 的 affine 训练集。Matérn \(3/2\) 还支持 `positive_exterior` 起点，见 [Renewal+ 公共接口](RENEWAL_REFERENCE.md)。各向异性 kernel 和跨碰撞历史仍不支持。旧类型 `collision_state_matern32` 不作为兼容别名保留。

@@ -84,19 +84,19 @@ Before creating experiment outputs:
 - Reject rays leaving the stored domain rather than using zero background as
   an SDF or implicitly declaring vacuum.
 
-All spatial-mean kernels currently use the conditioned circulant-grid backend,
-including Matérn 3/2. Its birth residual derivative is a central-difference
-observation, not an exact continuous derivative. The affine Matérn 3/2 mode
-retains its existing state-space/bridge backend.
+Matern-3/2 uses the shared state-space/bridge reference backend for both
+spatial and affine means. Its kernel is `rho(x)=(1+x)exp(-x)`. Other kernels
+retain the conditioned circulant-grid backend and central-difference residual
+derivative observations. See [Renewal reference](RENEWAL_REFERENCE.md).
 
 The deterministic profile is precomputed and shared by all realizations.
 Crossing intervals are split at both GP-grid nodes and NanoVDB voxel faces.
 Within a cell, trilinear SDF interpolation restricted to a ray is cubic; four
 value queries reconstruct it. The residual uses cubic Hermite interpolation
-with finite-difference slopes. This preserves the full interpolated mean,
+with exact state derivatives for Matern-3/2 and finite-difference slopes for other kernels. This preserves the full interpolated mean,
 without flattening it or smoothing over gradient jumps at voxel faces.
 Analytic non-polynomial means (for example `sphere`) instead have a cubic
-approximation within each GP interval.
+approximation controlled separately by `profile.maximum_step`.
 
 Monte Carlo error, residual grid/interpolation error, and the baked SDF's own
 voxel/sign error remain. Compare all configured resolutions; finer GP sampling
@@ -114,9 +114,9 @@ The usual samples/curves/summary CSVs remain available. Spatial-mean runs add
 \beta_g=\ell\mathbf g\cdot\mathbf d/\sigma.
 \]
 
-They describe **birth only**, not the complete non-affine mean. Do not feed
-these curves into the existing three-beta affine MLP as equivalent training
-data. `resolved_first_passage_config.json` records the field, physical rays,
+They describe **birth only**, not the complete non-affine mean. The shared
+`first_passage_mean_segments.csv` exports the full cubic segment features; the
+previous affine learned model has been removed. `resolved_first_passage_config.json` records the field, physical rays,
 and preflight/backend semantics.
 
 `first_passage_mean_profiles.csv` records `kernel_id,state_id,q,distance,mean,

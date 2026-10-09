@@ -3,6 +3,7 @@
 #include "macrofacet/core/Random.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/transport/ClassicNullTracking.h"
+#include "macrofacet/transport/RenewalMedium.h"
 #include <algorithm>
 #include <atomic>
 #include <vector>
@@ -20,9 +21,18 @@ struct RenderStatistics {
     std::uint64_t numericalFailures = 0;
     double accumulatedPathDepth = 0.0;
     DdaTrackingDiagnostics tracking;
+    RenewalTrackingDiagnostics renewal;
 };
 
 inline void mergeInto(RenderStatistics& destination, const RenderStatistics& source) {
+    destination.renewal.flights += source.renewal.flights;
+    destination.renewal.segments += source.renewal.segments;
+    destination.renewal.mixtureQueries += source.renewal.mixtureQueries;
+    destination.renewal.initializationBatches += source.renewal.initializationBatches;
+    destination.renewal.segmentBatches += source.renewal.segmentBatches;
+    destination.renewal.mixtureBatches += source.renewal.mixtureBatches;
+    destination.renewal.maximumBatchSize = std::max(destination.renewal.maximumBatchSize,source.renewal.maximumBatchSize);
+    destination.renewal.backend = source.renewal.backend;
     destination.paths += source.paths;
     destination.realCollisions += source.realCollisions;
     destination.escapedPaths += source.escapedPaths;

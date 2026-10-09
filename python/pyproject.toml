@@ -3,16 +3,14 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "macrofacet-fpt"
+name = "macrofacet-renewal"
 version = "0.1.0"
-description = "Monotone I-spline surrogate training for macrofacet first-passage data"
+description = "Censored sequence likelihood training for Renewal+ GPIS"
 requires-python = ">=3.10"
-dependencies = [
-  "numpy>=1.26",
-  "scipy>=1.11",
-  "torch>=2.12,<2.13"
-]
+dependencies = ["torch>=2.5,<3", "numpy>=1.24"]
+
+[project.scripts]
+macrofacet-renewal = "renewal.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["macrofacet_fpt*"]
+include = ["renewal*"]

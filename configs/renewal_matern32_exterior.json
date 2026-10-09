@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "seed": 17429,
+  "first_passage": {
+    "process": {
+      "mean_field": {
+        "mean_type": "plane",
+        "plane_normal": [
+          0,
+          0,
+          1
+        ],
+        "plane_offset": 0
+      }
+    },
+    "initial_condition": {
+      "type": "positive_exterior",
+      "rays": [
+        {
+          "id": "exterior_oblique",
+          "origin": [
+            0,
+            0,
+            0.02
+          ],
+          "direction": [
+            1,
+            0,
+            -0.2
+          ]
+        }
+      ]
+    },
+    "grid": {
+      "max_time": 4,
+      "step_sizes": [
+        0.015625,
+        0.0078125
+      ]
+    },
+    "profile": {
+      "maximum_step": 0.25
+    },
+    "curve": {
+      "bins": 64
+    },
+    "monte_carlo": {
+      "trajectories": 1024,
+      "thread_count": 4,
+      "write_raw_samples": true
+    },
+    "sampler": {
+      "type": "collision_state_auto",
+      "minimum_step": 0.00048828125,
+      "crossing_tolerance": 1e-09,
+      "bridge_sigma_margin": 6,
+      "max_refinement_depth": 12
+    },
+    "kernels": [
+      {
+        "id": "matern32",
+        "type": "matern_3_2",
+        "parameterization": "unit_decay",
+        "variance": 0.0009,
+        "length_scale": 0.1
+      }
+    ]
+  },
+  "output_directory": "outputs/renewal_matern32_exterior"
+}

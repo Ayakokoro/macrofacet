@@ -52,12 +52,6 @@
         "length_scale": 1.0
       },
       {
-        "id": "matern32",
-        "type": "matern_3_2",
-        "variance": 1.0,
-        "length_scale": 1.0
-      },
-      {
         "id": "matern52",
         "type": "matern_5_2",
         "variance": 1.0,

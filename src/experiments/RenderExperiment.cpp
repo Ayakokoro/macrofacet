@@ -87,19 +87,20 @@ void runRenderExperiments(const ExperimentConfig& config) {
                "roulette_terminations,safety_cap_terminations,numerical_failures,mean_path_depth,"
                "dda_candidates,null_collisions,bound_intervals,near_candidates,far_candidates,rounded_candidate_steps,adaptive_majorant_flights,"
                "tracking_segments,max_segment_null_collisions,max_segment_majorant,max_candidate_majorant,"
-               "max_evaluated_extinction,max_segment_majorant_optical_depth,max_conditional_interval_majorant\n";
+               "max_evaluated_extinction,max_segment_majorant_optical_depth,max_conditional_interval_majorant,"
+               "neural_flights,neural_segments,neural_mixture_queries,neural_backend,"
+               "neural_initialization_batches,neural_segment_batches,neural_mixture_batches,neural_maximum_batch_size\n";
     {
         const std::vector<std::string> modes = config.transportMode == "all"
             ? std::vector<std::string>{"classic_local", "classic_global", "global_conditional"}
             : std::vector<std::string>{config.transportMode};
-        std::vector<std::string> environments{"unit_white"};
-        if (config.render.environment != "unit_white") environments.push_back(config.render.environment);
+        const std::vector<std::string> environments{config.render.environment};
         RenderProgressBar progress(totalCameraRays(config, modes.size(), environments.size()));
         for (const std::string& mode : modes) for (const std::string& environment : environments) {
             ExperimentConfig renderConfig = config;
             renderConfig.transportMode = mode;
             if (mode == "classic_local") renderConfig.material.gpModel = GpModel::LocalTangent;
-            if (mode == "classic_global" || mode == "global_conditional")
+            if (mode == "classic_global" || mode == "global_conditional" || mode == "neural_renewal")
                 renderConfig.material.gpModel = GpModel::GlobalPointwise;
             if (renderConfig.material.gpModel != config.material.gpModel)
                 renderConfig.preparedAreaMajorant.reset();
@@ -144,7 +145,11 @@ void runRenderExperiments(const ExperimentConfig& config) {
                     << image.statistics.tracking.maximumCandidateMajorant << ','
                     << image.statistics.tracking.maximumEvaluatedHazard << ','
                     << image.statistics.tracking.maximumSegmentOpticalDepth << ','
-                    << image.statistics.tracking.maximumConditionalIntervalMajorant << '\n';
+                    << image.statistics.tracking.maximumConditionalIntervalMajorant << ','
+                    << image.statistics.renewal.flights << ',' << image.statistics.renewal.segments << ','
+                    << image.statistics.renewal.mixtureQueries << ',' << image.statistics.renewal.backend << ','
+                    << image.statistics.renewal.initializationBatches << ',' << image.statistics.renewal.segmentBatches << ','
+                    << image.statistics.renewal.mixtureBatches << ',' << image.statistics.renewal.maximumBatchSize << '\n';
         }
     }
 }
