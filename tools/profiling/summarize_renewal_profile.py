@@ -32,7 +32,9 @@ summary['gpu_kernel_seconds'] = dict(gpu)
 summary['gpu_kernel_calls'] = dict(calls)
 summary['trace_wall_seconds'] = read('trace_stable.json')['runs'][0]['seconds']
 summary['trace_note'] = 'GPU kernel times are measured by Nsight, summed within each NVTX range. Nested ranges overlap; never add parents to children. Host timers for asynchronous module calls measure launch/dispatch, not GPU execution.'
-summary['counts'] = {k: v for k, v in groups['wall'][0].items() if k not in ('stages','seconds')}
+summary['counts'] = {k: v for k, v in groups['wall'][0].items() if k not in ('stages','worker_stages','seconds')}
+summary['worker_stages'] = groups['wall'][0].get('worker_stages', {})
+summary['worker_note'] = 'Worker stages sum thread time and must not be added to coordinator wall time.'
 summary['image_sha256'] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.glob('*.pfm')}
 summary['all_diagnostic_images_identical'] = len(set(summary['image_sha256'].values())) == 1
 production = root / 'production_parity/render_neural_renewal_directional.pfm'

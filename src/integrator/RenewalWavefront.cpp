@@ -1,4 +1,5 @@
 #include "macrofacet/integrator/RenewalWavefront.h"
+#include "macrofacet/integrator/RenewalCpuExecutor.h"
 #include "macrofacet/learned/RenewalBatchSession.h"
 #include "macrofacet/macrofacet/ConductorPhase.h"
 #include <cmath>
@@ -24,6 +25,11 @@ struct Slot {
     std::size_t segment = 0;
     double remaining = 0;
 };
+enum class AdvanceKind { Continue, Hit, Escape };
+struct AdvanceResult {
+    AdvanceKind kind = AdvanceKind::Continue;
+    double coordinate = 0;
+};
 }
 
 RenderedImage renderRenewalWavefront(const ExperimentConfig& config,
@@ -38,6 +44,8 @@ RenderedImage renderRenewalWavefront(const ExperimentConfig& config,
                                config.renewal.profileMode);
     auto& statistics = image.statistics;
     statistics.renewal.backend = network.backend();
+    RenewalCpuExecutor cpu(config.render.threadCount,static_cast<std::size_t>(capacity));
+    statistics.renewal.cpuWorkers = cpu.workerCount();
     const Vector3 forward = normalizedOrThrow(config.render.cameraTarget-config.render.cameraPosition);
     Vector3 right, up;
     orthonormalComplement(forward,right,up);
@@ -65,6 +73,7 @@ RenderedImage renderRenewalWavefront(const ExperimentConfig& config,
     std::vector<RayMeanSegment> firstSegments, activeSegments;
     std::vector<RayStartCondition> starts;
     std::vector<double> hitCoordinates;
+    std::vector<AdvanceResult> advanceResults(static_cast<std::size_t>(capacity));
     for (;;) {
         initializeIds.clear(); firstSegments.clear(); starts.clear();
         activeIds.clear(); activeSegments.clear();
@@ -119,19 +128,35 @@ RenderedImage renderRenewalWavefront(const ExperimentConfig& config,
         statistics.renewal.maximumBatchSize = std::max(statistics.renewal.maximumBatchSize,
             static_cast<std::uint64_t>(activeIds.size()));
         hitIds.clear(); hitCoordinates.clear();
-        for (std::size_t i = 0; i < activeIds.size(); ++i) {
+        const auto advanceRange = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
             auto& slot = slots[activeIds[i]];
+            auto& result = advanceResults[i];
+            result = {};
             const auto& segment = activeSegments[i];
             const RenewalHazardSegment hazard(segment.begin,segment.end,rates[i]);
             const double mass = hazard.integral(0,1);
             if (mass > 0 && slot.remaining <= mass) {
-                hitIds.push_back(activeIds[i]);
-                hitCoordinates.push_back(hazard.inverse(slot.remaining,0,1,
-                    config.numeric.distanceAbsoluteTolerance/slot.flight->ell));
+                result.kind = AdvanceKind::Hit;
+                result.coordinate = hazard.inverse(slot.remaining,0,1,
+                    config.numeric.distanceAbsoluteTolerance/slot.flight->ell);
             } else {
                 slot.remaining -= mass;
-                if (!slot.flight->mean.hasSegment(++slot.segment)) escape(slot);
+                if (!slot.flight->mean.hasSegment(++slot.segment)) result.kind = AdvanceKind::Escape;
             }
+        }
+        };
+        // Each task owns disjoint slots and lazy mean caches. Network buffers,
+        // pixel writes, RNG draws and statistics remain on the coordinator.
+        const bool parallel = cpu.forRanges(activeIds.size(),advanceRange);
+        if (parallel) ++statistics.renewal.parallelAdvanceBatches;
+        else ++statistics.renewal.serialAdvanceBatches;
+        // Stable compaction retains the exact network batch order and RNG streams.
+        for (std::size_t i = 0; i < activeIds.size(); ++i) {
+            const auto& result = advanceResults[i];
+            if (result.kind == AdvanceKind::Hit) {
+                hitIds.push_back(activeIds[i]); hitCoordinates.push_back(result.coordinate);
+            } else if (result.kind == AdvanceKind::Escape) escape(slots[activeIds[i]]);
         }
         if (!hitIds.empty()) {
             const auto mixtures = network.mixture(hitIds,hitCoordinates);

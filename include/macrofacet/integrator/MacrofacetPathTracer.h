@@ -33,6 +33,9 @@ inline void mergeInto(RenderStatistics& destination, const RenderStatistics& sou
     destination.renewal.mixtureBatches += source.renewal.mixtureBatches;
     destination.renewal.maximumBatchSize = std::max(destination.renewal.maximumBatchSize,source.renewal.maximumBatchSize);
     destination.renewal.backend = source.renewal.backend;
+    destination.renewal.cpuWorkers = std::max(destination.renewal.cpuWorkers,source.renewal.cpuWorkers);
+    destination.renewal.parallelAdvanceBatches += source.renewal.parallelAdvanceBatches;
+    destination.renewal.serialAdvanceBatches += source.renewal.serialAdvanceBatches;
     destination.paths += source.paths;
     destination.realCollisions += source.realCollisions;
     destination.escapedPaths += source.escapedPaths;

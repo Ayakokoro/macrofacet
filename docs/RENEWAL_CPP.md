@@ -2,6 +2,48 @@
 
 实现方案中的碰撞距离、穿越速度、完整梯度／法线采样、模型透射率和多次散射路径追踪。C++ 保留 Eigen 标量推理，并支持 LibTorch CPU/CUDA 多射线批量推理；两者加载相同 JSON 权重。核契约固定为 `rho(x)=(1+x)exp(-x)`、`beta=1`；支持空域起点 A 和已知表面向外起点 B。
 
+## 单条真实相机光线的透射率对照
+
+`macrofacet_inspect_renewal_ray` 从渲染配置重放一个像素的第 0 个相机采样，复用相机 RNG、有效域入口、`profile_mode`、原始分段和所选推理后端。当前支持完整域 NanoVDB 场景的第一段相机飞行，起点条件为 A：`F(0)>0`。它输出神经透射率、光线元数据及两份参考配置；参考计算复用已有 `first-passage` 命令，没有新增参考渲染器。
+
+在仓库根目录运行，最后两个数字是从左上角以 0 开始的像素坐标；省略时取中央像素：
+
+```powershell
+cmake --build build --config Release --target macrofacet_inspect_renewal_ray --parallel 4
+build/Release/macrofacet_inspect_renewal_ray.exe configs/render_neural_renewal_shader_ball_ply_point_linear.json outputs/renewal_camera_ray_comparison 256 256
+build/Release/macrofacet_experiments.exe first-passage --config outputs/renewal_camera_ray_comparison/reference_coarse.json
+build/Release/macrofacet_experiments.exe first-passage --config outputs/renewal_camera_ray_comparison/reference_fine.json
+python data_analysis/plot_renewal_camera_ray.py outputs/renewal_camera_ray_comparison
+```
+
+打开输出目录的 `comparison.html`，可切换全程／下降区域并悬停读取数值。另有可单独使用的 SVG、逐点 `comparison.csv`、指标 `comparison_report.json` 和 `ray.json`。绘图复用仓库 SVG 工具，无第三方绘图库依赖；可用 `--preview-pfm <已有图像> --preview-config <对应配置>` 添加带像素标记的场景预览，此可选功能需要 NumPy，并检查相机、场、模型等配置是否匹配。
+
+参考采用同一 VDB 均值、σ、方向相关长度和 unit-decay Matérn-3/2 核，以状态空间／桥接采样估计首达存活概率。默认每组 65,536 条 GP 轨迹，归一化粗步长不超过 `1/32`，细组将步长和最小细分步长都减半，使用独立种子。蓝色带是逐点 95% Wilson 区间，仅衡量 Monte Carlo 误差；步长复查另行报告，不构成严格无偏或收敛证明。参考沿射线的逐体素三次均值还会与直接 VDB 查询逐点核对。
+
+神经曲线使用原始完整分段，查询距离只决定 hazard 积分的上限，不会截短剖面后重新输入网络。`point_linear` 对照包含均值近似与网络误差，不能单独归因于 GRU。CUDA 以 batch=1 重放，可能与整图批处理有微小浮点差异；工具另与 Eigen 标量结果交叉检查。曲线表示统计透射率，不是某一次 GP 实现的 0/1 可见性，也不包含后续反弹。
+
+2026-10-09 的 [shader ball 中央像素示例](../outputs/renewal_camera_ray_comparison_20261009/comparison.html)：h64、σ=0.02，最大透射率差约 `0.1501`；该点网络 `0.7599`，细参考 `0.9100`，95% 区间约 `[0.9078, 0.9122]`。两组参考最大差 `0.00729`，CUDA／标量最大差 `4.66e-8`。这只说明该相机光线上的偏差，不能代表整图误差。
+
+将诊断配置的 `transport.renewal.profile_mode` 改为 `cubic` 后，也可输出精确到浮点误差的 VDB 射线均值剖面。绘图支持 `--reference-directory <已有参考目录>` 复用同一条光线的 GP 参考，以及 `--compare-neural <另一模式的诊断目录>` 叠加其神经曲线；会检查场、光线、模型和查询网格的一致性。例如：
+
+```powershell
+python data_analysis/plot_renewal_camera_ray.py outputs/renewal_camera_ray_cubic_comparison_20261009 --reference-directory outputs/renewal_camera_ray_comparison_20261009 --compare-neural outputs/renewal_camera_ray_comparison_20261009
+```
+
+[同光线 cubic／point_linear 对照](../outputs/renewal_camera_ray_cubic_comparison_20261009/comparison.html) 的最大透射率误差分别为 `0.15068`／`0.15012`，两种神经预测之间最大差 `0.00333`；cubic 均值与 VDB 直接查询的最大差约 `8.6e-16`。因此这条光线的主要透射率偏差不能用局部线性近似解释；它也没有证明偏差由 GRU 架构本身造成。原渲染配置保持不变，cubic 诊断配置保存在新输出目录中。
+
+同一条光线也可比较不同权重：`--compare-model <另一模型的诊断目录>` 要求场、起点、后端、`profile_mode` 和每段输入完全一致，图例会标记隐藏维度，报告记录两个模型的 checkpoint 哈希。例如：
+
+```powershell
+python data_analysis/plot_renewal_camera_ray.py outputs/renewal_camera_ray_h16_comparison_20261009 --reference-directory outputs/renewal_camera_ray_comparison_20261009 --compare-model outputs/renewal_camera_ray_comparison_20261009
+```
+
+2026-10-09 的 [h16／h64 对照](../outputs/renewal_camera_ray_h16_comparison_20261009/comparison.html) 保持 `point_linear`、像素 `(256,256)` 的第 0 次采样和既有 GP 参考不变。h16 最大透射率差为 `0.07216`，h64 为 `0.15012`；`T=0.5` 的入口相对距离分别为 `0.30952`／`0.27609`，GP 参考为 `0.31183`。h16 CUDA／标量最大差为 `4.23e-8`。两模型来自同一份 v2 数据和训练种子，此单射线结果不能作为隐藏维度或架构优劣的普遍结论。
+
+同场景的 [16 个固定像素覆盖检查](../outputs/renewal_camera_rays_h16_h64_20261009/comparison.html) 增加了 15 个位置并复用中央光线，全部保持 `point_linear`。15 条光线进入有效域，另 1 条为域外真空。每条场内光线均有 65,536 条粗参考和 65,536 条细参考轨迹；13 条存在明显模型差异的光线上 h16 均优于 h64，另 2 条背景光线的两模型都接近 `T=1`。逐光线最大绝对透射率误差的均值为 h16 `0.07077`／h64 `0.14216`，最坏为 `0.12451`／`0.22197`，均出现在像素 `(256,440)`。这不是整图平均误差。
+
+总览可点击像素编号查看单光线曲线和置信区间；`selection.json` 保存实验前的像素列表、配置及文件哈希，`summary.csv/json` 保存完整指标。脚本 `outputs/renewal_camera_rays_h16_h64_20261009/run_suite.py` 可从仓库根目录重跑／恢复，完成后运行同目录 `plot_suite.py` 生成总览。两种参考步长的最大差为 `0.00729`；CPU／CUDA 最大透射率差为 `1.22e-7`。报告另用跨光线同时 DKW 界区分 Monte Carlo 噪声，这不覆盖剩余参考离散误差。固定像素覆盖和同一场景的结果不能证明架构优劣或代表整图泛化。
+
 ## 神经渲染
 
 已有 checkpoint 无需重新训练，先导出完整权重，再运行新增模式：
@@ -226,7 +268,15 @@ LibTorch 后端在所选设备上执行输入 `asinh` 和输出 `softplus`：初
 
 `RenewalBatchSession` 管理独立槽位状态；初始化使旧 mixture 缓存失效。`evaluate` 只推进列出的槽位一次，并缓存其**进入该段前**的状态和段编码，`mixture` 查询使用该缓存。网络权重、GRU 状态和进入段上下文常驻 GPU；CPU 每轮只传特征／槽位索引，下载少量 hazard 系数及实际命中的 mixture 参数。推理关闭 autograd，并在作用域内禁止 TF32，使用 float32；几何和累计量保持 double。不同 GEMM 实现仍可能带来浮点差异，因此不保证不同后端或批大小逐像素完全一致。
 
-批处理渲染使用一个 CPU 调度线程及 LibTorch 设备执行；`render.thread_count` 控制原标量后端，不表示 GPU 推理线程数。场剖面、采样求逆、法线重建仍在 CPU 上。`traceCameraPath` 单射线接口和 `renewal-query` 保留 Eigen 实现。小图、小批量可能受 GPU 启动和同步开销影响；完整渲染计时包含推理会话建立和首次 CUDA 使用，且命令会依次渲染白炉和方向环境两张图。
+批处理渲染由主线程调用 LibTorch，使用常驻 CPU 线程池并行处理段 hazard 积分、求逆，以及存活光线的下一段场查询。`render.thread_count` 现在也控制 `torch_cpu`／`torch_cuda` 的这部分 CPU 工作：`1` 串行，正数为包括主线程在内的线程上限，`0` 自动使用至多 8 个逻辑线程，并受批容量限制。这不是 GPU 推理线程数，也不修改 LibTorch 自身的线程设置。当前任务块为 128 条光线，少于 512 条的批次串行执行，避免小批次调度开销。
+
+每个工作线程只修改独占 slot 的状态及惰性均值缓存。完成一个批次后，主线程按原 slot 顺序收集碰撞、处理离开、更新图像和统计；初始化、mixture、散射与随机数消耗仍由主线程执行。因此线程数不改变网络批次、每像素随机数流及累加顺序。异常先等待所有任务结束再传回主线程。VDB 只读共享，各次查询继续使用独立 accessor。
+
+场查询加速主要针对 `point_linear` 的逐段惰性查询；新飞行的第一段仍在主线程构建。`cubic` 使用相同的并行 hazard 推进，但整条均值剖面的预计算仍在主线程，因此不能把 `point_linear` 的加速比直接用于 `cubic`。
+
+2026-10-09 使用 h64、sigma=0.02 NanoVDB shader ball、CUDA、128×128、4 spp、批容量 4096，测试进程固定 P 核，三轮交错测量：修改前中位数 12.020 s，新版 1/2/4/8 线程分别为 11.016/9.792/8.894/8.555 s。8 线程相对修改前约 1.40×，相对新版单线程约 1.29×。计时排除加载与预热；生产程序不设置 affinity。图像和路径计数与修改前完全相同，h16/h64、CPU/CUDA、point_linear/cubic 的生产程序对照及全部 CTest 通过。阶段计时与完整记录见 [CPU 并行化验证报告](../outputs/renewal_cpu_parallel_20261009/REPORT.md)。
+
+`render_summary.csv` 记录 `neural_cpu_workers`（CPU 推进可用线程数）、`neural_parallel_advance_batches` 和 `neural_serial_advance_batches`；后两者之和等于段批次数。网络和参数文件、分段及求逆精度都不因并行化改变，无需重训。`traceCameraPath` 单射线接口和 `renewal-query` 保留 Eigen 实现。小图、小批量仍可能受 GPU 启动和同步开销影响；渲染命令只输出配置选定的环境，完整计时包含推理会话建立和首次 CUDA 使用。
 
 验证工具可重放已经通过 Python 对照的 `renewal-query.json`，同时推进其中不同长度的射线，并检查 hazard、累计量、透射率和 mixture：
 

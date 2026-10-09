@@ -24,8 +24,10 @@ Arguments are config, spp override, repeat count, JSON output, and mode:
 An optional final argument sets the point-query sampling stride (default 64;
 1 times every query). `profile.point_query_sampled` measures only those sampled
 queries; `point_queries` counts all queries. Estimate the total query time as
-sampled inclusive time times `point_queries / sampled calls`. This estimate is
-already part of the enclosing CPU scopes, so do not add it to their totals.
+`point_query_sampled_thread_seconds * point_queries / point_query_sampled_calls`.
+This estimates summed thread time, not elapsed frame time; do not add it to
+enclosing wall times. Older serial reports use `profile.point_query_sampled`
+in `stages` for the sampled time and calls.
 The default avoids millions of timer/map/NVTX operations for `point_linear`.
 Always compare with `baseline` to check instrumentation overhead.
 
@@ -39,6 +41,17 @@ device-activation change include CPU asinh/softplus in those CPU scopes.
 In `point_linear`, most field queries occur lazily
 inside `cpu.hazard_and_decision`, when advancing a surviving ray; they are not
 all in `cpu.mean_profile`.
+
+CPU advance now uses a persistent pool controlled by `render.thread_count`.
+`cpu.advance_wait` measures coordinator wall time for dispatch, its own share
+of work, and the barrier. `cpu.hazard_and_decision` also includes ordered
+result commitment. `cpu.advance_work` measures each processed range.
+All counters and timers are thread-local during rendering and are merged only
+after workers join. `stages` contains coordinator timings; `worker_stages`
+contains the sum of background-worker timings. Never add worker times to
+coordinator/frame wall time. `worker_point_queries` confirms actual background
+query execution; `cpu_workers`, `parallel_advance_batches` and
+`serial_advance_batches` describe the dispatch. Baseline mode disables timers.
 
 All modes force `torch_cuda`, run one warmup frame at 1 spp, and retain the
 config's resolution, field, camera, seed, batch size, network, and environment.
@@ -77,3 +90,7 @@ controls, profiles and image-parity checks are in
 [`outputs/renewal_point_linear_bottleneck_20261009`](../../outputs/renewal_point_linear_bottleneck_20261009/).
 Use that directory's `summarize.py` for those measurements; the older summary
 script intentionally expects the earlier cubic investigation's filenames.
+
+CPU parallel advance validation, repeated baseline timing, thread-safe stage
+accounting, and production h16/h64 parity are recorded in
+[`outputs/renewal_cpu_parallel_20261009/REPORT.md`](../../outputs/renewal_cpu_parallel_20261009/REPORT.md).

@@ -1,6 +1,7 @@
 #include "TestHarness.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
+#include "macrofacet/integrator/RenewalCpuExecutor.h"
 #include <memory>
 #include <stdexcept>
 
@@ -61,6 +62,37 @@ public:
 
 void testRenderingThreads(TestContext& context) {
     using namespace mf;
+    // Repeated uneven jobs, threshold transitions and exception recovery exercise
+    // publication/barrier lifetime, not just the range arithmetic.
+    for (int workers : {1,2,4,8}) {
+        RenewalCpuExecutor executor(workers,2048);
+        std::vector<std::atomic<int>> visits(2049);
+        std::atomic<int> running{0};
+        for (int repetition = 0; repetition < 12; ++repetition) {
+            const std::size_t count = std::array<std::size_t,6>{0,1,511,512,1025,2049}[repetition%6];
+            for (auto& visit : visits) visit.store(0);
+            const bool parallel = executor.forRanges(count,[&](std::size_t lo, std::size_t hi) {
+                ++running;
+                for (auto i = lo; i < hi; ++i) ++visits.at(i);
+                --running;
+            });
+            bool exactlyOnce = running.load() == 0;
+            for (std::size_t i = 0; i < visits.size(); ++i)
+                exactlyOnce &= visits[i].load() == (i < count ? 1 : 0);
+            context.require(exactlyOnce,"Renewal pool joins all disjoint ranges before returning");
+            context.require(parallel == (workers > 1 && count >= 512),"Renewal small-job serial fallback");
+        }
+        bool rethrown = false;
+        try {
+            executor.forRanges(2049,[&](std::size_t lo, std::size_t) {
+                if (lo == 0) throw std::runtime_error("intentional range failure");
+            });
+        } catch (const std::runtime_error&) { rethrown = true; }
+        context.require(rethrown,"Renewal pool propagates callback failure after joining");
+        std::atomic<std::size_t> recovered{0};
+        executor.forRanges(2049,[&](std::size_t lo, std::size_t hi) { recovered.fetch_add(hi-lo); });
+        context.require(recovered == 2049,"Renewal pool resets cancellation before reuse");
+    }
     ExperimentConfig config;
     config.field = buildDefaultField();
     config.render.width = 3;

@@ -43,6 +43,7 @@ add_library(macrofacet
     src/transport/CollisionGradientSampler.cpp
     src/integrator/MacrofacetPathTracer.cpp
     src/integrator/RenewalWavefront.cpp
+    src/integrator/RenewalCpuExecutor.cpp
     src/experiments/ExperimentConfig.cpp
     src/experiments/FirstPassageRice.cpp
     src/experiments/FirstPassageExperiment.cpp
@@ -154,6 +155,11 @@ if(MACROFACET_BUILD_FIELDS)
     # Optional profiling executable; no timers are added to the renderer.
     add_executable(macrofacet_renewal_benchmark EXCLUDE_FROM_ALL tools/benchmark_renewal.cpp)
     target_link_libraries(macrofacet_renewal_benchmark PRIVATE macrofacet_field)
+    add_executable(macrofacet_inspect_renewal_ray EXCLUDE_FROM_ALL tools/inspect_renewal_ray.cpp)
+    target_link_libraries(macrofacet_inspect_renewal_ray PRIVATE macrofacet_field)
+    if(MSVC)
+        target_compile_options(macrofacet_inspect_renewal_ray PRIVATE /EHsc /utf-8)
+    endif()
     if(MACROFACET_ENABLE_TORCH)
         # Diagnostic copies override the corresponding static-library objects.
         # The production executable has no profiling scopes or CUDA barriers.
@@ -239,7 +245,7 @@ if(WIN32 AND MACROFACET_ENABLE_TORCH)
         DEPENDS ${MACROFACET_TORCH_DLLS}
         COMMENT "Deploying LibTorch runtime DLLs" VERBATIM)
     add_custom_target(macrofacet_torch_runtime DEPENDS "${MACROFACET_TORCH_RUNTIME_STAMP}")
-    foreach(executable macrofacet_experiments macrofacet_tests macrofacet_fieldgen macrofacet_renewal_benchmark macrofacet_verify_renewal_batch macrofacet_profile_renewal)
+    foreach(executable macrofacet_experiments macrofacet_tests macrofacet_fieldgen macrofacet_renewal_benchmark macrofacet_verify_renewal_batch macrofacet_profile_renewal macrofacet_inspect_renewal_ray)
         if(TARGET ${executable})
             add_dependencies(${executable} macrofacet_torch_runtime)
         endif()

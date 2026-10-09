@@ -29,7 +29,7 @@
   "transport": {
     "mode": "neural_renewal",
     "renewal": {
-      "model": "outputs/models/renewal_matern32_h64_v2/renewal_model.json",
+      "model": "outputs/models/renewal_matern32_h16_v2/renewal_model.json",
       "profile_maximum_step": 0.25,
       "backend": "auto",
       "batch_size": 4096,
@@ -45,9 +45,9 @@
     "distance_absolute_tolerance": 1e-10
   },
   "render": {
-    "width": 128,
-    "height": 128,
-    "samples_per_pixel": 64,
+    "width": 512,
+    "height": 512,
+    "samples_per_pixel": 256,
     "camera_position": [
       2.27,
       -1.09,

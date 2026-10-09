@@ -44,9 +44,11 @@ s = replace(s, '                slot.flight.reset();',
 s = replace(s, '        if (activeIds.empty()) break;', '        }\n        if (activeIds.empty()) break;')
 s = wrap(s, 'network.initialize(initializeIds,firstSegments,starts)', 'batch.initialize')
 s = wrap(s, 'network.evaluate(activeIds,activeSegments)', 'batch.segment')
-s = replace(s, '        for (std::size_t i = 0; i < activeIds.size(); ++i) {',
-            '        { renewal_profile::Scope cpu("cpu.hazard_and_decision");\n'
-            '        for (std::size_t i = 0; i < activeIds.size(); ++i) {')
+s = replace(s, '        const auto advanceRange = [&](std::size_t begin, std::size_t end) {',
+            '        { renewal_profile::Scope advancePhase("cpu.hazard_and_decision");\n'
+            '        const auto advanceRange = [&](std::size_t begin, std::size_t end) {\n'
+            '        renewal_profile::Scope work("cpu.advance_work");')
+s = wrap(s, 'cpu.forRanges(activeIds.size(),advanceRange)', 'cpu.advance_wait')
 s = replace(s, '        if (!hitIds.empty()) {', '        }\n        if (!hitIds.empty()) {')
 s = wrap(s, 'network.mixture(hitIds,hitCoordinates)', 'batch.mixture')
 s = replace(s, '            for (std::size_t i = 0; i < hitIds.size(); ++i) {',

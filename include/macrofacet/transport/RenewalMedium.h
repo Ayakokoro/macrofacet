@@ -9,6 +9,8 @@ struct RenewalTrackingDiagnostics {
     std::uint64_t flights = 0, segments = 0, mixtureQueries = 0;
     std::uint64_t initializationBatches = 0, segmentBatches = 0, mixtureBatches = 0, maximumBatchSize = 0;
     std::string backend = "scalar";
+    int cpuWorkers = 1;
+    std::uint64_t parallelAdvanceBatches = 0, serialAdvanceBatches = 0;
 };
 
 struct RenewalFlight {

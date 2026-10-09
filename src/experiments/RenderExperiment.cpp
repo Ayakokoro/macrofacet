@@ -89,7 +89,8 @@ void runRenderExperiments(const ExperimentConfig& config) {
                "tracking_segments,max_segment_null_collisions,max_segment_majorant,max_candidate_majorant,"
                "max_evaluated_extinction,max_segment_majorant_optical_depth,max_conditional_interval_majorant,"
                "neural_flights,neural_segments,neural_mixture_queries,neural_backend,"
-               "neural_initialization_batches,neural_segment_batches,neural_mixture_batches,neural_maximum_batch_size\n";
+               "neural_initialization_batches,neural_segment_batches,neural_mixture_batches,neural_maximum_batch_size,"
+               "neural_cpu_workers,neural_parallel_advance_batches,neural_serial_advance_batches\n";
     {
         const std::vector<std::string> modes = config.transportMode == "all"
             ? std::vector<std::string>{"classic_local", "classic_global", "global_conditional"}
@@ -149,7 +150,9 @@ void runRenderExperiments(const ExperimentConfig& config) {
                     << image.statistics.renewal.flights << ',' << image.statistics.renewal.segments << ','
                     << image.statistics.renewal.mixtureQueries << ',' << image.statistics.renewal.backend << ','
                     << image.statistics.renewal.initializationBatches << ',' << image.statistics.renewal.segmentBatches << ','
-                    << image.statistics.renewal.mixtureBatches << ',' << image.statistics.renewal.maximumBatchSize << '\n';
+                    << image.statistics.renewal.mixtureBatches << ',' << image.statistics.renewal.maximumBatchSize << ','
+                    << image.statistics.renewal.cpuWorkers << ',' << image.statistics.renewal.parallelAdvanceBatches << ','
+                    << image.statistics.renewal.serialAdvanceBatches << '\n';
         }
     }
 }

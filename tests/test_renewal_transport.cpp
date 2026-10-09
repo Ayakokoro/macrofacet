@@ -48,6 +48,17 @@ template<class F> bool rejects(F f) {
     try { f(); } catch (const std::exception&) { return true; }
     return false;
 }
+class AdvanceThrowingMean final : public mf::MeanField {
+public:
+    const char* typeName() const override { return "renewal_advance_throw"; }
+    mf::MeanJet evaluate(const mf::Point3& p) const override { return {p.z(),mf::Vector3::UnitZ()}; }
+    mf::BoundsSummary bounds(const mf::Bounds3&) const override { return {-1,1,true}; }
+    mf::MeanRayPoint queryRayPoint(const mf::Point3& origin,const mf::Vector3& direction,
+                                   double begin,double end) const override {
+        if (begin > 0) throw std::runtime_error("intentional lazy field failure");
+        return MeanField::queryRayPoint(origin,direction,begin,end);
+    }
+};
 }
 
 void testRenewalTransport(TestContext& context) {
@@ -490,6 +501,48 @@ void testRenewalTransport(TestContext& context) {
             context.near((pointBatch.pixels[i]-pointScalar.pixels[i]).norm(),0,3e-5,
                          backend+" point mode supports complete neural path tracing");
         render.renewal.profileMode = "cubic";
+        auto threaded = render;
+        threaded.render.width = 40; threaded.render.height = 24;
+        threaded.render.samplesPerPixel = 2;
+        threaded.render.rouletteStartDepth = 2;
+        threaded.render.safetyDepthCap = 8;
+        threaded.renewal.batchSize = 769; // Uneven ranges, slot reuse and batch tails.
+        for (const std::string mode : {"point_linear","cubic"}) {
+            threaded.renewal.profileMode = mode;
+            threaded.render.threadCount = 1;
+            const auto reference = renderAnalyticScene(threaded);
+            for (int workers : {2,4,8,0}) {
+                threaded.render.threadCount = workers;
+                std::atomic<std::uint64_t> progress{0};
+                const auto actual = renderAnalyticScene(threaded,&progress);
+                bool identical = actual.pixels.size() == reference.pixels.size();
+                for (std::size_t i = 0; identical && i < actual.pixels.size(); ++i)
+                    identical = (actual.pixels[i].array() == reference.pixels[i].array()).all();
+                const auto& a = actual.statistics; const auto& b = reference.statistics;
+                context.require(identical,backend+" "+mode+" CPU worker count preserves pixels bitwise");
+                context.require(progress == b.paths && a.paths == b.paths &&
+                    a.realCollisions == b.realCollisions && a.escapedPaths == b.escapedPaths &&
+                    a.rouletteTerminations == b.rouletteTerminations &&
+                    a.safetyCapTerminations == b.safetyCapTerminations &&
+                    a.numericalFailures == b.numericalFailures && a.accumulatedPathDepth == b.accumulatedPathDepth &&
+                    a.renewal.flights == b.renewal.flights && a.renewal.segments == b.renewal.segments &&
+                    a.renewal.mixtureQueries == b.renewal.mixtureQueries &&
+                    a.renewal.initializationBatches == b.renewal.initializationBatches &&
+                    a.renewal.segmentBatches == b.renewal.segmentBatches &&
+                    a.renewal.mixtureBatches == b.renewal.mixtureBatches &&
+                    a.renewal.maximumBatchSize == b.renewal.maximumBatchSize,
+                    backend+" "+mode+" CPU parallelism preserves paths, batches and progress");
+                context.require(a.renewal.parallelAdvanceBatches > 0 &&
+                    a.renewal.serialAdvanceBatches > 0 &&
+                    a.renewal.parallelAdvanceBatches+a.renewal.serialAdvanceBatches == a.renewal.segmentBatches,
+                    backend+" "+mode+" exercises both pool and small-tail fallback");
+            }
+        }
+        threaded.renewal.profileMode = "point_linear";
+        threaded.render.threadCount = 4;
+        threaded.field.mean = std::make_shared<AdvanceThrowingMean>();
+        context.require(rejects([&] { renderAnalyticScene(threaded); }),
+            backend+" lazy field failure in CPU advance is joined and propagated");
     }
     std::filesystem::remove(path);
 }
