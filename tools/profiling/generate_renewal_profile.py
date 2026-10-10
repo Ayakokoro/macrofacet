@@ -22,7 +22,7 @@ def write(name, content):
 def load(relative):
     data = (root / relative).read_bytes()
     hashes[relative] = hashlib.sha256(data).hexdigest()
-    return '#include "RenewalProfile.h"\n' + data.decode('utf-8-sig')
+    return '#include "RenewalProfile.h"\n' + data.decode('utf-8-sig').replace('\r\n','\n')
 
 def replace(source, old, new):
     assert source.count(old) == 1, (old, source.count(old))
@@ -33,62 +33,54 @@ def wrap(source, expression, label):
                    f'renewal_profile::measure("{label}",[&]() {{ return {expression}; }})')
 
 s = load('src/integrator/RenewalWavefront.cpp')
-s = replace(s, '    for (;;) {', '    for (;;) {\n        { renewal_profile::Scope schedule("cpu.schedule");')
+for marker,label in [
+        ('    const auto drainIncoming = [&]() {','cpu.ready_drain'),
+        ('    const auto prepareFeatures = [&](const std::vector<int>& ready) {','cpu.prepare_features'),
+        ('    const auto prepareBatch = [&](RenewalBatchRequests& requests, std::size_t activeCpu) {','cpu.schedule'),
+        ('    const auto collectBatch = [&](const std::shared_ptr<BatchWork>& batch) {','cpu.dispatch_completed'),
+        ('        enqueueRanges(ns,[&,batch](std::size_t begin,std::size_t end,std::vector<int>& ready) {','cpu.advance_work'),
+        ('        enqueueRanges(batch->requests.mixtureSlots.size(),[&,batch](std::size_t begin,std::size_t end,std::vector<int>& ready) {','cpu.scatter_work'),
+        ('        enqueueRanges(static_cast<std::size_t>(capacity),[&](std::size_t begin,std::size_t end,std::vector<int>& ready) {','cpu.initialize_work')]:
+    s = replace(s,marker,marker+f'\n        renewal_profile::Scope scope("{label}");')
 s = wrap(s, 'medium.beginFlight(slot.ray,slot.gradient)', 'cpu.mean_profile')
-s = replace(s, '        slot.flight.reset(); slot.newSample = true;',
-            '        if (slot.flight) renewal_profile::count("constructed_segments",slot.flight->mean.constructedSegmentCount());\n'
-            '        slot.flight.reset(); slot.newSample = true;')
-s = replace(s, '                slot.flight.reset();',
-            '                renewal_profile::count("constructed_segments",slot.flight->mean.constructedSegmentCount());\n'
-            '                slot.flight.reset();')
-s = replace(s, '        if (activeIds.empty()) break;', '        }\n        if (activeIds.empty()) break;')
-s = wrap(s, 'network.initialize(initializeIds,firstSegments,starts)', 'batch.initialize')
-s = wrap(s, 'network.evaluate(activeIds,activeSegments)', 'batch.segment')
-s = replace(s, '        const auto advanceRange = [&](std::size_t begin, std::size_t end) {',
-            '        { renewal_profile::Scope advancePhase("cpu.hazard_and_decision");\n'
-            '        const auto advanceRange = [&](std::size_t begin, std::size_t end) {\n'
-            '        renewal_profile::Scope work("cpu.advance_work");')
-s = wrap(s, 'cpu.forRanges(activeIds.size(),advanceRange)', 'cpu.advance_wait')
-s = replace(s, '        if (!hitIds.empty()) {', '        }\n        if (!hitIds.empty()) {')
-s = wrap(s, 'network.mixture(hitIds,hitCoordinates)', 'batch.mixture')
-s = replace(s, '            for (std::size_t i = 0; i < hitIds.size(); ++i) {',
-            '            renewal_profile::Scope scatter("cpu.scatter");\n'
-            '            for (std::size_t i = 0; i < hitIds.size(); ++i) {')
+s = replace(s, '        slot.flight.reset();',
+            '        if (slot.flight) renewal_profile::count("constructed_segments",slot.flight->mean.constructedSegmentCount());\n        slot.flight.reset();')
+s = wrap(s, 'network.submitWavefrontAsync(batch->requests,preparedFeatures)', 'batch.enqueue')
+s = wrap(s, 'network.collectInto(batch->ticket,batch->output)', 'batch.collect')
+s = replace(s, '                            function(begin,end,ready);',
+            '                            renewal_profile::Scope taskScope("cpu.worker_task");\n'
+            '                            function(begin,end,ready);')
+s = wrap(s, 'readyCondition.wait(lock,ready)', 'cpu.wait_ready')
+s = wrap(s, 'inferenceCondition.wait(lock,ready)', 'inference.wait_ready')
 write('RenewalWavefrontProfile.cpp', s)
 
 s = load('src/learned/RenewalTorchBackend.cpp')
-s = replace(s, '        const auto ids = indices(slots);',
-            '        renewal_profile::Scope backend("segment.backend");\n'
-            '        const auto ids = renewal_profile::measure("segment.upload_ids",[&]() { return indices(slots); });')
+s = wrap(s, 'deviceInput.copy_(frame.hostInput.narrow(0,0,count),true)', 'batch.upload_enqueue')
+s = wrap(s, 'initial_(transformInput(block.narrow(1,1,4),0,4))', 'initialize.network')
 s = wrap(s, 'states_.index_select(0,ids)', 'segment.gather_state')
-s = wrap(s, 'input(features,5)', 'segment.upload_features')
-s = wrap(s, 'transformInput(featuresDevice,0,4)', 'segment.input_transform')
+s = wrap(s, 'transformInput(block.narrow(1,1,5),0,4)', 'segment.input_transform')
 s = wrap(s, 'at::silu(encoder2_(at::silu(encoder0_(networkFeatures))))', 'segment.encoder')
 s = wrap(s, 'at::cat({old,embedded},1)', 'segment.context')
 s = wrap(s, 'hazard_(context)', 'segment.hazard_mlp')
 s = wrap(s, 'at::softplus(logits,1,20)', 'segment.output_transform')
-s = wrap(s, 'at::gru_cell(embedded,old,gruInput_.weight,gruHidden_.weight,\n                                      gruInput_.bias,gruHidden_.bias)', 'segment.gru')
+s = wrap(s, 'at::gru_cell(embedded,old,gruInput_.weight,gruHidden_.weight,\n                                          gruInput_.bias,gruHidden_.bias)', 'segment.gru')
 s = wrap(s, 'enteringContext_.index_copy_(0,ids,context)', 'segment.store_context')
 s = wrap(s, 'states_.index_copy_(0,ids,next)', 'segment.store_state')
-s = wrap(s, 'at::cat({rates,at::isfinite(next).all(1,true).to(at::kFloat)},1)', 'segment.validate_pack')
-s = wrap(s, 'download(packedDevice)', 'segment.download_wait')
+s = wrap(s, 'mixture_(at::cat({context,transformInput(block.narrow(1,1,3),1,2)},1))', 'mixture.network')
+s = wrap(s, 'frame.hostOutput.narrow(0,0,frame.outputCount).copy_(frame.deviceOutput,true)', 'batch.download_enqueue')
+s = wrap(s, 'frame.completed.synchronize()', 'batch.event_wait')
 write('RenewalTorchProfile.cpp', s)
 
 s = load('src/learned/RenewalBatchSession.cpp')
-start = s.index('std::vector<std::array<double,4>> RenewalBatchSession::evaluate(')
-end = s.index('std::vector<RenewalSpeedMixture> RenewalBatchSession::mixture(', start)
-body = s[start:end]
-body = replace(body, '    auto& input = impl_->input;\n', '')
-body = replace(body, '    impl_->validateSlots(slots, segments.size(), 1);',
-               '    auto& input = impl_->input;\n'
-               '    { renewal_profile::Scope preprocessing("segment.cpu_preprocess");\n'
-               '    impl_->validateSlots(slots, segments.size(), 1);')
-body = replace(body, '    const auto raw = impl_->engine->evaluate(slots, input);',
-               '    }\n    const auto raw = impl_->engine->evaluate(slots, input);\n'
-               '    renewal_profile::Scope postprocessing("segment.cpu_postprocess");')
-s = s[:start] + body + s[end:]
-s = wrap(s, 'impl_->engine->initialize(slots, input)', 'initialize.backend')
-s = wrap(s, 'impl_->engine->mixture(slots, input)', 'mixture.backend')
+s = replace(s, '    const RenewalBatchRequests& r, const WavefrontFeatures* features) {',
+            '    const RenewalBatchRequests& r, const WavefrontFeatures* features) {\n'
+            '    renewal_profile::Scope scope("batch.session_enqueue");')
+s = replace(s, 'void RenewalBatchSession::collectInto(Ticket ticket, RenewalBatchResults& result) {',
+            'void RenewalBatchSession::collectInto(Ticket ticket, RenewalBatchResults& result) {\n'
+            '    renewal_profile::Scope scope("batch.session_collect");')
+s = wrap(s, 'impl_->engine->prepareInput(batch,5*ni+6*ns+4*nm)', 'batch.prepare_input')
+s = wrap(s, 'impl_->engine->submit(batch,ni,ns,nm)', 'batch.backend_enqueue')
+s = wrap(s, 'impl_->engine->collect(batch)', 'batch.backend_collect')
 write('RenewalBatchSessionProfile.cpp', s)
 
 s = load('src/gpss/RayMeanProfile.cpp')

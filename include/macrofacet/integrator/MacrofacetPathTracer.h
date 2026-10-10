@@ -36,6 +36,17 @@ inline void mergeInto(RenderStatistics& destination, const RenderStatistics& sou
     destination.renewal.cpuWorkers = std::max(destination.renewal.cpuWorkers,source.renewal.cpuWorkers);
     destination.renewal.parallelAdvanceBatches += source.renewal.parallelAdvanceBatches;
     destination.renewal.serialAdvanceBatches += source.renewal.serialAdvanceBatches;
+    destination.renewal.submissions += source.renewal.submissions;
+    destination.renewal.readbacks += source.renewal.readbacks;
+    destination.renewal.maximumInFlightBatches = std::max(destination.renewal.maximumInFlightBatches,source.renewal.maximumInFlightBatches);
+    destination.renewal.blockingCollects += source.renewal.blockingCollects;
+    destination.renewal.cpuBatchesWithGpuPending += source.renewal.cpuBatchesWithGpuPending;
+    destination.renewal.combinedSubmissions += source.renewal.combinedSubmissions;
+    destination.renewal.maximumInitializationBatch = std::max(destination.renewal.maximumInitializationBatch,source.renewal.maximumInitializationBatch);
+    destination.renewal.maximumMixtureBatch = std::max(destination.renewal.maximumMixtureBatch,source.renewal.maximumMixtureBatch);
+    destination.renewal.maximumInitializationWait = std::max(destination.renewal.maximumInitializationWait,source.renewal.maximumInitializationWait);
+    destination.renewal.maximumMixtureWait = std::max(destination.renewal.maximumMixtureWait,source.renewal.maximumMixtureWait);
+    destination.renewal.rayPoolSize = std::max(destination.renewal.rayPoolSize,source.renewal.rayPoolSize);
     destination.paths += source.paths;
     destination.realCollisions += source.realCollisions;
     destination.escapedPaths += source.escapedPaths;

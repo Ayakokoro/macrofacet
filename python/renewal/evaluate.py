@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 
-from . import FORMAT_VERSION, KERNEL
+from . import FORMAT_VERSION, validate_kernel
 from .data import SPLITS, SequenceDataset, collate, load_data, to_device
 from .model import ModelConfig, RenewalNetwork, cumulative
 from .collect import digest, write_json
@@ -16,8 +16,9 @@ from .collect import digest, write_json
 
 def load_model(path: Path, device):
     bundle = torch.load(path, map_location="cpu", weights_only=True)
-    if bundle.get("format_version") != FORMAT_VERSION or bundle.get("kernel") != KERNEL:
-        raise ValueError("unsupported network checkpoint or kernel convention")
+    if bundle.get("format_version") != FORMAT_VERSION:
+        raise ValueError("unsupported network checkpoint")
+    validate_kernel(bundle.get("kernel"))
     model = RenewalNetwork(ModelConfig(**bundle["model_config"])).to(device)
     model.load_state_dict(bundle["model_state"])
     return model, bundle
@@ -112,8 +113,10 @@ def survival_calibration(model, data, split, device, batch_size=128):
 def evaluate(checkpoint: Path, dataset: Path, output: Path, split="test", device="cpu", batch_size=128):
     data = load_data(dataset)
     model, bundle = load_model(checkpoint, device)
+    if bundle["kernel"] != data["kernel"]:
+        raise ValueError("checkpoint and evaluation dataset kernels differ")
     loader = DataLoader(SequenceDataset(data, split), batch_size=batch_size, collate_fn=collate)
-    metrics = {"split": split, "checkpoint_sha256": digest(checkpoint), "dataset_sha256": digest(dataset),
+    metrics = {"split": split, "kernel": bundle["kernel"], "checkpoint_sha256": digest(checkpoint), "dataset_sha256": digest(dataset),
                "selected_epoch": bundle["epoch"], "likelihood": likelihood(model, loader, device, data),
                "survival": survival_calibration(model, data, split, device, batch_size)}
     write_json(output, metrics)

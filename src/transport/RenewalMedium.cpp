@@ -9,7 +9,8 @@ namespace mf {
 Vector3 sampleRenewalGradient(const CovarianceKernel& kernel, const Vector3& direction,
     double x, double derivative, const Vector3& meanGradient,
     const Vector3& birthMeanGradient, const std::optional<Vector3>& birthGradient, Random& rng) {
-    if (kernel.type() != CovarianceKernelType::Matern32 || !(x >= 0) || !std::isfinite(x) ||
+    if ((kernel.type() != CovarianceKernelType::Matern32 &&
+         kernel.type() != CovarianceKernelType::SquaredExponential) || !(x >= 0) || !std::isfinite(x) ||
         !(derivative < 0) || !std::isfinite(derivative) || !meanGradient.allFinite() ||
         !birthMeanGradient.allFinite() || (birthGradient && !birthGradient->allFinite()))
         throw std::invalid_argument("invalid Renewal gradient reconstruction inputs");
@@ -32,8 +33,12 @@ Vector3 sampleRenewalGradient(const CovarianceKernel& kernel, const Vector3& dir
     double varianceFactor = 1;
     if (birthGradient) {
         const Vector3 previous = *birthGradient-birthMeanGradient;
-        residual = std::exp(-x)*(basis.transpose()*(previous-regression*w.dot(previous)));
-        varianceFactor = -std::expm1(-2*x);
+        // Projecting out the longitudinal component removes the radial rank-one
+        // term from the two-point gradient covariance. The remaining transverse
+        // correlation is exp(-x) for Mat32 and exp(-x*x/2) for SE.
+        const double decay = kernel.type() == CovarianceKernelType::SquaredExponential ? 0.5*x*x : x;
+        residual = std::exp(-decay)*(basis.transpose()*(previous-regression*w.dot(previous)));
+        varianceFactor = -std::expm1(-2*decay);
     }
     // Explicit temporaries fix random draw order across compilers.
     const double z1 = rng.standardNormal(), z2 = rng.standardNormal();
@@ -50,8 +55,11 @@ RenewalMedium::RenewalMedium(const GPSSField& field, const RenewalHazardModel& m
     if (profileMode != "cubic" && !pointLinear_)
         throw std::invalid_argument("unknown Renewal profile mode: " + profileMode);
     field_.validate();
-    if (field_.kernel.type() != CovarianceKernelType::Matern32 || !model_.hasMixture())
-        throw std::invalid_argument("neural_renewal requires unit-decay matern_3_2 and a full model export");
+    if (!model_.hasMixture())
+        throw std::invalid_argument("neural_renewal requires a full model export");
+    if (field_.kernel.type() != model_.kernelType())
+        throw std::invalid_argument(std::string("neural_renewal field/model kernel mismatch: field=")+
+            covarianceKernelTypeName(field_.kernel.type())+", model="+covarianceKernelTypeName(model_.kernelType()));
     if (!(maximumStep > 0) || !std::isfinite(maximumStep))
         throw std::invalid_argument("invalid Renewal profile maximum step");
     const Eigen::LLT<Matrix3> cholesky(field_.kernel.metric());

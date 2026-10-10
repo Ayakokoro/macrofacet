@@ -5,7 +5,7 @@
     "mean_type": "nanovdb",
     "grid_file": "outputs/fields/shader_ball_full_0.02.nvdb",
     "use_alpha_grid": false,
-    "kernel_type": "matern_3_2",
+    "kernel_type": "squared_exponential",
     "correlation_lengths": [
       0.05656854123051835,
       0.05656854123051835,
@@ -29,7 +29,7 @@
   "transport": {
     "mode": "neural_renewal",
     "renewal": {
-      "model": "outputs/models/renewal_matern32_h16_v2/renewal_model.json",
+      "model": "outputs/models/renewal_se_h16_v1/renewal_model.json",
       "profile_maximum_step": 0.25,
       "backend": "auto",
       "batch_size": 16384,
@@ -67,5 +67,5 @@
     "thread_count": 0,
     "safety_depth_cap": 128
   },
-  "output_directory": "outputs/render_neural_renewal_shader_ball_point_linear"
+  "output_directory": "outputs/render_neural_renewal_shader_ball_point_linear_se_h16"
 }

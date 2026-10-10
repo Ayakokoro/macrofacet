@@ -22,12 +22,17 @@ def verify_cpp(checkpoint: Path, executable: Path, config: Path, output: Path,
     torch.set_num_threads(2)
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    model, _ = load_model(checkpoint, "cpu")
+    model, bundle_metadata = load_model(checkpoint, "cpu")
     model.eval()
     bundle = output / "renewal_model.json"
     export_model(checkpoint, bundle)
     root = json.loads(config.read_text(encoding="utf-8"))
     settings = root["first_passage"]
+    for kernel in settings["kernels"]:
+        if (kernel["type"] != bundle_metadata["kernel"]["type"] or
+                kernel.get("parameterization", bundle_metadata["kernel"]["parameterization"]) !=
+                bundle_metadata["kernel"]["parameterization"]):
+            raise ValueError("reference/model kernel mismatch")
     initial = settings["initial_condition"]
     for key in ("rays", "profiles"):
         if key in initial:

@@ -2,11 +2,14 @@
 #include "macrofacet/transport/RenewalRayDistribution.h"
 #include "macrofacet/transport/RenewalMedium.h"
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
+#include "macrofacet/integrator/RenewalCpuExecutor.h"
 #include "macrofacet/learned/RenewalBatchSession.h"
 #include "macrofacet/mathutility/Gaussian1D.h"
+#include <Eigen/Cholesky>
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 
 namespace {
@@ -48,6 +51,17 @@ template<class F> bool rejects(F f) {
     try { f(); } catch (const std::exception&) { return true; }
     return false;
 }
+class WorkerOnlyMean final : public mf::MeanField {
+    std::thread::id coordinator_ = std::this_thread::get_id();
+public:
+    const char* typeName() const override { return "renewal_worker_only"; }
+    mf::MeanJet evaluate(const mf::Point3& p) const override {
+        if (std::this_thread::get_id() == coordinator_)
+            throw std::runtime_error("field query executed on inference coordinator");
+        return {p.z(),mf::Vector3::UnitZ()};
+    }
+    mf::BoundsSummary bounds(const mf::Bounds3&) const override { return {-1,1,true}; }
+};
 class AdvanceThrowingMean final : public mf::MeanField {
 public:
     const char* typeName() const override { return "renewal_advance_throw"; }
@@ -63,6 +77,23 @@ public:
 
 void testRenewalTransport(TestContext& context) {
     using namespace mf;
+    {
+        RenewalCpuExecutor tasks(2,512);
+        std::promise<void> release, second;
+        auto gate = release.get_future().share();
+        auto done = second.get_future();
+        std::atomic<int> completed{0};
+        tasks.enqueue([&] { gate.wait(); ++completed; });
+        tasks.enqueue([&] { ++completed; second.set_value(); });
+        const bool independent = done.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+        release.set_value(); tasks.wait();
+        context.require(independent && completed == 2,
+            "CPU tasks return before completion and independent work bypasses a blocked task");
+        tasks.enqueue([] { throw std::runtime_error("intentional CPU task failure"); });
+        context.require(rejects([&] { tasks.wait(); }),"CPU task failures drain and propagate");
+        tasks.enqueue([&] { ++completed; }); tasks.wait();
+        context.require(completed == 3,"CPU executor can be reused after a drained failure");
+    }
     const RenewalHazardSegment segment(0, 0.3, {0.1, 3.0, 0.4, 2.0});
     context.near(segment.cumulative(0), 0, 0, "Renewal cumulative starts at zero");
     context.near(segment.cumulative(1), 0.3*(0.1+3+0.4+2)/4, 1e-15, "Bernstein full mass");
@@ -200,15 +231,42 @@ void testRenewalTransport(TestContext& context) {
     const auto rotation = Eigen::AngleAxisd(0.7, normalizedOrThrow(Vector3(1,2,3))).toRotationMatrix();
     const auto isotropic = CovarianceKernel::fromCorrelationLengths(CovarianceKernelType::Matern32, 0.1, Vector3::Constant(0.2));
     const auto anisotropic = CovarianceKernel::fromCorrelationLengths(CovarianceKernelType::Matern32, 0.1, Vector3(0.17,0.25,0.4), rotation);
+    const auto seIsotropic = CovarianceKernel::fromCorrelationLengths(CovarianceKernelType::SquaredExponential, 0.1, Vector3::Constant(0.2));
+    const auto seAnisotropic = CovarianceKernel::fromCorrelationLengths(CovarianceKernelType::SquaredExponential, 0.1, Vector3(0.17,0.25,0.4), rotation);
     const Vector3 w = normalizedOrThrow(Vector3(1,-2,3));
     const Vector3 meanG(0.2, -0.3, 0.5), birthMean(-0.1,0.4,0.2), birthG(0.5,-0.7,1.3);
-    for (const auto& kernel : {isotropic, anisotropic}) for (bool surface : {false,true}) {
+    for (const auto& kernel : {isotropic, anisotropic, seIsotropic, seAnisotropic}) for (bool surface : {false,true}) {
         const std::optional<Vector3> known = surface ? std::optional<Vector3>(birthG) : std::nullopt;
         const auto C = kernel.gradientCovarianceAtZero();
         const Vector3 cw = C*w, a = cw/w.dot(cw);
-        const Matrix3 expectedCov = (C-cw*a.transpose())*(surface ? -std::expm1(-0.6) : 1.0);
+        Matrix3 expectedCov = C-cw*a.transpose();
         Vector3 expectedMean = meanG+a*(-0.4-w.dot(meanG));
-        if (surface) expectedMean += std::exp(-0.3)*(birthG-birthMean-a*w.dot(birthG-birthMean));
+        const double rayEll = 1/std::sqrt(w.dot(kernel.metric()*w));
+        const Matrix3 projection = Matrix3::Identity()-a*w.transpose();
+        // Independent Gaussian conditioning using the full two-point kernel,
+        // rather than repeating the sampler's radial decay formula.
+        if (surface) {
+            const Matrix3 cross = kernel.evaluate(0.3*rayEll*w,Point3::Zero()).gradientXGradientY;
+            Eigen::Matrix4d observed;
+            observed(0,0)=w.dot(cw);
+            observed.block<1,3>(0,1)=w.transpose()*cross;
+            observed.block<3,1>(1,0)=cross.transpose()*w;
+            observed.block<3,3>(1,1)=C;
+            Eigen::Matrix<double,3,4> target;
+            target.col(0)=cw; target.rightCols<3>()=cross;
+            Eigen::Vector4d values;
+            values[0]=-0.4-w.dot(meanG); values.tail<3>()=birthG-birthMean;
+            const auto factor=observed.ldlt();
+            expectedMean=meanG+target*factor.solve(values);
+            expectedCov=C-target*factor.solve(target.transpose());
+        }
+        for (double t : {-0.4,0.0,0.15,0.3,0.7}) {
+            const auto jet=kernel.evaluate(0.3*rayEll*w,t*rayEll*w);
+            context.near((projection*jet.gradientXValueY).norm(),0,1e-14,
+                "transverse residual is independent of field values along the entire ray");
+            context.near((projection*jet.gradientXGradientY*w).norm(),0,1e-14,
+                "transverse residual is independent of longitudinal derivatives along the ray");
+        }
         Vector3 average = Vector3::Zero();
         Matrix3 second = Matrix3::Zero();
         double projectionError = 0;
@@ -224,14 +282,56 @@ void testRenewalTransport(TestContext& context) {
         context.near((second/n-expectedCov).norm(), 0, 0.018, "Renewal A/B transverse gradient covariance");
     }
 
+    for (const auto& kernel : {seIsotropic,seAnisotropic}) {
+        const Matrix3 C=kernel.gradientCovarianceAtZero();
+        const Vector3 a=C*w/w.dot(C*w);
+        const Vector3 atBirth=meanG+a*(-0.4-w.dot(meanG))+
+            birthG-birthMean-a*w.dot(birthG-birthMean);
+        Random zeroRng(384), tinyRng(384), distantRng(384), exteriorRng(384);
+        const auto zero=sampleRenewalGradient(kernel,w,0,-0.4,meanG,birthMean,birthG,zeroRng);
+        context.near((zero-atBirth).norm(),0,1e-14,"SE zero-distance transverse residual is retained exactly");
+        const auto tiny=sampleRenewalGradient(kernel,w,1e-9,-0.4,meanG,birthMean,birthG,tinyRng);
+        context.require((tiny-zero).norm()>1e-12 && (tiny-zero).norm()<1e-8,
+            "SE tiny-distance variance survives cancellation via expm1");
+        const auto distant=sampleRenewalGradient(kernel,w,1e200,-0.4,meanG,birthMean,birthG,distantRng);
+        const auto exterior=sampleRenewalGradient(kernel,w,1e200,-0.4,meanG,birthMean,std::nullopt,exteriorRng);
+        context.near((distant-exterior).norm(),0,0,"SE distant gradient loses birth correlation without overflow");
+    }
+    const auto unsupported=CovarianceKernel::fromCorrelationLengths(CovarianceKernelType::Matern52,0.1,Vector3::Constant(0.2));
+    context.require(rejects([&] { sampleRenewalGradient(unsupported,w,0.3,-0.4,meanG,birthMean,birthG,normalRng); }),
+                    "unsupported Renewal gradient kernels remain rejected");
+
     { std::ofstream out(path); out << constantBundle(true); }
     const auto fullModel = RenewalHazardModel::load(path);
+    auto seBundle=constantBundle(true);
+    seBundle["kernel"]={{"type","squared_exponential"},{"parameterization","unit_length"},{"beta",1.0}};
+    { std::ofstream out(path); out << seBundle; }
+    const auto seModel=RenewalHazardModel::load(path);
+    context.require(seModel.kernelType()==CovarianceKernelType::SquaredExponential &&
+        fullModel.kernelType()==CovarianceKernelType::Matern32,"models retain validated covariance family");
+    for (const auto& bad : {Json{{"type","squared_exponential"},{"parameterization","unit_decay"},{"beta",1.0}},
+            Json{{"type","squared_exponential"},{"parameterization","unit_length"},{"beta",2.0}},
+            Json{{"type","squared_exponential"},{"beta",1.0}},
+            Json{{"type","matern_5_2"},{"parameterization","unit_length"},{"beta",1.0}}}) {
+        auto invalid=seBundle; invalid["kernel"]=bad;
+        { std::ofstream out(path); out << invalid; }
+        context.require(rejects([&] { RenewalHazardModel::load(path); }),"unsupported model kernel or scale rejected");
+    }
     context.require(fullModel.hasMixture() && !model.hasMixture(), "hazard bundles remain usable but cannot sample normals");
     ExperimentConfig render;
     render.field = {std::make_shared<ConstantMean>(0), isotropic,
         {Point3::Constant(-0.15), Point3::Constant(0.15)}};
     render.transportMode = "neural_renewal";
     render.renewal.model = std::make_shared<const RenewalHazardModel>(fullModel);
+    auto seRender=render;
+    seRender.field.kernel=seIsotropic;
+    context.require(rejects([&] { prepareRenewalModel(seRender); }),"SE field rejects Matern model before rendering");
+    seRender.renewal.model=std::make_shared<const RenewalHazardModel>(seModel);
+    prepareRenewalModel(seRender);
+    seRender.field.kernel=isotropic;
+    context.require(rejects([&] { prepareRenewalModel(seRender); }),"Matern field rejects SE model before rendering");
+    seRender.field.kernel=unsupported;
+    context.require(rejects([&] { prepareRenewalModel(seRender); }),"unsupported field rejects SE model");
     render.render.width = render.render.height = 4;
     render.render.samplesPerPixel = 16;
     render.render.cameraPosition = Point3(0,0,0.5);
@@ -329,6 +429,10 @@ void testRenewalTransport(TestContext& context) {
             value = static_cast<float>(0.3*std::sin(++parameter*0.17));
     { std::ofstream out(path); out << batchBundle; }
     const auto batchModel = RenewalHazardModel::load(path);
+    auto seBatchBundle=batchBundle;
+    seBatchBundle["kernel"]=seBundle["kernel"];
+    { std::ofstream out(path); out << seBatchBundle; }
+    const auto seBatchModel=RenewalHazardModel::load(path);
     for (const auto& backend : backends) {
         RenewalBatchSession batch(batchModel,7,backend);
         std::vector<int> ids{5,0,6,2,1};
@@ -336,6 +440,23 @@ void testRenewalTransport(TestContext& context) {
         std::vector<RayStartCondition> starts(ids.size());
         starts[1] = {RayStartMode::SurfaceOutward,0.71};
         starts[3] = {RayStartMode::SurfaceOutward,0.24};
+        // Public sessions retain slot validation in Release, independently of
+        // the renderer's private trusted submission path.
+        for (int invalidId : {-1,7}) {
+            RenewalBatchRequests invalid;
+            invalid.initializeSlots={invalidId}; invalid.firstSegments={first[0]}; invalid.starts={{}};
+            context.require(rejects([&] { batch.submitAsync(invalid); }),
+                backend+" public initialization rejects out-of-range slots");
+            invalid={}; invalid.segmentSlots={invalidId}; invalid.segments={first[0]};
+            context.require(rejects([&] { batch.submitAsync(invalid); }),
+                backend+" public segment request rejects out-of-range slots");
+            invalid={}; invalid.mixtureSlots={invalidId}; invalid.coordinates={0.5};
+            context.require(rejects([&] { batch.submitAsync(invalid); }),
+                backend+" public mixture request rejects out-of-range slots");
+            context.require(batch.pendingCount()==0,backend+" invalid slot requests create no ticket");
+        }
+        context.require(rejects([&] { batch.initialize({0,0},{first[0],first[0]},{{},{}}); }),
+            backend+" public initialization rejects duplicate slots");
         context.require(rejects([&] { batch.evaluate(ids,first); }), "batch rejects uninitialized slots");
         batch.initialize(ids,first,starts);
         std::vector<RenewalHazardModel::State> states(7), entering(7);
@@ -369,6 +490,8 @@ void testRenewalTransport(TestContext& context) {
             // Also query slots absent from this wave: their cached context must survive.
             const std::vector<double> coordinates{0,0.13,0.8,1,0.47};
             const auto mixtures = batch.mixture(ids,coordinates);
+            if (step == 0) context.require(rejects([&] { batch.mixture({5,5},{0.2,0.8}); }),
+                backend+" public mixture request rejects duplicate slots");
             for (std::size_t i = 0; i < ids.size(); ++i) {
                 const auto reference = batchModel.mixture(entering[ids[i]],last[ids[i]],coordinates[i]);
                 for (std::size_t j = 0; j < reference.weights.size(); ++j) {
@@ -380,6 +503,143 @@ void testRenewalTransport(TestContext& context) {
         }
         context.require(batch.evaluate({},{}).empty() && batch.mixture({},{}).empty(), "empty batches need no inference");
         context.require(rejects([&] { batch.mixture({0},{1.1}); }), "invalid batch mixture coordinate rejected");
+
+        // Interleave all three request types; the delayed mixture must retain
+        // the entering context while unrelated slots advance or are recycled.
+        RenewalBatchSession queued(batchModel,7,backend), separate(batchModel,7,backend);
+        queued.initialize(ids,first,starts); separate.initialize(ids,first,starts);
+        queued.evaluate(ids,first); separate.evaluate(ids,first);
+        for (int step = 0; step < 6; ++step) {
+            RenewalBatchRequests r;
+            r.initializeSlots = {3}; r.firstSegments = {first[0]};
+            r.starts = {{RayStartMode::SurfaceOutward,0.33+0.01*step}};
+            r.segmentSlots = {2,3,6};
+            r.segments = {{0,0.2,{0.1,0.3,-0.2,0.03*step}},first[0],first[1]};
+            r.mixtureSlots = {5,0}; r.coordinates = {0.17,0.81};
+            auto invalid = r;
+            invalid.mixtureSlots = {3,0};
+            context.require(rejects([&] { queued.submit(invalid); }),
+                backend+" mixed submission rejects context overwrite before any device mutation");
+            invalid = r; invalid.coordinates[1] = 2;
+            context.require(rejects([&] { queued.submit(invalid); }),
+                backend+" validates the entire mixed request before advancing any slot");
+            separate.initialize(r.initializeSlots,r.firstSegments,r.starts);
+            const auto referenceRates = separate.evaluate(r.segmentSlots,r.segments);
+            const auto referenceMixtures = separate.mixture(r.mixtureSlots,r.coordinates);
+            const auto actual = queued.submit(r);
+            for (std::size_t i = 0; i < actual.rates.size(); ++i)
+                for (int j = 0; j < 4; ++j)
+                    context.near(actual.rates[i][j],referenceRates[i][j],3e-6,
+                        backend+" combined initialize/step matches separate calls");
+            for (std::size_t i = 0; i < actual.mixtures.size(); ++i)
+                for (std::size_t j = 0; j < actual.mixtures[i].weights.size(); ++j) {
+                    context.near(actual.mixtures[i].weights[j],referenceMixtures[i].weights[j],3e-6,
+                        backend+" pending mixture weights survive independent steps and resets");
+                    context.near(actual.mixtures[i].means[j],referenceMixtures[i].means[j],3e-6,
+                        backend+" pending mixture uses the preserved entering context");
+                    context.near(actual.mixtures[i].scales[j],referenceMixtures[i].scales[j],3e-6,
+                        backend+" combined mixture scales match separate calls");
+                }
+        }
+        RenewalBatchRequests emptyRequest;
+        context.require(queued.submit(emptyRequest).rates.empty(),"empty submission has no output");
+
+        // Independent in-flight batches own their buffers and lock their slots
+        // even after the device finishes, until the caller consumes the ticket.
+        RenewalBatchSession async(batchModel,7,backend,2), sync(batchModel,7,backend,1);
+        const std::vector<int> six{0,1,2,3,4,5};
+        const std::vector<RayMeanSegment> sixFirst(6,first[0]);
+        const std::vector<RayStartCondition> sixStarts(6);
+        async.initialize(six,sixFirst,sixStarts); sync.initialize(six,sixFirst,sixStarts);
+        async.evaluate(six,sixFirst); sync.evaluate(six,sixFirst);
+        const auto compareResults = [&](const RenewalBatchResults& a, const RenewalBatchResults& b) {
+            context.require(a.rates.size() == b.rates.size() && a.mixtures.size() == b.mixtures.size(),
+                backend+" async result shapes match the corresponding ticket");
+            for (std::size_t i = 0; i < a.rates.size(); ++i)
+                for (int j = 0; j < 4; ++j) context.near(a.rates[i][j],b.rates[i][j],3e-6,
+                    backend+" async hazard matches synchronous batches");
+            for (std::size_t i = 0; i < a.mixtures.size(); ++i)
+                for (std::size_t j = 0; j < a.mixtures[i].weights.size(); ++j) {
+                    context.near(a.mixtures[i].weights[j],b.mixtures[i].weights[j],3e-6,backend+" async mixture weights");
+                    context.near(a.mixtures[i].means[j],b.mixtures[i].means[j],3e-6,backend+" async mixture entering state");
+                    context.near(a.mixtures[i].scales[j],b.mixtures[i].scales[j],3e-6,backend+" async mixture scales");
+                }
+        };
+        for (int step = 0; step < 8; ++step) {
+            RenewalBatchRequests a,b;
+            a.initializeSlots={0}; a.firstSegments={first[0]}; a.starts={{}};
+            a.segmentSlots={0,1}; a.segments={first[0],{0,0.17,{0,0.2,0.1*step,0.3}}};
+            a.mixtureSlots={2}; a.coordinates={0.13+0.1*step};
+            b.initializeSlots={3}; b.firstSegments={first[1]}; b.starts={{RayStartMode::SurfaceOutward,0.7}};
+            b.segmentSlots={4,3}; b.segments={{0,0.09,{0.4,0,-0.05*step,-0.3}},first[1]};
+            b.mixtureSlots={5}; b.coordinates={0.83-0.1*step};
+            const auto referenceA=sync.submit(a), referenceB=sync.submit(b);
+            const auto ta=async.submitAsync(a);
+            context.require(rejects([&] { async.submitAsync(a); }),backend+" in-flight slot cannot be reused");
+            RenewalBatchRequests conflict; conflict.mixtureSlots={1}; conflict.coordinates={0.2};
+            context.require(rejects([&] { async.submitAsync(conflict); }),backend+" mixture cannot race a segment update");
+            const auto tb=async.submitAsync(b);
+            context.require(async.pendingCount()==2 && rejects([&] { async.submitAsync({}); }),
+                backend+" bounded in-flight capacity prevents pinned-buffer overwrite");
+            a={}; b={}; // Backend/session must not retain references to request arrays.
+            auto resultB=async.tryCollect(tb);
+            if (!resultB) resultB=async.collect(tb);
+            compareResults(*resultB,referenceB);
+            // Recycling a freed buffer while the older result is still unconsumed
+            // must not overwrite that older result's transfer or validity flags.
+            RenewalBatchRequests c; c.segmentSlots={4}; c.segments={first[0]};
+            const auto referenceC=sync.submit(c);
+            const auto tc=async.submitAsync(c);
+            compareResults(async.collect(ta),referenceA);
+            compareResults(async.collect(tc),referenceC);
+            // A reused backend/Pending slot must not change a previously
+            // returned owning result, including its nested mixture vectors.
+            compareResults(*resultB,referenceB);
+            const auto empty=async.submitAsync({});
+            context.require(async.isReady(empty) && async.collect(empty).rates.empty(),
+                backend+" empty async request completes without a transfer");
+            context.require(async.pendingCount()==0 && rejects([&] { async.collect(ta); }) &&
+                rejects([&] { async.isReady(tb); }),backend+" tickets are consumed exactly once");
+        }
+        {
+            RenewalBatchSession abandoned(batchModel,2,backend,2);
+            RenewalBatchRequests a; a.initializeSlots={0};a.firstSegments={first[0]};a.starts={{}};
+            a.segmentSlots={0};a.segments={first[0]}; abandoned.submitAsync(a);
+            a.initializeSlots={1};a.segmentSlots={1};abandoned.submitAsync(a);
+        } // Destructor must wait for outstanding device transfers before freeing pinned memory.
+
+        {
+            // Grow one transfer frame past its initial 4096-element capacity
+            // while another ticket still owns its input/output. A rejected
+            // direct-pack must not dispatch even a partially filled request.
+            constexpr int count = 769;
+            RenewalBatchSession growing(batchModel,count+1,backend,2);
+            RenewalBatchRequests small;
+            small.initializeSlots={0}; small.firstSegments={first[0]}; small.starts={{}};
+            small.segmentSlots={0}; small.segments={first[0]};
+            const auto firstTicket=growing.submitAsync(small);
+            small.initializeSlots={count}; small.segmentSlots={count};
+            const auto retainedTicket=growing.submitAsync(small);
+            const auto reference=growing.collect(firstTicket);
+            RenewalBatchRequests large;
+            for (int id=0;id<count;++id) {
+                large.initializeSlots.push_back(id); large.firstSegments.push_back(first[0]);
+                large.starts.push_back({}); large.segmentSlots.push_back(id); large.segments.push_back(first[0]);
+            }
+            large.segments.back().polynomial.d=std::numeric_limits<double>::infinity();
+            context.require(rejects([&] { growing.submitAsync(large); }) && growing.pendingCount()==1,
+                backend+" failed direct packing after growth preserves the other live ticket");
+            large.segments.back()=first[0];
+            const auto grownTicket=growing.submitAsync(large);
+            large={};
+            compareResults(growing.collect(retainedTicket),reference);
+            const auto actual=growing.collect(grownTicket);
+            context.require(actual.rates.size()==count && actual.mixtures.empty() && growing.pendingCount()==0,
+                backend+" grown transfer frame returns exact owning result sizes");
+            for (const auto& rates : actual.rates)
+                for (int j=0;j<4;++j) context.near(rates[j],reference.rates[0][j],3e-6,
+                    backend+" input/output growth preserves every initialized slot");
+        }
 
         // Raw inputs must reach asinh as doubles, not overflow during an early
         // float cast. Exercise initial, segment and mixture transforms together.
@@ -413,6 +673,12 @@ void testRenewalTransport(TestContext& context) {
         invalidSegment.polynomial.d = std::numeric_limits<double>::infinity();
         context.require(rejects([&] { wideBatch.evaluate({1},{invalidSegment}); }),
             backend+" rejects nonfinite raw inputs before device dispatch");
+        context.require(wideBatch.pendingCount()==0 && rejects([&] { wideBatch.collect(0); }),
+            backend+" rejected input leaves reusable Pending inactive and ticket zero invalid");
+        const auto recoveredMixtures = wideBatch.mixture(wideIds,wideU);
+        for (std::size_t i=0;i<wideIds.size();++i)
+            context.near(recoveredMixtures[i].means[0],wideMixtures[i].means[0],0,
+                backend+" failed packing leaves the previous mixture context intact");
 
         // Cover softplus underflow, the threshold=20 branch, and values whose
         // naive exp would overflow. The scalar model remains the reference.
@@ -450,6 +716,13 @@ void testRenewalTransport(TestContext& context) {
         context.require(rejects([&] { overflowBatch.mixture({0},{0.3}); }),
             backend+" softplus must not hide an overflowed negative-infinite scale logit");
 
+        RenewalBatchRequests invalidOutput;
+        invalidOutput.mixtureSlots={0}; invalidOutput.coordinates={0.3};
+        const auto failedTicket=overflowBatch.submitAsync(invalidOutput);
+        context.require(rejects([&] { overflowBatch.collect(failedTicket); }) &&
+            overflowBatch.pendingCount()==0,"async numerical failure releases its ticket and slot");
+        overflowBatch.initialize({0},{mean.segment(0)},{{}});
+
         render.renewal.backend = backend;
         for (int size : {3,16}) {
             render.renewal.batchSize = size;
@@ -465,6 +738,31 @@ void testRenewalTransport(TestContext& context) {
                 context.near((batched.pixels[i]-conductorSerial.pixels[i]).norm(),0,3e-5,
                     backend+" wavefront keeps per-pixel random streams, Fresnel and accumulation order");
         }
+        // Pool size is independent of the dispatch cap, including pool < batch,
+        // oversized auxiliary thresholds and tails with no segment work left.
+        render.renewal.batchSize = 3;
+        render.renewal.auxiliaryBatchMinimum = 65536;
+        render.renewal.maximumQueueDelay = 2;
+        for (int pool : {1,7,33}) {
+            render.renewal.rayPoolSize = pool;
+            std::atomic<std::uint64_t> progress{0};
+            const auto queuedImage = renderAnalyticScene(render,&progress);
+            const auto& d = queuedImage.statistics.renewal;
+            context.require(progress == conductorSerial.statistics.paths &&
+                d.mixtureQueries == queuedImage.statistics.realCollisions &&
+                d.submissions == d.readbacks && d.combinedSubmissions > 0 &&
+                d.submissions < d.initializationBatches+d.segmentBatches+d.mixtureBatches &&
+                d.maximumBatchSize <= 3 && d.maximumMixtureBatch <= 3 &&
+                d.rayPoolSize == std::min(pool,16),
+                backend+" queued scheduler drains all requests with one readback per submission");
+            for (std::size_t i = 0; i < queuedImage.pixels.size(); ++i)
+                context.near((queuedImage.pixels[i]-conductorSerial.pixels[i]).norm(),0,3e-5,
+                    backend+" queue delays and pool size preserve per-pixel transport");
+        }
+        render.renewal.rayPoolSize = 0;
+        render.renewal.auxiliaryBatchMinimum = 256;
+        render.renewal.maximumQueueDelay = 4;
+        render.renewal.batchSize = 16;
         render.material.conductor.forceUnitFresnel = true;
         render.render.environment = "unit_white";
         const auto white = renderAnalyticScene(render);
@@ -502,7 +800,10 @@ void testRenewalTransport(TestContext& context) {
                          backend+" point mode supports complete neural path tracing");
         render.renewal.profileMode = "cubic";
         auto threaded = render;
-        threaded.render.width = 40; threaded.render.height = 24;
+        // Enough rays enter the domain to fill two disjoint batches, even
+        // after camera misses; retain uneven ranges and a partial second batch.
+        threaded.render.width = 48; threaded.render.height = 32;
+        threaded.render.verticalFovDegrees = 35;
         threaded.render.samplesPerPixel = 2;
         threaded.render.rouletteStartDepth = 2;
         threaded.render.safetyDepthCap = 8;
@@ -511,6 +812,21 @@ void testRenewalTransport(TestContext& context) {
             threaded.renewal.profileMode = mode;
             threaded.render.threadCount = 1;
             const auto reference = renderAnalyticScene(threaded);
+            for (int depth : {1,4}) {
+                auto pipeline = threaded; pipeline.renewal.maximumInFlightBatches=depth;
+                const auto pipelined = renderAnalyticScene(pipeline);
+                for (std::size_t i=0;i<pipelined.pixels.size();++i)
+                    context.near((pipelined.pixels[i]-reference.pixels[i]).norm(),0,3e-5,
+                        backend+" pipeline depth preserves scalar transport semantics");
+                context.require(pipelined.statistics.paths==reference.statistics.paths &&
+                    pipelined.statistics.realCollisions==reference.statistics.realCollisions &&
+                    pipelined.statistics.renewal.readbacks==pipelined.statistics.renewal.submissions &&
+                    pipelined.statistics.renewal.maximumInFlightBatches<=static_cast<std::uint64_t>(depth),
+                    backend+" bounded pipeline completes all paths and drains outstanding batches");
+            }
+            if (backend=="torch_cuda") context.require(reference.statistics.renewal.maximumInFlightBatches>=1 &&
+                reference.statistics.renewal.maximumInFlightBatches<=2,
+                "CUDA task scheduler respects capacity even when too few ready rays fill two batches");
             for (int workers : {2,4,8,0}) {
                 threaded.render.threadCount = workers;
                 std::atomic<std::uint64_t> progress{0};
@@ -527,11 +843,10 @@ void testRenewalTransport(TestContext& context) {
                     a.numericalFailures == b.numericalFailures && a.accumulatedPathDepth == b.accumulatedPathDepth &&
                     a.renewal.flights == b.renewal.flights && a.renewal.segments == b.renewal.segments &&
                     a.renewal.mixtureQueries == b.renewal.mixtureQueries &&
-                    a.renewal.initializationBatches == b.renewal.initializationBatches &&
-                    a.renewal.segmentBatches == b.renewal.segmentBatches &&
-                    a.renewal.mixtureBatches == b.renewal.mixtureBatches &&
-                    a.renewal.maximumBatchSize == b.renewal.maximumBatchSize,
-                    backend+" "+mode+" CPU parallelism preserves paths, batches and progress");
+                    a.renewal.submissions == a.renewal.readbacks &&
+                    a.renewal.maximumBatchSize <= static_cast<std::uint64_t>(threaded.renewal.batchSize) &&
+                    a.renewal.maximumMixtureBatch <= static_cast<std::uint64_t>(threaded.renewal.batchSize),
+                    backend+" "+mode+" CPU tasks preserve paths and progress with bounded batches");
                 context.require(a.renewal.parallelAdvanceBatches > 0 &&
                     a.renewal.serialAdvanceBatches > 0 &&
                     a.renewal.parallelAdvanceBatches+a.renewal.serialAdvanceBatches == a.renewal.segmentBatches,
@@ -540,9 +855,44 @@ void testRenewalTransport(TestContext& context) {
         }
         threaded.renewal.profileMode = "point_linear";
         threaded.render.threadCount = 4;
+        threaded.field.mean = std::make_shared<WorkerOnlyMean>();
+        const auto workerOnly = renderAnalyticScene(threaded);
+        context.require(workerOnly.statistics.paths == static_cast<std::uint64_t>(threaded.render.width)*
+            threaded.render.height*threaded.render.samplesPerPixel && workerOnly.statistics.realCollisions > 0,
+            backend+" initializes, queries and reconstructs collision gradients off the inference coordinator");
+        // Nonconstant recurrent weights detect slot/history mixups that a
+        // constant hazard fixture cannot expose. Exercise reuse and uneven tails.
+        auto varying = render;
+        varying.renewal.model = std::make_shared<RenewalHazardModel>(batchModel);
+        varying.render.width = 12; varying.render.height = 8;
+        varying.render.samplesPerPixel = 3; varying.render.threadCount = 4;
+        varying.renewal.profileMaximumStep = 0.17; // Uneven final segments.
+        for (bool se : {false,true}) for (const std::string mode : {"point_linear","cubic"}) {
+            varying.field.kernel=se ? seAnisotropic : isotropic;
+            varying.renewal.model=std::make_shared<RenewalHazardModel>(se ? seBatchModel : batchModel);
+            varying.renewal.profileMode = mode;
+            varying.renewal.backend = "scalar";
+            const auto varyingReference = renderAnalyticScene(varying);
+            varying.renewal.backend = backend;
+            for (int pool : {1,29}) {
+                varying.renewal.rayPoolSize = pool; varying.renewal.batchSize = 7;
+                varying.renewal.maximumInFlightBatches = 4;
+                const auto actual = renderAnalyticScene(varying);
+                context.require(actual.statistics.realCollisions == varyingReference.statistics.realCollisions &&
+                    actual.statistics.renewal.mixtureQueries == actual.statistics.realCollisions,
+                    backend+" "+mode+" worker features preserve nonconstant recurrent collision histories");
+                for (std::size_t i=0;i<actual.pixels.size();++i)
+                    context.near((actual.pixels[i]-varyingReference.pixels[i]).norm(),0,1e-4,
+                        backend+" "+mode+" worker features agree with scalar per-ray transport after slot reuse");
+            }
+        }
         threaded.field.mean = std::make_shared<AdvanceThrowingMean>();
         context.require(rejects([&] { renderAnalyticScene(threaded); }),
             backend+" lazy field failure in CPU advance is joined and propagated");
+        auto failingInference = render;
+        failingInference.renewal.model = std::make_shared<RenewalHazardModel>(overflowModel);
+        context.require(rejects([&] { renderAnalyticScene(failingInference); }),
+            backend+" background inference failure wakes the scheduler and drains CPU tasks");
     }
     std::filesystem::remove(path);
 }

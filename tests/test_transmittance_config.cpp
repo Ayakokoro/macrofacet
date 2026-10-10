@@ -93,6 +93,29 @@ void testTransmittanceConfig(TestContext& context) {
     { std::ifstream stream(resolved); stream >> written; }
     context.require(written["transport"]["renewal"]["profile_mode"] == "point_linear",
                     "resolved config records the approximation explicitly");
+    for (const auto& [key,value] : std::vector<std::pair<std::string,int>>{
+            {"ray_pool_size",16384},{"batch_size",8192},{"auxiliary_batch_minimum",256},{"maximum_queue_delay",4},{"max_in_flight_batches",3}})
+        root["transport"]["renewal"][key] = value;
+    { std::ofstream stream(input); stream << root; }
+    const auto queueConfig = loadExperimentConfig(input);
+    writeResolvedConfig(queueConfig,resolved);
+    { std::ifstream stream(resolved); stream >> written; }
+    context.require(queueConfig.renewal.rayPoolSize == 16384 && queueConfig.renewal.batchSize == 8192 &&
+        written["transport"]["renewal"]["ray_pool_size"] == 16384 &&
+        written["transport"]["renewal"]["auxiliary_batch_minimum"] == 256 &&
+        written["transport"]["renewal"]["maximum_queue_delay"] == 4 &&
+        queueConfig.renewal.maximumInFlightBatches == 3 &&
+        written["transport"]["renewal"]["max_in_flight_batches"] == 3,
+        "queue scheduling configuration roundtrips");
+    for (const auto& [key,value] : std::vector<std::pair<std::string,int>>{
+            {"ray_pool_size",-1},{"ray_pool_size",65537},
+            {"auxiliary_batch_minimum",0},{"maximum_queue_delay",-1},{"max_in_flight_batches",0},{"max_in_flight_batches",5}}) {
+        auto invalid = root; invalid["transport"]["renewal"][key] = value;
+        { std::ofstream stream(input); stream << invalid; }
+        bool rejected = false;
+        try { (void)loadExperimentConfig(input); } catch (const std::invalid_argument&) { rejected = true; }
+        context.require(rejected,"invalid queue configuration rejected");
+    }
     root["transport"]["renewal"]["profile_mode"] = "unknown";
     { std::ofstream stream(input); stream << root; }
     bool rejectedProfile = false;

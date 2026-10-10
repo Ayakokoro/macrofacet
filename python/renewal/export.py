@@ -1,7 +1,6 @@
 """Export the full trained model or its hazard path for the Eigen C++ runtime."""
 from pathlib import Path
 
-from . import KERNEL
 from .collect import digest, write_json
 from .evaluate import load_model
 
@@ -16,7 +15,7 @@ def export_model(checkpoint: Path, output: Path, *, hazard_only: bool = False):
             raise ValueError(f"invalid model tensor: {name}")
         value = tensor.detach().cpu().float().contiguous()
         weights[name] = {"shape": list(value.shape), "values": value.reshape(-1).tolist()}
-    result = {"format": "macrofacet.renewal_hazard" if hazard_only else "macrofacet.renewal", "version": 1, "kernel": KERNEL,
+    result = {"format": "macrofacet.renewal_hazard" if hazard_only else "macrofacet.renewal", "version": 1, "kernel": bundle["kernel"],
               "activation_dtype": "float32", "gru_convention": "pytorch_rzn_reset_after",
               "feature_transform": "asinh_first_four_log_dx_identity",
               "initial_transform": "asinh_mode_b0_known_z0_known_d0",

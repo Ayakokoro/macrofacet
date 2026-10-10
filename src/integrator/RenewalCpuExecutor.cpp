@@ -6,13 +6,10 @@ namespace mf {
 RenewalCpuExecutor::RenewalCpuExecutor(int requested, std::size_t capacity) {
     if (requested < 0 || capacity == 0) throw std::invalid_argument("invalid Renewal CPU pool settings");
     const auto available = std::max(1u,std::thread::hardware_concurrency());
-    // Automatic mode is deliberately conservative for the short per-batch work.
     const auto desired = requested ? static_cast<std::size_t>(requested) : std::min(8u,available);
-    const auto workers = capacity < parallelThreshold ? 1 :
-        std::max<std::size_t>(1,std::min(desired,capacity/grain));
+    const auto workers = std::max<std::size_t>(1,std::min(desired,(capacity+grain-1)/grain));
     try {
-        for (std::size_t i = 0; i+1 < workers; ++i)
-            threads_.emplace_back([this,i] { workerLoop(i); });
+        for (std::size_t i = 0; i < workers; ++i) threads_.emplace_back([this] { workerLoop(); });
     } catch (...) { stop(); throw; }
 }
 RenewalCpuExecutor::~RenewalCpuExecutor() { stop(); }
@@ -23,59 +20,54 @@ void RenewalCpuExecutor::stop() {
     for (auto& thread : threads_) if (thread.joinable()) thread.join();
 }
 
-void RenewalCpuExecutor::executeRanges() {
-    try {
-        while (!cancelled_.load(std::memory_order_relaxed)) {
-            const auto begin = next_.fetch_add(grain,std::memory_order_relaxed);
-            if (begin >= count_) break;
-            function_(begin,std::min(count_,begin+grain));
-        }
-    } catch (...) {
-        cancelled_.store(true,std::memory_order_relaxed);
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!failure_) failure_ = std::current_exception();
-    }
-}
-
-void RenewalCpuExecutor::workerLoop(std::size_t worker) {
-    std::size_t observed = 0;
-    std::unique_lock<std::mutex> lock(mutex_);
-    for (;;) {
-        ready_.wait(lock,[&] { return stopping_ || generation_ != observed; });
-        if (stopping_) return;
-        observed = generation_;
-        if (worker >= participating_) continue;
-        lock.unlock();
-        executeRanges();
-        lock.lock();
-        if (--pending_ == 0) done_.notify_one();
-    }
-}
-
-bool RenewalCpuExecutor::forRanges(std::size_t count,
-    const std::function<void(std::size_t,std::size_t)>& function) {
-    if (count == 0) return false;
-    if (threads_.empty() || count < parallelThreshold) {
-        function(0,count);
-        return false;
-    }
+void RenewalCpuExecutor::enqueue(std::function<void()> function) {
+    if (!function) throw std::invalid_argument("empty Renewal CPU task");
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        function_ = function;
-        count_ = count; next_.store(0,std::memory_order_relaxed);
-        cancelled_.store(false,std::memory_order_relaxed); failure_ = nullptr;
-        participating_ = std::min(threads_.size(),(count+grain-1)/grain-1);
-        pending_ = participating_;
-        ++generation_;
+        if (stopping_) throw std::logic_error("Renewal CPU executor stopped");
+        tasks_.push_back(std::move(function));
     }
-    ready_.notify_all();
-    executeRanges();
+    ready_.notify_one();
+}
+void RenewalCpuExecutor::workerLoop() {
+    for (;;) {
+        std::function<void()> task;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            ready_.wait(lock,[&] { return stopping_ || !tasks_.empty(); });
+            if (tasks_.empty()) return;
+            task = std::move(tasks_.front()); tasks_.pop_front(); ++active_;
+        }
+        try { task(); }
+        catch (...) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!failure_) failure_ = std::current_exception();
+        }
+        task = {}; // Release captured batch buffers before waking waiters.
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            --active_;
+            if (tasks_.empty() && !active_) done_.notify_all();
+        }
+    }
+}
+void RenewalCpuExecutor::wait() {
     std::unique_lock<std::mutex> lock(mutex_);
-    done_.wait(lock,[&] { return pending_ == 0; });
-    function_ = {};
-    const auto failure = failure_;
+    done_.wait(lock,[&] { return tasks_.empty() && !active_; });
+    const auto failure = failure_; failure_ = nullptr;
     lock.unlock();
     if (failure) std::rethrow_exception(failure);
-    return true;
+}
+bool RenewalCpuExecutor::forRanges(std::size_t count,
+    const std::function<void(std::size_t,std::size_t)>& function) {
+    if (!count) return false;
+    const bool parallel = workerCount() > 1 && count >= parallelThreshold;
+    const auto step = parallel ? grain : count;
+    try {
+        for (std::size_t begin = 0; begin < count; begin += step)
+            enqueue([=] { function(begin,std::min(count,begin+step)); });
+    } catch (...) { const auto failure=std::current_exception(); wait(); std::rethrow_exception(failure); }
+    wait();
+    return parallel;
 }
 } // namespace mf

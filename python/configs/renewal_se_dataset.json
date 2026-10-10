@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "seed": 20261008,
+  "kernel": {"type": "squared_exponential", "parameterization": "unit_length", "beta": 1.0},
+  "executable": "build/Release/macrofacet_experiments.exe",
+  "output_directory": "outputs/renewal_se_dataset_v1",
+  "scenes": {"train": 16, "validation": 4, "test": 4},
+  "families": ["plane", "sphere", "cutaway_sphere", "shader_ball"],
+  "profiles_per_mode_per_scene": 216,
+  "realizations_per_profile": 16,
+  "horizons": [2.0, 4.0, 8.0],
+  "sigma_range": [0.01, 0.1],
+  "ell_range": [0.08, 0.2],
+  "voxel_size_range": [0.1, 0.16],
+  "profile_maximum_step": 0.25,
+  "reference_steps": [0.015625, 0.0078125],
+  "minimum_step": 0.000244140625,
+  "threads": 4
+}

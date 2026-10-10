@@ -123,6 +123,14 @@ void prepareRenewalModel(ExperimentConfig& config) {
     if (config.transportMode != "neural_renewal") return;
     if (config.renewal.batchSize < 1 || config.renewal.batchSize > 65536)
         throw std::invalid_argument("transport.renewal.batch_size must be 1..65536");
+    if (config.renewal.rayPoolSize < 0 || config.renewal.rayPoolSize > 65536)
+        throw std::invalid_argument("transport.renewal.ray_pool_size must be 0..65536");
+    if (config.renewal.auxiliaryBatchMinimum < 1 || config.renewal.auxiliaryBatchMinimum > 65536)
+        throw std::invalid_argument("transport.renewal.auxiliary_batch_minimum must be 1..65536");
+    if (config.renewal.maximumQueueDelay < 0 || config.renewal.maximumQueueDelay > 65536)
+        throw std::invalid_argument("transport.renewal.maximum_queue_delay must be 0..65536");
+    if (config.renewal.maximumInFlightBatches < 1 || config.renewal.maximumInFlightBatches > 4)
+        throw std::invalid_argument("transport.renewal.max_in_flight_batches must be 1..4");
     config.renewal.resolvedBackend = resolveRenewalBackend(config.renewal.backend);
     if (config.material.ndfFamily != NdfFamily::GeneralizedGaussian || config.material.alphaField)
         throw std::invalid_argument("neural_renewal requires generalized_gaussian and field.use_alpha_grid=false");
@@ -316,11 +324,24 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         requirePositiveFinite(config.renewal.profileMaximumStep, "transport.renewal.profile_maximum_step");
         config.renewal.backend = renewal.value("backend", "scalar");
         config.renewal.batchSize = renewal.value("batch_size", 4096);
+        config.renewal.rayPoolSize = renewal.value("ray_pool_size", 0);
+        config.renewal.auxiliaryBatchMinimum = renewal.value("auxiliary_batch_minimum", 256);
+        config.renewal.maximumQueueDelay = renewal.value("maximum_queue_delay", 4);
+        config.renewal.maximumInFlightBatches = renewal.value("max_in_flight_batches", 2);
         if (config.renewal.backend != "scalar" && config.renewal.backend != "torch_cpu" &&
             config.renewal.backend != "torch_cuda" && config.renewal.backend != "auto")
             throw std::invalid_argument("unknown transport.renewal.backend");
         if (config.renewal.batchSize < 1 || config.renewal.batchSize > 65536)
             throw std::invalid_argument("transport.renewal.batch_size must be 1..65536");
+
+        if (config.renewal.rayPoolSize < 0 || config.renewal.rayPoolSize > 65536)
+            throw std::invalid_argument("transport.renewal.ray_pool_size must be 0..65536");
+        if (config.renewal.auxiliaryBatchMinimum < 1 || config.renewal.auxiliaryBatchMinimum > 65536)
+            throw std::invalid_argument("transport.renewal.auxiliary_batch_minimum must be 1..65536");
+        if (config.renewal.maximumQueueDelay < 0 || config.renewal.maximumQueueDelay > 65536)
+            throw std::invalid_argument("transport.renewal.maximum_queue_delay must be 0..65536");
+        if (config.renewal.maximumInFlightBatches < 1 || config.renewal.maximumInFlightBatches > 4)
+            throw std::invalid_argument("transport.renewal.max_in_flight_batches must be 1..4");
     }
     for (const char* obsolete : {"conditional29", "correlated_sampler", "external_policy",
                                  "hard_depth_cap", "next_event_estimation"}) {
@@ -532,6 +553,8 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
     result["derived"]["kernel_precision"] = result["derived"]["kernel_metric"];
     if (config.field.kernel.type()==CovarianceKernelType::Matern32)
         result["derived"]["kernel_parameterization"]="unit_decay";
+    if (config.field.kernel.type()==CovarianceKernelType::SquaredExponential)
+        result["derived"]["kernel_parameterization"]="unit_length";
     const Vector3 gradientStddev =
         config.field.kernel.gradientCovarianceAtZero().diagonal().cwiseMax(0.0).cwiseSqrt();
     result["derived"]["gradient_stddev_xyz"] = toArray(gradientStddev);
@@ -567,9 +590,15 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
             {"profile_mode", config.renewal.profileMode},
             {"backend", config.renewal.backend}, {"resolved_backend", config.renewal.resolvedBackend},
             {"batch_size", config.renewal.batchSize},
+            {"ray_pool_size", config.renewal.rayPoolSize},
+            {"auxiliary_batch_minimum", config.renewal.auxiliaryBatchMinimum},
+            {"maximum_queue_delay", config.renewal.maximumQueueDelay},
+            {"max_in_flight_batches", config.renewal.maximumInFlightBatches},
             {"sampler", "cumulative_inversion"}, {"normal", "full_renewal_plus"}};
-        if (config.renewal.model)
+        if (config.renewal.model) {
             result["transport"]["renewal"]["checkpoint_sha256"] = config.renewal.model->checkpointSha256();
+            result["transport"]["renewal"]["model_kernel_type"] = covarianceKernelTypeName(config.renewal.model->kernelType());
+        }
     }
     result["budgets"]["safety_depth_cap"] = config.render.safetyDepthCap;
     result["budgets"]["roulette_start_depth"] = config.render.rouletteStartDepth;

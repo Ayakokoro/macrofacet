@@ -13,22 +13,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 from torch.nn import functional as F
 
-from renewal import KERNEL
+from renewal import KERNEL, SE_KERNEL
 from renewal.data import prepare, load_data, SequenceDataset, collate
-from renewal.evaluate import load_model, survival_calibration
+from renewal.evaluate import load_model, survival_calibration, evaluate
+from renewal.export import export_model
 from renewal.train import train
 from renewal.model import (RenewalNetwork, ModelConfig, cumulative, log_hazard, mean_at,
                            mixture_log_prob, mixture_cdf)
 
 
-def fixture(directory):
+def fixture(directory, kernel=KERNEL):
     sources = []
     for i, split in enumerate(("train", "validation", "test")):
         run = directory / split
         run.mkdir()
         mode = "collision_state" if i == 1 else "positive_exterior"
         config = {"first_passage": {"initial_condition": {"type": mode},
-                  "kernels": [{"id": "m32", **KERNEL}],
+                  "kernels": [{"id": "m32", **kernel}],
                   "grid": {"max_time": 1.0, "step_sizes": [0.03125]}, "sampler": {}}}
         (run / "resolved_first_passage_config.json").write_text(json.dumps(config))
         with (run / "first_passage_mean_segments.csv").open("w", newline="") as f:
@@ -41,13 +42,14 @@ def fixture(directory):
             writer = csv.writer(f)
             writer.writerow(["kernel_id", "state_id", "training_resolution", "sampler_type", "trajectory",
                              "beta_0", "beta_g", "event", "censored", "event_q", "crossing_slope", "max_q", "base_step"])
-            writer.writerow(["m32", "ray", 1, "matern32_state_space", 0, 0.3,
+            sampler = "matern32_state_space" if kernel == KERNEL else "conditioned_grid_circulant"
+            writer.writerow(["m32", "ray", 1, sampler, 0, 0.3,
                              0.7 if i == 1 else "", 1, 0, 0.25, 0.8, 1, 0.03125])
-            writer.writerow(["m32", "ray", 1, "matern32_state_space", 1, 0.3,
+            writer.writerow(["m32", "ray", 1, sampler, 1, 0.3,
                              0.7 if i == 1 else "", 0, 1, 1, "", 1, 0.03125])
         sources.append({"scene_id": split, "split": split, "directory": str(run), "geometry": {"unique": i}})
     path = directory / "manifest.json"
-    path.write_text(json.dumps({"schema_version": 1, "kernel": KERNEL, "sources": sources}))
+    path.write_text(json.dumps({"schema_version": 1, "kernel": kernel, "sources": sources}))
     return path
 
 
@@ -156,6 +158,45 @@ class ModelTests(unittest.TestCase):
 
 
 class DataTests(unittest.TestCase):
+    def test_se_training_export_and_kernel_mismatch(self):
+        with tempfile.TemporaryDirectory() as d:
+            directory = Path(d)
+            manifest = fixture(directory, SE_KERNEL)
+            dataset = directory/"data.pt"
+            prepare(manifest, dataset)
+            data = load_data(dataset)
+            self.assertEqual(data["kernel"], SE_KERNEL)
+            config = {"schema_version": 1, "seed": 812, "kernel": SE_KERNEL,
+                      "dataset": str(dataset), "output_directory": str(directory/"model"),
+                      "device": "cpu", "cpu_threads": 2, "batch_size": 2, "epochs": 1,
+                      "patience": 1, "learning_rate": 0.0003, "weight_decay": 1e-5,
+                      "gradient_clip": 1.0, "model": {"embedding": 4, "hidden": 16,
+                      "hazard_width": 4, "mixture_width": 4, "components": 2}}
+            path = directory/"train.json"
+            path.write_text(json.dumps(config))
+            with contextlib.redirect_stdout(io.StringIO()):
+                checkpoint = train(path)
+            _, bundle = load_model(checkpoint, "cpu")
+            self.assertEqual(bundle["kernel"], SE_KERNEL)
+            export_model(checkpoint, directory/"export.json")
+            exported = json.loads((directory/"export.json").read_text())
+            self.assertEqual(exported["kernel"], SE_KERNEL)
+            self.assertEqual(exported["model_config"]["hidden"], 16)
+            data["kernel"] = KERNEL
+            torch.save(data, directory/"wrong.pt")
+            with self.assertRaisesRegex(ValueError, "kernels differ"):
+                evaluate(checkpoint, directory/"wrong.pt", directory/"metrics.json")
+            config["kernel"] = KERNEL
+            path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(ValueError, "training kernel"):
+                train(path)
+            source_path = directory/"train"/"resolved_first_passage_config.json"
+            source = json.loads(source_path.read_text())
+            source["first_passage"]["kernels"][0].update(KERNEL)
+            source_path.write_text(json.dumps(source))
+            with self.assertRaisesRegex(ValueError, "mismatched kernel"):
+                prepare(manifest, dataset)
+
     def test_training_checkpoint_resume_and_evaluation(self):
         with tempfile.TemporaryDirectory() as d:
             directory = Path(d)

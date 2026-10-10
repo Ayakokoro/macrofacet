@@ -1,6 +1,6 @@
 # Renewal+ 序列数据与网络训练
 
-实现 [方案](../GPIS_RenewalPlus_Neural_Rendering.md) 第 5–9 节：共享三次均值剖面、A/B 起点、GRU 历史状态、单调累计 hazard、正半轴截断 Gaussian mixture 和联合删失似然。固定核为 `rho(x)=(1+x)exp(-x)`，`beta=1`。旧 I-spline 包和旧 Matérn-3/2 配置不参与此流程。
+实现 [方案](../GPIS_RenewalPlus_Neural_Rendering.md) 第 5–9 节：共享三次均值剖面、A/B 起点、GRU 历史状态、单调累计 hazard、正半轴截断 Gaussian mixture 和联合删失似然。默认核为 `rho(x)=(1+x)exp(-x)`，`beta=1`；另支持独立训练 SE 核 `rho(x)=exp(-x*x/2)`，见下文。旧 I-spline 包和旧 Matérn-3/2 配置不参与此流程。
 
 ## 运行
 
@@ -48,6 +48,47 @@ python -m unittest discover -s python/tests -v
 设置 CMake 的 `MACROFACET_TEST_NEURAL=ON` 可把 Python 测试纳入 CTest。默认关闭，避免给纯 C++ 构建增加训练依赖。
 
 ## 几何采集与参考数据
+
+### SE 核、16 维隐藏状态
+
+从仓库根目录运行：
+
+```powershell
+python python/renewal_cli.py collect --config python/configs/renewal_se_dataset.json
+python python/renewal_cli.py audit-reference --manifest outputs/renewal_se_dataset_v1/manifest.json --output outputs/renewal_se_dataset_v1/reference_audit.json
+python python/renewal_cli.py prepare --manifest outputs/renewal_se_dataset_v1/manifest.json --output outputs/renewal_se_dataset_v1/dataset.pt
+python python/renewal_cli.py train --config python/configs/renewal_se_train_h16.json
+python python/renewal_cli.py export-model --checkpoint outputs/models/renewal_se_h16_v1/best.pt --output outputs/models/renewal_se_h16_v1/renewal_model.json
+```
+
+SE 约定为 `type=squared_exponential`、`parameterization=unit_length`，
+`x=distance/ell`、`rho(x)=exp(-x*x/2)`、`beta=-rho''(0)=1`。采集沿用 v2 的几何、
+参数范围、划分及种子，但重新生成 SE 标签；训练沿用 h16 的 49,068 参数架构及优化设置。
+数据、checkpoint 和 JSON 导出都保留核标记，禁止用另一种核的数据评估该 checkpoint。
+
+SE 使用条件循环嵌入网格和残差 Hermite 插值，不使用 Matérn 的状态空间转移。
+A 起点只条件于 `F(0)>0`：先抽取截断正态起始残差，再条件生成路径，初始导数保持随机，
+且不会成为网络输入。B 起点沿用网格中心差分导数条件。参考步长为 `1/64` 和 `1/128`，
+后者用于训练；SE 不执行 Matérn bridge 自适应细分，`minimum_step` 不代表 SE 的分辨率。
+两档步长的统计审计用于检查离散误差，不能当作连续首达精度保证。
+
+SE 模型可用于 C++ 标量、LibTorch CPU/CUDA 渲染及 `renewal-query`。场必须设置
+`kernel_type=squared_exponential`，与导出权重的 `unit_length` 核匹配。
+独立配置为 `configs/render_neural_renewal_shader_ball_ply_point_linear_se_h16.json`；
+渲染器按 SE 的 `exp(-x*x/2)` 相关系数重建出生点横向梯度，详见 [C++ 渲染](../docs/RENEWAL_CPP.md)。
+
+2026-10-10 在 RTX 4060 Laptop GPU 上完成 16 轮训练，按验证集联合 NLL 选中第 15 轮。
+训练和逐轮验证合计 437.01 秒，训练／验证／测试分别为 110,592／27,648／27,648 条轨迹。
+初始验证集联合 NLL 为 2.97936，最佳验证集为 0.92389，测试集为 0.86608；测试集距离 NLL
+为 0.55582，命中速度 PIT KS 为 0.03418。测试集终点平均透射率为预测 0.51059／参考 0.50995，
+绝对差 0.000645；这是汇总校准差，不是逐射线误差界，也不能将不同核的测试 NLL 直接用于模型优劣比较。
+
+三组 CTest 全部通过，包含 SE 空域起点的 Gaussian 端点概率检查、线程数可复现性以及核标记贯穿
+数据／训练／评估／导出的测试。训练复现脚本和日志位于
+`outputs/renewal_se_h16_training_20261010`，模型、哈希和完整指标见
+[训练报告](../outputs/models/renewal_se_h16_v1/run_report.json)。
+
+### 默认 Matérn 数据
 
 默认 24 个场景：训练 16 个、验证 4 个、测试 4 个。每组包含平面、球、切开球和 shader ball，几何参数、尺度、网格尺寸与射线独立生成。每场景每种起点 216 条剖面，每条 16 个随机实现；标准化长度为 2、4 或 8。训练共 110,592 条轨迹，验证和测试各 27,648 条。
 

@@ -13,9 +13,10 @@ void runRenewalModelExperiment(const FirstPassageExperimentConfig& config,
     using Json = nlohmann::json;
     if (config.initialConditionType == "fixed_value" || config.fixedEndpoint.enabled)
         throw std::invalid_argument("renewal-query requires an A/B first-passage configuration without fixed endpoints");
-    for (const auto& kernel : config.kernels) if (kernel.type != "matern_3_2")
-        throw std::invalid_argument("the Renewal model supports only unit-decay matern_3_2");
     const auto model = RenewalHazardModel::load(bundle);
+    for (const auto& kernel : config.kernels)
+        if (kernel.type != covarianceKernelTypeName(model.kernelType()))
+            throw std::invalid_argument("renewal-query reference/model kernel mismatch");
     std::ifstream input(source);
     Json root;
     input >> root;
@@ -33,6 +34,7 @@ void runRenewalModelExperiment(const FirstPassageExperimentConfig& config,
     if (speedTrials < 0) throw std::invalid_argument("negative speed sample count");
     const std::vector<double> speedThresholds{1e-4, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30};
     Json result = {{"schema_version", 1}, {"checkpoint_sha256", model.checkpointSha256()},
+                   {"kernel_type", covarianceKernelTypeName(model.kernelType())},
                    {"model", bundle.string()}, {"seed", config.seed}, {"rays", Json::array()}};
     std::size_t rayIndex = 0;
     for (const auto& kernel : config.kernels) for (const auto& condition : config.collisionStates) {

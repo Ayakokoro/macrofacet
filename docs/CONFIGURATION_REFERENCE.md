@@ -3,7 +3,8 @@
 The renderer supports Classic local/global DDA null tracking and global conditional GP delta tracking. Commands are `render`, `curves`, `bake-field`, the independent 1D `first-passage` experiment, and neural `renewal-query`. Old `fixed_flight`, `modes`, `reference`, `render.flight_table_cells`, and legacy Conditional29 transport settings are rejected.
 
 `renewal-query --config <A/B-first-passage-config> --model <hazard-bundle.json>`
-evaluates the trained Matern-3/2 model and samples its cumulative law. It accepts
+evaluates a trained Matern-3/2 or SE model and samples its cumulative law. The
+reference configuration's kernel must match the model. It accepts
 `--trials`, `--bins`, and `--output`; optional top-level `renewal_query` fields
 select normalized query distances, survival intervals, and optical depths.
 See [Renewal C++ queries](RENEWAL_CPP.md) for export commands, units, and output.
@@ -11,10 +12,16 @@ See [Renewal C++ queries](RENEWAL_CPP.md) for export commands, units, and output
 `transport.mode="neural_renewal"` enables full Renewal+ neural path tracing.
 Set `transport.renewal.model` to the JSON from `export-model` and optionally
 `transport.renewal.profile_maximum_step` (default `0.25`). This mode requires
-unit-decay `matern_3_2`, a positive-definite stationary kernel metric,
+unit-decay `matern_3_2` or unit-length `squared_exponential` matching the model,
+a positive-definite stationary kernel metric,
 `generalized_gaussian`, and no alpha grid. NanoVDB inputs must contain full-domain
 SDF data. `render.safety_depth_cap` defaults to `64`; the neural example uses
 `128`. See [the neural scene](../configs/render_neural_renewal_shader_ball.json).
+The [SE h16 scene](../configs/render_neural_renewal_shader_ball_ply_point_linear_se_h16.json)
+loads the SE checkpoint with `rho(x)=exp(-x*x/2)`, `x=distance/ell`.
+Model exports must declare `parameterization=unit_length` and `beta=1` for SE;
+Matern-3/2 requires `parameterization=unit_decay` and `beta=1`.
+The renderer and `renewal-query` reject field/reference versus model kernel mismatches.
 
 `transport.renewal.profile_mode` selects `cubic` (default, full piecewise-cubic
 mean profile) or `point_linear` (lazy current-point value/gradient queries with
@@ -28,15 +35,49 @@ and [the PLY example](../configs/render_neural_renewal_shader_ball_ply_point_lin
 `transport.renewal.backend` accepts `scalar` (default: Eigen), `torch_cpu`,
 `torch_cuda`, or `auto` (CUDA if available, otherwise LibTorch CPU or scalar
 when built without LibTorch). Explicit unavailable backends fail instead of
-silently switching devices. `transport.renewal.batch_size` is the maximum number
-of active ray slots, from 1 to 65536, default 4096. The neural example uses `auto`.
+silently switching devices. `transport.renewal.batch_size` limits distinct rays
+per submission across all three groups, from 1 to 65536, default 4096.
+Initialization plus the first segment count as one ray. Eligible mixture rows
+take space first, then initialization, then continued segments; each group is FIFO.
+`ray_pool_size` controls resident ray slots independently; 0 (default) uses
+`min(65536, 2*batch_size)`, bounded by the number of pixels. Explicit pool sizes
+are 1..65536. `auxiliary_batch_minimum` (1..65536, default 256, clamped to actual
+batch capacity) accumulates initialization and mixture requests; `maximum_queue_delay`
+(0..65536, default 4) makes an auxiliary group eligible after that many completed submissions of waiting.
+Zero disables the delay. FIFO overflow takes additional submissions. Tail queues
+flush when both CPU work and GPU batches are drained; other requests accumulate
+while workers keep producing rays. All ready groups share one upload/readback.
+`max_in_flight_batches` (1..4, default 2) enables independent CUDA batch buffers
+and completion events. Set 1 to limit the outstanding request window to one batch; CPU tasks remain
+asynchronous. Slots stay locked until their ticket is collected, then belong
+exclusively to a CPU task until its ready chunk is published. LibTorch CPU renders
+use one inference batch with independent ray workers; scalar rendering is unaffected.
+While CPU tasks or GPU batches remain active, accumulate at least `batch_size`
+eligible distinct rays across the three groups. Only when both have drained may
+an underfilled tail submit. This avoids submitting each newly published CPU
+chunk as a small GPU batch. Auxiliary age affects group eligibility, not this
+overall fullness threshold.
+The point-linear neural example uses `auto`, batch 8192 and pool 32768, leaving
+ready rays available while another group awaits auxiliary processing or inference.
 `resolved_config.json` records both requested and resolved backend;
 `render_summary.csv` records the actual backend and inference batch counts.
-The wavefront scheduler uses one host coordinator and LibTorch's device execution;
-`render.thread_count` controls the original scalar renderer, not the number of CUDA
-inference workers. Ray profiles, cumulative inversion and gradient sampling remain
-on the CPU. Batch size changes do not alter the segmentation or stochastic model,
-but GEMM rounding can change individual Monte Carlo paths.
+The calling thread groups ready queues and dispatches completed CPU work. A
+separate inference thread exclusively owns the LibTorch session, submits batches,
+checks CUDA events and publishes results. The bounded request window includes
+queued, executing and completed-but-not-yet-dispatched inference batches, limited
+by `max_in_flight_batches` (one for `torch_cpu`). `render.thread_count` controls
+additional CPU ray workers (0 selects at most 8, also bounded by pool capacity);
+it excludes both the calling scheduler and the inference thread.
+The inference thread collects/publishes the current GPU batch before entering
+the next LibTorch submission, so CPU results are not delayed by that long host
+call. It therefore has one active GPU ticket, while other groups remain queued
+or execute on CPU. The configured inference window still bounds outstanding
+requests; it is not a promise of that many simultaneously active GPU tickets.
+Workers initialize camera rays/new flights, query fields, decide collisions,
+sample normals, reflect and accumulate pixels. They publish in 128-ray chunks;
+there is no batch-wide CPU barrier. Per-slot RNG and per-pixel accumulation order
+are preserved, but task completion changes batch membership; GEMM rounding can
+change individual Monte Carlo paths, even on repeated runs with the same config.
 
 A config contains `schema_version`, `seed`, `field`, `material`, `transport`, `numeric`, `render`, and `output_directory`. See `configs/macrofacet_ci.json` for a complete small example.
 

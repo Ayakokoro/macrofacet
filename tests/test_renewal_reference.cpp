@@ -202,6 +202,45 @@ void testRenewalReference(TestContext& context) {
     auto roundtrip=loadFirstPassageExperimentConfig(directory/"resolved_first_passage_config.json");
     context.require(roundtrip.initialConditionType=="positive_exterior" &&
         roundtrip.collisionStates.size()==1,"mode A known conditioning round-trips");
+    auto seRoot = root;
+    seRoot["first_passage"]["kernels"][0]["type"]="squared_exponential";
+    { std::ofstream out(path); out<<seRoot; }
+    auto seConfig=loadFirstPassageExperimentConfig(path);
+    runFirstPassageExperiment(seConfig);
+    const auto seSerial=read(directory/"first_passage_samples.csv");
+    seConfig.threadCount=3;
+    runFirstPassageExperiment(seConfig);
+    context.require(seSerial==read(directory/"first_passage_samples.csv"),
+                    "SE exterior reference is reproducible across threads");
+    context.require(seSerial.find("conditioned_grid_circulant")!=std::string::npos &&
+                    seSerial.find("grid_residual_hermite_cellwise_mean")!=std::string::npos,
+                    "SE exterior reference uses conditioned grid with complete mean");
+    // For a zero-mean SE ray, the endpoint crossing probability conditional on
+    // F(0)>0 is acos(rho(t))/pi. Over a short interval extra recrossings are rare.
+    // This catches accidentally treating exterior starts as F(0)=F'(0)=0.
+    seConfig.processMeanField.reset();
+    seConfig.collisionStates[0].ray.reset();
+    seConfig.collisionStates[0].beta0=0;
+    seConfig.collisionStates[0].betaMeanSlope=0;
+    seConfig.maximumTime=0.25;
+    seConfig.stepSizes={1.0/128};
+    seConfig.trajectories=4096;
+    runFirstPassageExperiment(seConfig);
+    std::istringstream rows(read(directory/"first_passage_samples.csv"));
+    std::string row,cell;
+    std::getline(rows,row);
+    std::istringstream header(row);
+    int eventColumn=-1,column=0;
+    while (std::getline(header,cell,',')) { if (cell=="event") eventColumn=column; ++column; }
+    int hits=0,seCount=0;
+    while (std::getline(rows,row)) {
+        std::istringstream fields(row); column=0;
+        while (std::getline(fields,cell,',')) { if (column==eventColumn) hits+=std::stoi(cell); ++column; }
+        ++seCount;
+    }
+    context.require(seCount==4096 && eventColumn>=0,"SE preserves every trajectory including censored samples");
+    context.near(hits/4096.0,std::acos(std::exp(-0.5*0.25*0.25))/kPi,0.016,
+                 "SE exterior short-horizon hits agree with Gaussian endpoint probability");
     root["first_passage"]["initial_condition"]["type"]="collision_state";
     root["first_passage"]["initial_condition"]["rays"][0]["gradient"]={1,0,0};
     { std::ofstream out(path); out<<root; }

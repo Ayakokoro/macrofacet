@@ -152,6 +152,11 @@ def main() -> None:
         if len(comparison) != len(neural):
             raise ValueError('comparison neural query grid size differs')
     counts = {}
+    conventions = {'matern_3_2_unit_decay': ('matern_3_2', 'unit_decay'),
+                   'squared_exponential_unit_length': ('squared_exponential', 'unit_length')}
+    if meta['kernel'] not in conventions:
+        raise ValueError('unsupported inspected kernel convention')
+    kernel_type, parameterization = conventions[meta['kernel']]
     for name, ref in refs.items():
         resolved = json.loads((reference_root/name/'resolved_first_passage_config.json').read_text(encoding='utf-8'))['first_passage']
         kernel = resolved['kernels'][0]
@@ -159,7 +164,7 @@ def main() -> None:
         if (resolved['initial_condition']['type'] != meta['start_condition']
             or ray['origin'] != meta['entry_origin'] or ray['direction'] != meta['direction']
             or resolved['process']['mean_field']['grid_file'] != meta['field']['grid_file']
-            or kernel['type'] != 'matern_3_2' or kernel['parameterization'] != 'unit_decay'
+            or kernel['type'] != kernel_type or kernel['parameterization'] != parameterization
             or not math.isclose(kernel['variance'],meta['sigma']**2,rel_tol=1e-12)
             or not math.isclose(kernel['length_scale'],meta['ell'],rel_tol=1e-12)):
             raise ValueError(f'{name} reference parameters do not match inspected ray')

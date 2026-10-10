@@ -65,6 +65,9 @@ int main(int argc,char** argv) {
         ray.origin += domain.entry*ray.direction;
         ray.origin = ray.origin.cwiseMax(config.field.activeDomain.minimum).cwiseMin(config.field.activeDomain.maximum);
         const auto& model = *config.renewal.model;
+        const bool se = model.kernelType() == CovarianceKernelType::SquaredExponential;
+        const std::string kernelType = covarianceKernelTypeName(model.kernelType());
+        const std::string parameterization = se ? "unit_length" : "unit_decay";
         const RenewalMedium medium(config.field,model,config.renewal.profileMaximumStep,config.renewal.profileMode);
         const auto flight = medium.beginFlight(ray);
         if (!flight) throw std::runtime_error("selected camera ray has no flight inside the domain");
@@ -127,7 +130,7 @@ int main(int argc,char** argv) {
             {"entry_origin",vectorJson(ray.origin)},{"direction",vectorJson(ray.direction)},
             {"entry_distance",domain.entry},{"domain_exit_distance",domain.exit},
             {"reference_maximum_x",maxX},{"sigma",flight->sigma},{"ell",flight->ell},
-            {"kernel","matern_3_2_unit_decay"},{"start_condition","positive_exterior"},
+            {"kernel",kernelType+"_"+parameterization},{"start_condition","positive_exterior"},
             {"profile_mode",config.renewal.profileMode},{"profile_maximum_step",config.renewal.profileMaximumStep},
             {"backend",config.renewal.resolvedBackend},{"checkpoint_sha256",model.checkpointSha256()},
             {"model",source.at("transport").at("renewal").at("model")},{"field",source.at("field")},
@@ -153,8 +156,8 @@ int main(int argc,char** argv) {
                     {"sampler",{{"type","collision_state_auto"},{"minimum_step",step/64},
                         {"crossing_tolerance",1e-9},{"bridge_sigma_margin",6},{"max_refinement_depth",12}}},
                     {"rice_series",{{"enabled",false}}},{"state_analysis",{{"enabled",false}}},
-                    {"kernels",Json::array({{{"id","matern32"},{"type","matern_3_2"},
-                        {"parameterization","unit_decay"},{"variance",flight->sigma*flight->sigma},
+                    {"kernels",Json::array({{{"id",se ? "se" : "matern32"},{"type",kernelType},
+                        {"parameterization",parameterization},{"variance",flight->sigma*flight->sigma},
                         {"length_scale",flight->ell}}})}}},
                 {"output_directory",(output/name).string()}};
             writeJson(output/(std::string("reference_")+name+".json"),reference);

@@ -90,7 +90,7 @@ void runRenderExperiments(const ExperimentConfig& config) {
                "max_evaluated_extinction,max_segment_majorant_optical_depth,max_conditional_interval_majorant,"
                "neural_flights,neural_segments,neural_mixture_queries,neural_backend,"
                "neural_initialization_batches,neural_segment_batches,neural_mixture_batches,neural_maximum_batch_size,"
-               "neural_cpu_workers,neural_parallel_advance_batches,neural_serial_advance_batches\n";
+               "neural_cpu_workers,neural_parallel_advance_batches,neural_serial_advance_batches,neural_submissions,neural_readbacks,neural_combined_submissions,neural_ray_pool_size,neural_max_initialization_batch,neural_max_mixture_batch,neural_max_initialization_wait,neural_max_mixture_wait,neural_max_in_flight_batches,neural_blocking_collects,neural_cpu_batches_with_gpu_pending\n";
     {
         const std::vector<std::string> modes = config.transportMode == "all"
             ? std::vector<std::string>{"classic_local", "classic_global", "global_conditional"}
@@ -152,7 +152,18 @@ void runRenderExperiments(const ExperimentConfig& config) {
                     << image.statistics.renewal.initializationBatches << ',' << image.statistics.renewal.segmentBatches << ','
                     << image.statistics.renewal.mixtureBatches << ',' << image.statistics.renewal.maximumBatchSize << ','
                     << image.statistics.renewal.cpuWorkers << ',' << image.statistics.renewal.parallelAdvanceBatches << ','
-                    << image.statistics.renewal.serialAdvanceBatches << '\n';
+                    << image.statistics.renewal.serialAdvanceBatches << ','
+                    << image.statistics.renewal.submissions << ','
+                    << image.statistics.renewal.readbacks << ','
+                    << image.statistics.renewal.combinedSubmissions << ','
+                    << image.statistics.renewal.rayPoolSize << ','
+                    << image.statistics.renewal.maximumInitializationBatch << ','
+                    << image.statistics.renewal.maximumMixtureBatch << ','
+                    << image.statistics.renewal.maximumInitializationWait << ','
+                    << image.statistics.renewal.maximumMixtureWait << ','
+                    << image.statistics.renewal.maximumInFlightBatches << ','
+                    << image.statistics.renewal.blockingCollects << ','
+                    << image.statistics.renewal.cpuBatchesWithGpuPending << '\n';
         }
     }
 }

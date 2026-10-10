@@ -22,6 +22,10 @@ struct RenewalRenderConfig {
     std::string backend = "scalar"; // scalar, torch_cpu, torch_cuda, auto
     std::string resolvedBackend = "scalar";
     int batchSize = 4096;
+    int rayPoolSize = 0; // 0: min(65536, 2*batchSize), also bounded by pixel count
+    int auxiliaryBatchMinimum = 256; // initialization/mixture flush threshold
+    int maximumQueueDelay = 4; // completed submissions; 0 flushes immediately
+    int maximumInFlightBatches = 2; // bounded inference queue/window; CPU tasks are independent even at 1
     // Loaded once, immutable and shared by every render worker.
     std::shared_ptr<const RenewalHazardModel> model;
 };

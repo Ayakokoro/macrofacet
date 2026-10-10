@@ -65,6 +65,7 @@ Mlp mlp(const Json& weights, const std::string& name, int input, int width, int 
 } // namespace
 
 struct RenewalHazardModel::Impl {
+    CovarianceKernelType kernelType = CovarianceKernelType::Matern32;
     int hidden = 0, embedding = 0;
     int components = 0;
     float sigmaFloor = 0.01f;
@@ -83,8 +84,11 @@ RenewalHazardModel RenewalHazardModel::load(const std::filesystem::path& path) {
     Json root;
     stream >> root;
     const bool full = root.at("format") == "macrofacet.renewal";
+    const auto& kernel = root.at("kernel");
+    const bool matern32 = kernel == Json{{"type", "matern_3_2"}, {"parameterization", "unit_decay"}, {"beta", 1.0}};
+    const bool se = kernel == Json{{"type", "squared_exponential"}, {"parameterization", "unit_length"}, {"beta", 1.0}};
     if ((!full && root.at("format") != "macrofacet.renewal_hazard") || root.at("version") != 1 ||
-        root.at("kernel") != Json{{"type", "matern_3_2"}, {"parameterization", "unit_decay"}, {"beta", 1.0}} ||
+        (!matern32 && !se) ||
         root.at("activation_dtype") != "float32" || root.at("gru_convention") != "pytorch_rzn_reset_after" ||
         root.at("feature_transform") != "asinh_first_four_log_dx_identity" ||
         root.at("initial_transform") != "asinh_mode_b0_known_z0_known_d0")
@@ -92,6 +96,7 @@ RenewalHazardModel RenewalHazardModel::load(const std::filesystem::path& path) {
     const auto& config = root.at("model_config");
     const auto& weights = root.at("weights");
     auto impl = std::make_shared<Impl>();
+    impl->kernelType = se ? CovarianceKernelType::SquaredExponential : CovarianceKernelType::Matern32;
     impl->hidden = dimension(config, "hidden");
     impl->embedding = dimension(config, "embedding");
     const int width = dimension(config, "hazard_width");
@@ -241,6 +246,7 @@ double RenewalSpeedMixture::sample(Random& rng) const {
 }
 
 int RenewalHazardModel::hiddenSize() const { return impl_->hidden; }
+CovarianceKernelType RenewalHazardModel::kernelType() const { return impl_->kernelType; }
 const std::string& RenewalHazardModel::checkpointSha256() const { return impl_->checkpoint; }
 
 std::shared_ptr<const RenewalNetworkWeights> RenewalHazardModel::batchWeights() const {

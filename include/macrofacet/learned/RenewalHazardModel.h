@@ -1,6 +1,7 @@
 #pragma once
 
 #include "macrofacet/gpss/Matern32Reference.h"
+#include "macrofacet/gpss/CovarianceKernel.h"
 #include <array>
 #include <filesystem>
 #include <memory>
@@ -20,7 +21,7 @@ struct RenewalSpeedMixture {
 
 double samplePositiveNormal(double mean, double scale, Random& rng);
 
-// Immutable CPU inference for the trained unit-decay Matern-3/2 hazard model.
+// Immutable CPU inference for a trained unit-decay Matern-3/2 or unit-length SE model.
 // Weights/activations are float32; geometry and cumulative integration are double.
 class RenewalHazardModel {
 public:
@@ -36,6 +37,7 @@ public:
     RenewalSpeedMixture mixture(const State& enteringState,
         const RayMeanSegment& segment, double u) const;
     int hiddenSize() const;
+    CovarianceKernelType kernelType() const;
     const std::string& checkpointSha256() const;
 private:
     friend class RenewalBatchSession;

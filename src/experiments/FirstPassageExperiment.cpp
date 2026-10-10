@@ -164,6 +164,22 @@ public:
         return result;
     }
 
+    std::vector<double> samplePositiveExterior(Random& rng, double birthMean,
+                                               double& birthDerivative) {
+        const double sigma = std::sqrt(kernel_.config().variance);
+        const double b = birthMean / sigma;
+        // Draw the unknown birth value conditional only on F(0)>0. The
+        // derivative remains random, unlike a prescribed surface birth.
+        const double z = -normalQuantileFromLogCdf(normalLogCdf(b) + std::log(rng.openUniform01()));
+        const double value = std::max(sigma*z,
+            std::nextafter(-birthMean,std::numeric_limits<double>::infinity()));
+        auto result = sampleConditionedValue(rng,0.0,value);
+        const double negativeGhost = time_[embeddingSize_-1].real() +
+            kernel_.covariance(step_) / kernel_.config().variance * (value-time_[0].real());
+        birthDerivative = (result[1]-negativeGhost)/(2.0*step_);
+        return result;
+    }
+
     std::size_t embeddingSize() const { return embeddingSize_; }
     double minimumEigenvalue() const { return minimumEigenvalue_; }
 
@@ -389,14 +405,15 @@ std::uint64_t collisionSeed(std::uint64_t root, std::size_t kernel,
 CollisionSample sampleGridCollisionFirstPassage(
     CirculantSampler& sampler, const FirstPassageCollisionState& parameter,
     double maximumQ, double step, std::uint64_t seed,
-    const std::vector<MeanProfileSegment>& profile) {
+    const std::vector<MeanProfileSegment>& profile, bool positiveExterior = false) {
     CollisionSample result;
     result.eventQ = maximumQ;
     result.seed = seed;
     Random rng(seed);
-    const std::vector<double> residual = sampler.sampleConditionedValueDerivative(
-        rng, -parameter.beta0,
-        parameter.betaCollisionSlope - parameter.betaMeanSlope);
+    double birthDerivative = parameter.betaCollisionSlope - parameter.betaMeanSlope;
+    const std::vector<double> residual = positiveExterior
+        ? sampler.samplePositiveExterior(rng,parameter.beta0,birthDerivative)
+        : sampler.sampleConditionedValueDerivative(rng,-parameter.beta0,birthDerivative);
     result.transitions = residual.size() - 1;
     if (!profile.empty()) {
         // Add the complete, cell-wise mean to a Hermite interpolation of the
@@ -404,7 +421,7 @@ CollisionSample sampleGridCollisionFirstPassage(
         for (const auto& segment : profile) {
             const std::size_t i = segment.gridIndex;
             const double slope0 = i == 0
-                ? parameter.betaCollisionSlope - parameter.betaMeanSlope
+                ? birthDerivative
                 : (residual[i + 1] - residual[i - 1]) / (2.0 * step);
             const double slope1 = i + 2 < residual.size()
                 ? (residual[i + 2] - residual[i]) / (2.0 * step)
@@ -420,7 +437,7 @@ CollisionSample sampleGridCollisionFirstPassage(
             HermitePolynomial total{part.a + segment.mean.a, part.b + segment.mean.b,
                                     part.c + segment.mean.c, part.d + segment.mean.d};
             // The prescribed birth is not itself a new collision.
-            if (segment.qBegin == 0.0) {
+            if (segment.qBegin == 0.0 && !positiveExterior) {
                 total.d = 0.0;
                 total.c = width * parameter.betaCollisionSlope;
             }
@@ -435,7 +452,7 @@ CollisionSample sampleGridCollisionFirstPassage(
         return result;
     }
     std::vector<double> values(residual.size());
-    values[0] = 0.0;
+    values[0] = positiveExterior ? parameter.beta0+residual[0] : 0.0;
     for (std::size_t index = 1; index < residual.size(); ++index) {
         const double q = static_cast<double>(index) * step;
         values[index] = parameter.beta0 + parameter.betaMeanSlope * q +
@@ -443,7 +460,7 @@ CollisionSample sampleGridCollisionFirstPassage(
     }
     for (std::size_t index = 1; index < values.size(); ++index) {
         const double derivative0 = index == 1
-            ? parameter.betaCollisionSlope
+            ? (positiveExterior ? parameter.betaMeanSlope+birthDerivative : parameter.betaCollisionSlope)
             : (values[index] - values[index - 2]) / (2.0 * step);
         const double derivative1 = index + 1 < values.size()
             ? (values[index + 1] - values[index - 1]) / (2.0 * step)
@@ -1021,6 +1038,7 @@ Json kernelJson(const FirstPassageKernelConfig& kernel) {
                 {"variance", kernel.variance}, {"length_scale", kernel.lengthScale}};
     if (kernel.type == "rational_quadratic") result["alpha"] = kernel.alpha;
     if (kernel.type == "matern_3_2") result["parameterization"] = "unit_decay";
+    if (kernel.type == "squared_exponential") result["parameterization"] = "unit_length";
     return result;
 }
 
@@ -1386,6 +1404,8 @@ FirstPassageExperimentConfig loadFirstPassageExperimentConfig(
         kernel.alpha = source.value("alpha", kernel.alpha);
         if (kernel.type=="matern_3_2" && source.value("parameterization", "unit_decay")!="unit_decay")
             throw std::invalid_argument("matern_3_2 requires unit_decay: rho(x)=(1+x)exp(-x)");
+        if (kernel.type=="squared_exponential" && source.value("parameterization", "unit_length")!="unit_length")
+            throw std::invalid_argument("squared_exponential requires unit_length: rho(x)=exp(-x*x/2)");
         if (kernel.id.empty() || !ids.insert(kernel.id).second) {
             throw std::invalid_argument("first_passage kernel ids must be nonempty and unique");
         }
@@ -1401,8 +1421,8 @@ FirstPassageExperimentConfig loadFirstPassageExperimentConfig(
 
     if (config.initialConditionType=="positive_exterior") {
         for (const auto& kernel : config.kernels)
-            if (kernel.type!="matern_3_2")
-                throw std::invalid_argument("positive_exterior reference currently supports matern_3_2 only");
+            if (kernel.type!="matern_3_2" && kernel.type!="squared_exponential")
+                throw std::invalid_argument("positive_exterior reference supports matern_3_2 and squared_exponential");
     }
     requireFinite(config.processMean, "first_passage.process.mean");
     requireFinite(config.threshold, "first_passage.process.threshold");
@@ -1722,7 +1742,8 @@ std::vector<CollisionSample> generateCollisionSamples(
                             sample.deepestRefinement};
                     } else {
                         result[static_cast<std::size_t>(trajectory)]=sampleGridCollisionFirstPassage(
-                            *gridSampler,state,config.maximumTime,step,seed,profile);
+                            *gridSampler,state,config.maximumTime,step,seed,profile,
+                            config.initialConditionType=="positive_exterior");
                     }
                 }
             } catch (...) {

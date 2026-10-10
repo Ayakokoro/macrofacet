@@ -11,6 +11,11 @@ struct RenewalTrackingDiagnostics {
     std::string backend = "scalar";
     int cpuWorkers = 1;
     std::uint64_t parallelAdvanceBatches = 0, serialAdvanceBatches = 0;
+    std::uint64_t submissions = 0, readbacks = 0, combinedSubmissions = 0;
+    std::uint64_t maximumInitializationBatch = 0, maximumMixtureBatch = 0;
+    std::uint64_t maximumInitializationWait = 0, maximumMixtureWait = 0;
+    int rayPoolSize = 0;
+    std::uint64_t maximumInFlightBatches = 0, blockingCollects = 0, cpuBatchesWithGpuPending = 0;
 };
 
 struct RenewalFlight {
@@ -32,7 +37,7 @@ struct RenewalSurfaceSample {
 };
 
 // Reconstruct the full gradient given physical directional derivative V < 0.
-// Supports isotropic and fixed positive-definite elliptical Mat32 kernels.
+// Supports isotropic and fixed positive-definite elliptical Mat32 and SE kernels.
 Vector3 sampleRenewalGradient(const CovarianceKernel& kernel, const Vector3& direction,
     double normalizedDistance, double derivative, const Vector3& meanGradient,
     const Vector3& birthMeanGradient, const std::optional<Vector3>& birthGradient, Random& rng);

@@ -12,7 +12,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 
-from . import FORMAT_VERSION, KERNEL
+from . import FORMAT_VERSION, KERNEL, validate_kernel
 from .collect import digest, write_json
 
 SPLITS = {"train": 0, "validation": 1, "test": 2}
@@ -26,9 +26,11 @@ def _rows(path):
 
 def prepare(manifest_path: Path, output: Path) -> dict:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema_version") != FORMAT_VERSION or manifest.get("kernel") != KERNEL:
-        raise ValueError("dataset must declare the unit-decay Matern-3/2 convention")
-    packed = {"format_version": FORMAT_VERSION, "kernel": KERNEL, "feature_names": list(FEATURES),
+    if manifest.get("schema_version") != FORMAT_VERSION:
+        raise ValueError("unsupported dataset schema")
+    convention = validate_kernel(manifest.get("kernel"))
+    expected_sampler = "matern32_state_space" if convention == KERNEL else "conditioned_grid_circulant"
+    packed = {"format_version": FORMAT_VERSION, "kernel": convention, "feature_names": list(FEATURES),
               "manifest_sha256": digest(manifest_path)}
     features, offsets, initial, horizons = [], [0], [], []
     scene_ids, split_ids, profile_keys, provenance = [], [], [], []
@@ -51,9 +53,9 @@ def prepare(manifest_path: Path, output: Path) -> dict:
         config_path = directory / "resolved_first_passage_config.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))["first_passage"]
         kernels = {k["id"]: k for k in config["kernels"]}
-        if any(k.get("parameterization") != "unit_decay" or k["type"] != "matern_3_2"
+        if not kernels or any(k.get("parameterization") != convention["parameterization"] or k["type"] != convention["type"]
                for k in kernels.values()):
-            raise ValueError("legacy or non-Matern-3/2 source; regenerate reference data")
+            raise ValueError("legacy or mismatched kernel source; regenerate reference data")
         mode = config["initial_condition"]["type"]
         if mode not in ("positive_exterior", "collision_state"):
             raise ValueError("only Renewal A/B start conditions are supported")
@@ -97,8 +99,8 @@ def prepare(manifest_path: Path, output: Path) -> dict:
         for row in _rows(directory / "first_passage_samples.csv"):
             if row["training_resolution"] != "1":
                 continue
-            if row["sampler_type"] != "matern32_state_space":
-                raise ValueError("reference labels require exact state transitions")
+            if row["sampler_type"] != expected_sampler:
+                raise ValueError("reference sampler does not match the declared kernel")
             key = (row["kernel_id"], row["state_id"])
             p = mapping[key]
             if not math.isclose(float(row["base_step"]), min(config["grid"]["step_sizes"]), rel_tol=1e-10):
@@ -181,7 +183,7 @@ def prepare(manifest_path: Path, output: Path) -> dict:
                          "hits": int(packed["hit"][mask].sum())}
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(packed, output)
-    report = {"counts": counts, "kernel": KERNEL, "finest_resolution_counts": dict(resolution_counts),
+    report = {"counts": counts, "kernel": convention, "finest_resolution_counts": dict(resolution_counts),
               "segments": len(features), "manifest_sha256": packed["manifest_sha256"],
               "dataset_sha256": digest(output)}
     write_json(output.with_suffix(".json"), report)
@@ -190,8 +192,9 @@ def prepare(manifest_path: Path, output: Path) -> dict:
 
 def load_data(path: Path) -> dict:
     data = torch.load(path, map_location="cpu", weights_only=True)
-    if data.get("format_version") != FORMAT_VERSION or data.get("kernel") != KERNEL:
-        raise ValueError("unsupported dataset format or kernel convention")
+    if data.get("format_version") != FORMAT_VERSION:
+        raise ValueError("unsupported dataset format")
+    validate_kernel(data.get("kernel"))
     return data
 
 

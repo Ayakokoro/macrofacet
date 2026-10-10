@@ -9,7 +9,7 @@ import time
 import torch
 from torch.utils.data import DataLoader
 
-from . import FORMAT_VERSION, KERNEL
+from . import FORMAT_VERSION, validate_kernel
 from .collect import digest, resolve, write_json
 from .data import SequenceDataset, collate, load_data, to_device
 from .evaluate import likelihood, evaluate
@@ -32,6 +32,8 @@ def train(config_path: Path, resume: bool = False):
     dataset_path = resolve(config["dataset"])
     dataset_hash = digest(dataset_path)
     data = load_data(dataset_path)
+    if "kernel" in config and validate_kernel(config["kernel"]) != data["kernel"]:
+        raise ValueError("training kernel differs from dataset kernel")
     output = resolve(config["output_directory"])
     output.mkdir(parents=True, exist_ok=True)
     if (output / "last.pt").exists() and not resume:
@@ -94,7 +96,7 @@ def train(config_path: Path, resume: bool = False):
         entry = {"epoch": epoch, "train_joint_nll": total/count, "validation": metrics,
                  "seconds": time.perf_counter()-began, "best": improved}
         history.append(entry)
-        bundle = {"format_version": FORMAT_VERSION, "kernel": KERNEL, "model_config": model.configuration(),
+        bundle = {"format_version": FORMAT_VERSION, "kernel": data["kernel"], "model_config": model.configuration(),
                   "model_state": model.state_dict(), "epoch": epoch, "dataset_sha256": dataset_hash,
                   "training_config": config, "validation": metrics}
         if improved:

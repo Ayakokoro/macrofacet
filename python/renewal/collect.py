@@ -9,7 +9,7 @@ import subprocess
 
 import numpy as np
 
-from . import FORMAT_VERSION, KERNEL
+from . import FORMAT_VERSION, KERNEL, validate_kernel
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -104,6 +104,7 @@ def collect(config_path: Path) -> Path:
     settings = json.loads(config_path.read_text(encoding="utf-8"))
     if settings.get("schema_version") != FORMAT_VERSION:
         raise ValueError("unsupported collection schema")
+    kernel = validate_kernel(settings.get("kernel", KERNEL))
     executable = resolve(settings["executable"])
     if not executable.is_file():
         raise FileNotFoundError(executable)
@@ -118,7 +119,7 @@ def collect(config_path: Path) -> Path:
         raise ValueError("profiles_per_mode_per_scene must be divisible by horizon count")
     if any(float(x) <= 0 for x in horizons) or settings["realizations_per_profile"] < 1:
         raise ValueError("positive horizons and realization counts are required")
-    manifest = {"schema_version": FORMAT_VERSION, "kernel": KERNEL, "sources": [],
+    manifest = {"schema_version": FORMAT_VERSION, "kernel": kernel, "sources": [],
                 "collection_config_sha256": digest(saved), "generator_sha256": digest(executable)}
     families = settings["families"]
     scene_index = 0
@@ -172,7 +173,7 @@ def collect(config_path: Path) -> Path:
                                               "minimum_step": settings["minimum_step"],
                                               "crossing_tolerance": 1e-9, "bridge_sigma_margin": 6,
                                               "max_refinement_depth": 16},
-                                  "kernels": [{"id": "matern32", **KERNEL,
+                                  "kernels": [{"id": "matern32" if kernel == KERNEL else "se", **kernel,
                                                "variance": sigma * sigma, "length_scale": ell}]}}
                     source_path = run / "input.json"
                     write_json(source_path, source)
