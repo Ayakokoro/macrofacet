@@ -402,6 +402,45 @@ void testFirstPassage(TestContext& context) {
     const auto serialRows = readTable(endpointSerial.outputDirectory / "fixed_endpoint_samples.csv");
     context.require(serialRows.second == endpointRows.second, "fixed endpoint proposals are reproducible across worker counts");
 
+    // An exterior bridge fixes only its endpoint. Its random entry must be
+    // positive to contribute; pinning it to zero would sample another law.
+    auto exteriorRoot = endpointRoot;
+    exteriorRoot["first_passage"]["initial_condition"]["type"] = "positive_exterior";
+    exteriorRoot["first_passage"]["initial_condition"]["rays"][0].erase("gradient");
+    exteriorRoot["output_directory"] = (directory / "endpoint_exterior").string();
+    { std::ofstream output(collisionInput); output << exteriorRoot; }
+    const auto exteriorEndpoint = loadFirstPassageExperimentConfig(collisionInput);
+    runFirstPassageExperiment(exteriorEndpoint);
+    const auto exteriorRows = readTable(exteriorEndpoint.outputDirectory / "fixed_endpoint_samples.csv");
+    std::size_t nonpositiveStarts=0, positiveWeights=0;
+    for (const auto& row : exteriorRows.second) {
+        const auto number = [&](const std::string& field) { return std::stod(row.at(exteriorRows.first.at(field))); };
+        context.near(number("endpoint_value"),0.,1e-13,"exterior bridge pins the target");
+        if (number("start_value")<=0.) {
+            ++nonpositiveStarts;
+            context.near(number("flux_weight_q"),0.,0.,"exterior bridge rejects nonpositive entries");
+        }
+        if (number("flux_weight_q")>0.) {
+            ++positiveWeights;
+            context.require(number("start_value")>0. && number("endpoint_slope")<0.,
+                            "exterior first-hit support includes positive start and negative endpoint slope");
+        }
+    }
+    context.require(nonpositiveStarts>0 && positiveWeights>0,"exterior bridge retains random positive and negative entry proposals");
+    const auto exteriorSummary = readTable(exteriorEndpoint.outputDirectory / "fixed_endpoint_summary.csv");
+    for (const auto& row : exteriorSummary.second) {
+        const auto number = [&](const std::string& field) { return std::stod(row.at(exteriorSummary.first.at(field))); };
+        const double sd=number("endpoint_slope_gaussian_stddev");
+        context.near(number("endpoint_slope_mean"),number("endpoint_slope_gaussian_mean"),7.*sd/64.,
+                     "exterior endpoint-only derivative has the analytic Gaussian mean");
+        context.near(number("endpoint_slope_stddev"),sd,.08*sd,
+                     "exterior endpoint-only derivative has the analytic Gaussian variance");
+        context.near(number("initial_positive_probability"),.5,1e-14,"plane entry at mean zero has half positive prior mass");
+        context.near(number("first_passage_density_distance"),number("target_field_density")*number("sigma")*
+                     number("sum_weight_q")/number("proposals")/number("ell")/.5,1e-12,
+                     "exterior first-passage density divides by positive-entry probability");
+    }
+
     // The endpoint conditioner is kernel-independent, also for the kernels
     // whose ordinary affine FPT sampler uses a different backend.
     auto endpointKernels = collisionConfig;

@@ -49,6 +49,80 @@ python -m unittest discover -s python/tests -v
 
 ## 几何采集与参考数据
 
+### point_linear 输入与精确分段增强
+
+在已有数据上运行新的 h16 实验：
+
+```powershell
+python python/renewal_cli.py train --config python/configs/renewal_se_train_h16_point_linear_aug.json
+python python/renewal_cli.py train --config python/configs/renewal_matern32_train_h16_point_linear_aug.json
+```
+
+两份配置分别使用原有 SE / Matérn 数据，输出到独立的 `*_point_linear_aug_v1`
+模型目录。轮次、网络和优化器沿用原 h16 设置。新增配置项为：
+
+```json
+"profile_mode": "point_linear",
+"augmentation": {"subdivision_factors": [1, 2, 4, 8, 16]}
+```
+
+SE 的 64 轮实验使用独立配置和输出目录：
+
+```powershell
+python python/renewal_cli.py train --config python/configs/renewal_se_train_h16_point_linear_aug64.json
+```
+
+该配置设定 `epochs=64`、`patience=64`，完整跑完 64 轮，按验证集联合 NLL 保存
+`best.pt`，输出到 `outputs/models/renewal_se_h16_point_linear_aug64_v1`。
+学习率保持 `3e-4`，其余设置与 16 轮增强配置相同；中断后使用同一命令加 `--resume`。
+
+`point_linear` 在数据加载后把每个已存储段转换为起点切线，特征为
+`[b0, b0+dx_db0, dx_db0, dx_db0, log_dx]`。保留原分段边界，下一段仍从原场的
+起点值出发，因此段间可能有均值跳变。它复用已保存的单侧导数，不重新查询 VDB；
+原三次采集器的分段与渲染器按最大步长推进的分段可能不同，不能宣称整条序列完全一致。
+距离、穿越速度和删失标签仍来自原完整场 GP，线性化是网络输入近似。
+
+随后每轮为训练集的每个原始段，从 `subdivision_factors` 中等概率独立选择一个整数，
+将该段精确等分。先线性化、后细分；新子段沿原切线取值，不重新用场值构造切线。
+`cubic` 输入也支持精确限制原三次多项式。细分保留均值、导数和原段边界，重新定位
+命中段与段内坐标；不修改距离、速度、A/B 条件或命中／删失比例。
+恰在子段边界的事件归属左段 `u=1`，删失样本覆盖全部剖面。
+
+同一剖面的所有随机实现每轮共享分段。分段使用独立、按种子与轮次重建的随机流，
+不依赖轨迹命中位置、加载顺序或模型随机数；恢复训练可复现。每轮缓存访问过的完整
+增强剖面，避免重复细分，但送入网络的仍只包含到命中／删失点的前缀。
+验证与测试使用同样的 `profile_mode`，不做随机增强。checkpoint、评估指标和导出
+记录输入模式；独立 `evaluate` 自动读取 checkpoint 的模式。
+
+省略配置时保持 `cubic` 和无增强；`subdivision_factors: [1]` 可关闭增强。
+旧数据与旧 checkpoint 可继续使用。修改输入或增强配置需要新输出目录，不能用
+`--resume` 改写旧实验的训练配置。可运行
+`python -m unittest discover -s python/tests -v` 检查多项式保持、事件重定位和恢复一致性。
+
+2026-10-12 的 SE h16 实验完整训练了 64 轮，耗时约 122 分钟，按验证集选中第 58 轮。
+学习率固定为 `3e-4`，训练种子为 `20261008`。下面统一使用 `point_linear` 输入评估；
+16／32／64 轮列分别是同一次运行在相应轮次的最佳权重快照，实际选中第 15／28／58 轮。
+旧模型训练时使用 cubic、未使用细分增强，因此旧模型与新配置的差异包含多个因素。
+
+| 指标（越小越好） | 旧模型 | 增强 16 轮 | 增强 32 轮 | 增强 64 轮 |
+| --- | ---: | ---: | ---: | ---: |
+| 测试集联合 NLL | 0.8781 | 0.9543 | 0.9176 | 0.8656 |
+| 8 倍精确细分：平均每剖面最大透射率变化 | 0.1801 | 0.0557 | 0.0658 | 0.0341 |
+| 相机射线：平均每射线最大透射率误差 | 0.2097 | 0.0285 | 0.0305 | 0.0405 |
+| 碰撞后射线：平均每射线最大透射率误差 | 0.1306 | 0.0426 | 0.0331 | 0.0453 |
+
+细分诊断取每第八条验证剖面，共 216 条；射线误差复用 sigma `0.05` 下固定的 16 条
+相机射线、10 条碰撞后射线及 GP 参考，不代表整帧误差。64 轮改善了似然和分段稳定性，
+所测射线误差没有随轮次单调下降。测试集和这些射线均不参与 checkpoint 选择。
+这是单个训练种子的结果；下一步需要补充实际射线的输入覆盖：所测 16 条 A 射线的
+起点均值全部超出原训练范围，10 条 B 射线中有 2 条的向外导数超出训练范围。
+
+最终模型为 `outputs/models/renewal_se_h16_point_linear_aug64_v1/renewal_model.json`。
+中心相机射线的 533 个段、4097 个查询通过 Python／C++ CUDA 对照，透射率最大绝对差
+约 `5.04e-8`。完整指标见 [实验报告](../outputs/models/renewal_se_h16_point_linear_aug64_v1/run_report.json)，
+逐轮曲线数据、各阶段权重、射线 CSV 和输入覆盖审计保存在
+`outputs/renewal_se_point_linear_aug64_20261012`。
+
 ### SE 核、16 维隐藏状态
 
 从仓库根目录运行：

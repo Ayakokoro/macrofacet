@@ -14,6 +14,7 @@ from .collect import digest, resolve, write_json
 from .data import SequenceDataset, collate, load_data, to_device
 from .evaluate import likelihood, evaluate
 from .model import ModelConfig, RenewalNetwork
+from .profiles import with_profile_mode
 
 
 def train(config_path: Path, resume: bool = False):
@@ -31,9 +32,14 @@ def train(config_path: Path, resume: bool = False):
     torch.backends.cudnn.benchmark = False
     dataset_path = resolve(config["dataset"])
     dataset_hash = digest(dataset_path)
-    data = load_data(dataset_path)
+    data = with_profile_mode(load_data(dataset_path), config.get("profile_mode", "cubic"))
     if "kernel" in config and validate_kernel(config["kernel"]) != data["kernel"]:
         raise ValueError("training kernel differs from dataset kernel")
+    augmentation = config.get("augmentation", {})
+    if not isinstance(augmentation, dict) or set(augmentation) - {"subdivision_factors"}:
+        raise ValueError("augmentation supports only subdivision_factors")
+    train_set = SequenceDataset(data, "train",
+        subdivision_factors=augmentation.get("subdivision_factors", [1]), seed=config["seed"])
     output = resolve(config["output_directory"])
     output.mkdir(parents=True, exist_ok=True)
     if (output / "last.pt").exists() and not resume:
@@ -41,7 +47,6 @@ def train(config_path: Path, resume: bool = False):
     model = RenewalNetwork(ModelConfig(**config.get("model", {}))).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"],
                                   weight_decay=config["weight_decay"])
-    train_set = SequenceDataset(data, "train")
     validation = DataLoader(SequenceDataset(data, "validation"), batch_size=config["batch_size"],
                             collate_fn=collate, num_workers=0)
     start_epoch, best, stale, history = 1, math.inf, 0, []
@@ -60,12 +65,15 @@ def train(config_path: Path, resume: bool = False):
     write_json(output / "training_config.json", config)
     write_json(output / "environment.json", {"torch": str(torch.__version__), "device": device,
         "device_name": torch.cuda.get_device_name(torch.device(device)) if device.startswith("cuda") else "CPU",
-        "parameter_count": sum(p.numel() for p in model.parameters()), "dataset_sha256": dataset_hash})
+        "parameter_count": sum(p.numel() for p in model.parameters()), "dataset_sha256": dataset_hash,
+        "profile_mode": data.get("profile_mode", "cubic"),
+        "subdivision_factors": list(train_set.subdivision_factors)})
     for epoch in range(start_epoch, config["epochs"]+1):
         began = time.perf_counter()
         # Epoch-specific streams make resume independent of checkpoint timing.
         torch.manual_seed(config["seed"]+epoch)
         generator = torch.Generator().manual_seed(config["seed"]+epoch)
+        train_set.set_epoch(epoch)
         loader = DataLoader(train_set, batch_size=config["batch_size"], shuffle=True,
                             generator=generator, collate_fn=collate, num_workers=0)
         model.train()
@@ -98,7 +106,8 @@ def train(config_path: Path, resume: bool = False):
         history.append(entry)
         bundle = {"format_version": FORMAT_VERSION, "kernel": data["kernel"], "model_config": model.configuration(),
                   "model_state": model.state_dict(), "epoch": epoch, "dataset_sha256": dataset_hash,
-                  "training_config": config, "validation": metrics}
+                  "training_config": config, "validation": metrics,
+                  "profile_mode": data.get("profile_mode", "cubic")}
         if improved:
             torch.save(bundle, output / "best.pt")
         torch.save({**bundle, "optimizer_state": optimizer.state_dict(), "best_validation": best,

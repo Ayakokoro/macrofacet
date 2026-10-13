@@ -14,6 +14,7 @@ from torch.utils.data import Dataset
 
 from . import FORMAT_VERSION, KERNEL, validate_kernel
 from .collect import digest, write_json
+from .profiles import subdivide_features, validate_subdivision_factors
 
 SPLITS = {"train": 0, "validation": 1, "test": 2}
 FEATURES = ("b0", "b1", "dx_db0", "dx_db1", "log_dx")
@@ -199,9 +200,37 @@ def load_data(path: Path) -> dict:
 
 
 class SequenceDataset(Dataset):
-    def __init__(self, data: dict, split: str):
+    def __init__(self, data: dict, split: str, *, subdivision_factors=(1,), seed=0):
         self.data = data
         self.indices = torch.where(data["split"][data["sample_profile"]] == SPLITS[split])[0].tolist()
+        self.subdivision_factors = validate_subdivision_factors(subdivision_factors)
+        self.augmented = self.subdivision_factors != (1,)
+        if self.augmented and split != "train":
+            raise ValueError("random subdivision is only available for the train split")
+        self.seed = seed
+        self._cache = {}
+        self._counts = None
+        if self.augmented:
+            self._segment_mask = torch.repeat_interleave(data["split"] == SPLITS[split],
+                data["offsets"][1:] - data["offsets"][:-1])
+        self.set_epoch(0)
+
+    def set_epoch(self, epoch: int):
+        """A private RNG makes partitions independent of shuffle/access order.
+
+        Every realization of a profile sees the same partition in an epoch;
+        hit distances never influence the random choices. The cache bounds
+        repeated work to one subdivision per visited profile and epoch.
+        """
+        if type(epoch) is not int or epoch < 0:
+            raise ValueError("epoch must be a nonnegative integer")
+        self._cache.clear()
+        if self.augmented:
+            generator = torch.Generator().manual_seed(self.seed + epoch)
+            choices = torch.randint(len(self.subdivision_factors),
+                (int(self._segment_mask.sum()),), generator=generator)
+            self._counts = torch.ones(len(self.data["features"]), dtype=torch.long)
+            self._counts[self._segment_mask] = torch.tensor(self.subdivision_factors)[choices]
 
     def __len__(self):
         return len(self.indices)
@@ -211,8 +240,35 @@ class SequenceDataset(Dataset):
         p = int(d["sample_profile"][index])
         begin = int(d["offsets"][p])
         length = int(d["end_segment"][index]) + 1
-        return {"features": d["features"][begin:begin+length], "initial": d["initial"][p],
-                "hit": d["hit"][index], "speed": d["speed"][index], "u": d["end_u"][index],
+        features, u = d["features"][begin:begin+length], d["end_u"][index]
+        if self.augmented:
+            if p not in self._cache:
+                end = int(d["offsets"][p+1])
+                original = d["features"][begin:end]
+                counts = self._counts[begin:end]
+                dx = original[:, 4].exp()
+                starts = torch.cat((dx.new_zeros(1), dx.cumsum(0)[:-1]))
+                self._cache[p] = (subdivide_features(original, counts), counts.cumsum(0), dx, starts)
+            pieces, offsets, dx, starts = self._cache[p]
+            last = length - 1
+            n = int(self._counts[begin+last])
+            # Recover the local coordinate from the float64 event distance,
+            # avoiding amplification of the legacy float32 end_u rounding.
+            scaled = ((d["distance"][index] - starts[last]) / dx[last]).clamp(0, 1) * n
+            # Arithmetic at an exact subdivision boundary must keep the event
+            # in the left segment (u=1), matching prepare's bisect_left rule.
+            nearest = scaled.round()
+            tolerance = 8 * torch.finfo(dx.dtype).eps * n * (
+                1 + (d["distance"][index].abs() + starts[last].abs()) / dx[last])
+            if abs(scaled - nearest) <= tolerance:
+                scaled = nearest
+            if not d["hit"][index]:
+                scaled = scaled.new_tensor(n)  # exact censoring endpoint
+            child = max(0, min(n - 1, math.ceil(float(scaled)) - 1))
+            before = int(offsets[last-1]) if last else 0
+            features, u = pieces[:before+child+1], scaled - child
+        return {"features": features, "initial": d["initial"][p],
+                "hit": d["hit"][index], "speed": d["speed"][index], "u": u,
                 "profile": torch.tensor(p)}
 
 

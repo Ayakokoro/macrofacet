@@ -20,6 +20,8 @@ def export_model(checkpoint: Path, output: Path, *, hazard_only: bool = False):
               "feature_transform": "asinh_first_four_log_dx_identity",
               "initial_transform": "asinh_mode_b0_known_z0_known_d0",
               "checkpoint_sha256": digest(checkpoint), "selected_epoch": bundle.get("epoch"),
+              "training_profile_mode": bundle.get("profile_mode", "cubic"),
+              "training_augmentation": bundle.get("training_config", {}).get("augmentation", {}),
               "model_config": model.configuration(), "weights": weights}
     if not hazard_only:
         result["mixture_convention"] = "positive_truncated_components_residual_mean"

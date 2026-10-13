@@ -183,11 +183,12 @@ public:
     std::size_t embeddingSize() const { return embeddingSize_; }
     double minimumEigenvalue() const { return minimumEigenvalue_; }
 
-    void prepareFixedEndpoint(std::size_t index) {
+    void prepareFixedEndpoint(std::size_t index, bool conditionStart = true) {
         if (index < 2 || index + 1 >= sampleCount_) {
             throw std::invalid_argument("fixed endpoint requires at least two intervals and a residual ghost node");
         }
         endpointIndex_ = index;
+        conditionStart_ = conditionStart;
         endpointVariance_ = startConditionedCovariance(index, index);
         if (!std::isfinite(endpointVariance_) || endpointVariance_ <=
             256.0 * std::numeric_limits<double>::epsilon() * kernel_.config().variance) {
@@ -198,7 +199,7 @@ public:
         for (std::size_t i = 0; i < sampleCount_; ++i) {
             endpointRatios_[i] = startConditionedCovariance(i, index) / endpointVariance_;
         }
-        endpointRatios_[0] = 0.0;
+        if (conditionStart_) endpointRatios_[0] = 0.0;
         endpointRatios_[index] = 1.0;
         negativeGhostRatio_ = startConditionedCovariance(embeddingSize_ - 1, index) / endpointVariance_;
     }
@@ -207,6 +208,7 @@ public:
 
     double startConditionedMean(std::size_t index, double initialValue,
                                  double initialDerivative) const {
+        if (!conditionStart_) return 0.0;
         return circulantCovariance(index, 0) / kernel_.config().variance * initialValue +
                birthDerivativeCovariance(index) / birthDerivativeVariance() * initialDerivative;
     }
@@ -233,6 +235,20 @@ public:
     std::vector<double> sampleConditionedEndpoint(Random& rng, double initialValue,
         double initialDerivative, double endpointValue, double& birthSlopeError) {
         if (endpointRatios_.empty()) throw std::logic_error("fixed endpoint conditioner was not prepared");
+        if (!conditionStart_) {
+            // Exterior proposal: condition only F(t*)=0, then include F(0)>0
+            // in the path-survival test. Conditioning a truncated birth draw
+            // afterwards would require additional endpoint-density weights.
+            drawZeroMean(rng);
+            const double innovation = endpointValue - time_[endpointIndex_].real();
+            std::vector<double> result(sampleCount_);
+            for (std::size_t i = 0; i < sampleCount_; ++i)
+                result[i] = time_[i].real() + endpointRatios_[i] * innovation;
+            const double negativeGhost = time_[embeddingSize_-1].real() + negativeGhostRatio_ * innovation;
+            birthSlopeError = (result[1]-negativeGhost)/(2.0*step_); // free birth residual slope
+            result[endpointIndex_] = endpointValue;
+            return result;
+        }
         auto result = sampleConditionedValueDerivative(rng, initialValue, initialDerivative);
         const double derivativeDraw = (time_[1].real() - time_[embeddingSize_ - 1].real()) / (2.0 * step_);
         const auto negative = embeddingSize_ - 1;
@@ -260,6 +276,7 @@ private:
     }
 
     double startConditionedCovariance(std::size_t first, std::size_t second) const {
+        if (!conditionStart_) return circulantCovariance(first, second);
         return circulantCovariance(first, second) -
             circulantCovariance(first, 0) * circulantCovariance(second, 0) / kernel_.config().variance -
             birthDerivativeCovariance(first) * birthDerivativeCovariance(second) / birthDerivativeVariance();
@@ -301,6 +318,7 @@ private:
     std::vector<double> squareRoots_;
     std::vector<std::complex<double>> time_;
     std::size_t endpointIndex_ = 0;
+    bool conditionStart_ = true;
     double endpointVariance_ = 0.0;
     double negativeGhostRatio_ = 0.0;
     std::vector<double> endpointRatios_;
@@ -1182,9 +1200,9 @@ void validateFixedEndpoints(const FirstPassageExperimentConfig& config) {
     const auto& fixed = config.fixedEndpoint;
     if (fixed.only && !fixed.enabled) throw std::invalid_argument("fixed_endpoint.only requires enabled=true");
     if (!fixed.enabled) return;
-    if (config.initialConditionType != "collision_state" || fixed.distances.empty() ||
+    if ((config.initialConditionType != "collision_state" && config.initialConditionType != "positive_exterior") || fixed.distances.empty() ||
         fixed.trajectories < 0) {
-        throw std::invalid_argument("fixed_endpoint requires collision_state, nonempty distances and trajectories>=0");
+        throw std::invalid_argument("fixed_endpoint requires collision_state or positive_exterior, nonempty distances and trajectories>=0");
     }
     for (double distance : fixed.distances) {
         requirePositive(distance, "fixed_endpoint.distances");
@@ -1644,9 +1662,13 @@ void writeResolvedFirstPassageConfig(const FirstPassageExperimentConfig& config,
             {"trajectories", config.fixedEndpoint.trajectories},
             {"effective_trajectories", config.fixedEndpoint.trajectories > 0
                 ? config.fixedEndpoint.trajectories : config.trajectories},
-            {"sampler", "start_and_endpoint_conditioned_grid_circulant"},
+            {"sampler", config.initialConditionType == "positive_exterior"
+                ? "endpoint_conditioned_grid_circulant_positive_start_selection"
+                : "start_and_endpoint_conditioned_grid_circulant"},
             {"endpoint_value", 0.0}, {"derivative_condition", "central_difference_residual"},
-            {"survival_test", "cellwise_cubic_open_interval_positivity"},
+            {"survival_test", config.initialConditionType == "positive_exterior"
+                ? "positive_start_and_cellwise_cubic_open_interval_positivity"
+                : "cellwise_cubic_open_interval_positivity"},
             {"histogram_weight", "survived_to_endpoint * max(0,-endpoint_derivative)"}};
     }
     if (config.processMeanField) {
@@ -1916,7 +1938,8 @@ struct FixedEndpointSample {
 
 FixedEndpointSample sampleFixedEndpoint(CirculantSampler& sampler,
     const FirstPassageCollisionState& state, const std::vector<MeanProfileSegment>& profile,
-    std::size_t endpointIndex, double step, double endpointResidual, std::uint64_t seed) {
+    std::size_t endpointIndex, double step, double endpointResidual, std::uint64_t seed,
+    bool exterior) {
     FixedEndpointSample sample;
     sample.seed = seed;
     Random rng(seed);
@@ -1927,20 +1950,26 @@ FixedEndpointSample sampleFixedEndpoint(CirculantSampler& sampler,
     const auto& last = profile.back();
     sample.slope = (residual[endpointIndex + 1] - residual[endpointIndex - 1]) / (2.0 * step) +
         last.mean.derivative(1.0) / (last.qEnd - last.qBegin);
+    const double initialResidualSlope = exterior ? sample.birthSlopeError
+        : state.betaCollisionSlope - state.betaMeanSlope;
+    if (exterior) {
+        sample.birthSlopeError = 0.0; // no prescribed birth derivative
+        if (!(sample.startValue > 0.0)) { sample.survived = false; return sample; }
+    }
     for (std::size_t j = 0; j < profile.size(); ++j) {
         const auto& segment = profile[j];
         const auto i = segment.gridIndex;
-        const double slope0 = i == 0 ? state.betaCollisionSlope - state.betaMeanSlope
+        const double slope0 = i == 0 ? initialResidualSlope
             : (residual[i + 1] - residual[i - 1]) / (2.0 * step);
         const double slope1 = (residual[i + 2] - residual[i]) / (2.0 * step);
         const auto stochastic = hermitePolynomial(residual[i], slope0,
             residual[i + 1], slope1, step);
         const double width = segment.qEnd - segment.qBegin;
-        const double value0 = j == 0 ? 0.0
+        const double value0 = j == 0 ? sample.startValue
             : stochastic.value(segment.fractionBegin) + segment.mean.value(0.0);
         const double value1 = j + 1 == profile.size() ? 0.0
             : stochastic.value(segment.fractionEnd) + segment.mean.value(1.0);
-        const double derivative0 = j == 0 ? state.betaCollisionSlope
+        const double derivative0 = j == 0 ? initialResidualSlope + state.betaMeanSlope
             : stochastic.derivative(segment.fractionBegin) / step + segment.mean.derivative(0.0) / width;
         const double derivative1 = stochastic.derivative(segment.fractionEnd) / step +
             segment.mean.derivative(1.0) / width;
@@ -1949,7 +1978,7 @@ FixedEndpointSample sampleFixedEndpoint(CirculantSampler& sampler,
         // minimum. Exclude only the two prescribed zero endpoints, never a
         // small distance neighborhood; this rejects hidden early crossings.
         for (double fraction : hermiteKnots(total)) {
-            if ((j == 0 && fraction == 0.0) ||
+            if ((!exterior && j == 0 && fraction == 0.0) ||
                 (j + 1 == profile.size() && fraction == 1.0)) continue;
             const double value = fraction == 0.0 ? value0
                 : fraction == 1.0 ? value1 : total.value(fraction);
@@ -1963,6 +1992,7 @@ FixedEndpointSample sampleFixedEndpoint(CirculantSampler& sampler,
 }
 
 void runFixedEndpointSampling(const FirstPassageExperimentConfig& config) {
+    const bool exterior = config.initialConditionType == "positive_exterior";
     const int count = config.fixedEndpoint.trajectories > 0
         ? config.fixedEndpoint.trajectories : config.trajectories;
     auto samplesOutput = openOutput(config.outputDirectory / "fixed_endpoint_samples.csv");
@@ -1978,7 +2008,7 @@ void runFixedEndpointSampling(const FirstPassageExperimentConfig& config) {
         "endpoint_slope_mean,endpoint_slope_stddev,endpoint_slope_gaussian_mean,"
         "endpoint_slope_gaussian_stddev,target_field_density,first_passage_density_q,"
         "first_passage_density_distance,max_start_value_error,max_endpoint_value_error,"
-        "max_birth_slope_error,status\n";
+        "max_birth_slope_error,status,start_condition,initial_positive_probability\n";
     const double fineStep = *std::min_element(config.stepSizes.begin(), config.stepSizes.end());
     for (std::size_t k = 0; k < config.kernels.size(); ++k) {
         const auto& kernel = config.kernels[k];
@@ -1998,7 +2028,7 @@ void runFixedEndpointSampling(const FirstPassageExperimentConfig& config) {
                     const auto profile = prepareMeanProfile(targetConfig, kernel, state, step, true);
                     const double endpointResidual = -profile.back().mean.value(1.0);
                     CirculantSampler diagnostic(covariance, endpointIndex + 2, step, config.maximumEmbeddingExpansions);
-                    diagnostic.prepareFixedEndpoint(endpointIndex);
+                    diagnostic.prepareFixedEndpoint(endpointIndex, !exterior);
                     const auto gaussian = diagnostic.bridgeSlopeMoments(-state.beta0,
                         state.betaCollisionSlope - state.betaMeanSlope, endpointResidual);
                     const double gaussianMean = gaussian.first + profile.back().mean.derivative(1.0) /
@@ -2007,6 +2037,9 @@ void runFixedEndpointSampling(const FirstPassageExperimentConfig& config) {
                         -state.beta0, state.betaCollisionSlope - state.betaMeanSlope);
                     const double valueStddev = std::sqrt(diagnostic.endpointVariance());
                     const double densityQ = normalPdf((endpointResidual - valueMean) / valueStddev) / valueStddev;
+                    const double startProbability = exterior ? normalCdf(state.beta0) : 1.0;
+                    if (!(startProbability > 0.0))
+                        throw std::runtime_error("positive-exterior start probability underflow");
                     std::vector<FixedEndpointSample> samples(static_cast<std::size_t>(count));
                     unsigned workersCount = config.threadCount > 0 ? config.threadCount : std::thread::hardware_concurrency();
                     workersCount = std::max(1u, std::min(workersCount, static_cast<unsigned>(count)));
@@ -2018,12 +2051,12 @@ void runFixedEndpointSampling(const FirstPassageExperimentConfig& config) {
                         workers.emplace_back([&, worker, begin, end]() {
                             try {
                                 CirculantSampler sampler(covariance, endpointIndex + 2, step, config.maximumEmbeddingExpansions);
-                                sampler.prepareFixedEndpoint(endpointIndex);
+                                sampler.prepareFixedEndpoint(endpointIndex, !exterior);
                                 for (int i = begin; i < end; ++i) {
                                     const auto seed = collisionSeed(config.seed ^ mixSeed(0x656e64706f696e74ULL + d),
                                         k, s, r, static_cast<std::uint64_t>(i));
                                     samples[i] = sampleFixedEndpoint(sampler, state, profile, endpointIndex,
-                                        step, endpointResidual, seed);
+                                        step, endpointResidual, seed, exterior);
                                 }
                             } catch (...) { errors[worker] = std::current_exception(); }
                         });
@@ -2044,7 +2077,7 @@ void runFixedEndpointSampling(const FirstPassageExperimentConfig& config) {
                         weightedSquare += w * item.slope * item.slope;
                         slopeSum += item.slope;
                         slopeSquareSum += item.slope * item.slope;
-                        maxStart = std::max(maxStart, std::abs(item.startValue));
+                        if (!exterior) maxStart = std::max(maxStart, std::abs(item.startValue));
                         maxEnd = std::max(maxEnd, std::abs(item.endpointValue));
                         maxBirth = std::max(maxBirth, std::abs(item.birthSlopeError));
                         samplesOutput << csv(kernel.id) << ',' << kernel.type << ',' << csv(state.id) << ','
@@ -2067,9 +2100,10 @@ void runFixedEndpointSampling(const FirstPassageExperimentConfig& config) {
                         << (weight > 0.0 ? std::sqrt(std::max(0.0, weightedSquare / weight - weightedMean * weightedMean))
                             : std::numeric_limits<double>::quiet_NaN()) << ',' << mean << ','
                         << std::sqrt(std::max(0.0, slopeSquareSum / count - mean * mean)) << ',' << gaussianMean << ','
-                        << gaussian.second << ',' << densityQ / sigma << ',' << densityQ * weight / count << ','
-                        << densityQ * weight / count / kernel.lengthScale << ',' << maxStart << ',' << maxEnd << ','
-                        << maxBirth << ',' << (weight > 0.0 ? "ok" : "no_positive_weight") << '\n';
+                        << gaussian.second << ',' << densityQ / sigma << ',' << densityQ * weight / count / startProbability << ','
+                        << densityQ * weight / count / kernel.lengthScale / startProbability << ',' << maxStart << ',' << maxEnd << ','
+                        << maxBirth << ',' << (weight > 0.0 ? "ok" : "no_positive_weight") << ','
+                        << config.initialConditionType << ',' << startProbability << '\n';
                 }
             }
         }

@@ -2,6 +2,10 @@
 
 本模式估计给定距离发生**首次下降碰撞**时的沿射线斜率分布。不是终点单点条件高斯分布，也不是从普通 FPT 样本中筛选一个距离区间。
 
+也支持 `initial_condition.type: "positive_exterior"` 的相机入射：提案只固定终点 `F(t*)=0`，入口值、导数仍随机；筛选要求 `F(0)>0` 且此前路径保持正值，再乘负斜率通量。不能先采样截断的入口再固定终点而省略相应的重要性权重。
+
+相机入射模式的 `target_field_density` 是未加入口条件的终点场值密度。首达密度为该密度乘平均 survival-flux 权重，再除以 `initial_positive_probability=P(F(0)>0)`；梯度 PDF 只需归一化权重。`start_value` 保留每个提案的随机入口值，`max_start_value_error` 和 `birth_slope_error` 在此模式下为零，表示没有固定的入口等式约束。
+
 ## 运行
 
 ```powershell
@@ -49,7 +53,7 @@ w_i=A_i\max(0,-v_i).
 
 ## C++ 配置
 
-保留原来的 `initial_condition.type: "collision_state"`；支持原 affine beta states 或完整 `process.mean_field` + physical rays。新增：
+`initial_condition.type` 可为 `collision_state` 或 `positive_exterior`；支持原 affine beta states 或完整 `process.mean_field` + physical rays。新增：
 
 ```json
 "fixed_endpoint": {

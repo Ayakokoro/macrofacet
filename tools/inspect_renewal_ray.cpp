@@ -27,8 +27,9 @@ void writeJson(const std::filesystem::path& path,const Json& value) {
 }
 
 int main(int argc,char** argv) {
-    if (argc != 3 && argc != 5) {
-        std::cerr << "usage: macrofacet_inspect_renewal_ray <render-config> <output-directory> [pixel-x pixel-y]\n";
+    const bool afterHit = argc == 6 && std::string(argv[5]) == "--after-first-hit";
+    if (argc != 3 && argc != 5 && !afterHit) {
+        std::cerr << "usage: macrofacet_inspect_renewal_ray <render-config> <output-directory> [pixel-x pixel-y [--after-first-hit]]\n";
         return 2;
     }
     try {
@@ -43,8 +44,8 @@ int main(int argc,char** argv) {
             throw std::invalid_argument("ray inspection requires neural_renewal mode");
         prepareRenewalModel(config);
         prepareNanoVdbField(config);
-        const int px = argc == 5 ? std::stoi(argv[3]) : config.render.width/2;
-        const int py = argc == 5 ? std::stoi(argv[4]) : config.render.height/2;
+        const int px = argc >= 5 ? std::stoi(argv[3]) : config.render.width/2;
+        const int py = argc >= 5 ? std::stoi(argv[4]) : config.render.height/2;
         if (px < 0 || px >= config.render.width || py < 0 || py >= config.render.height)
             throw std::invalid_argument("pixel is outside the render image");
         const std::uint64_t pixel = static_cast<std::uint64_t>(py)*config.render.width+px;
@@ -69,17 +70,62 @@ int main(int argc,char** argv) {
         const std::string kernelType = covarianceKernelTypeName(model.kernelType());
         const std::string parameterization = se ? "unit_length" : "unit_decay";
         const RenewalMedium medium(config.field,model,config.renewal.profileMaximumStep,config.renewal.profileMode);
-        const auto flight = medium.beginFlight(ray);
+        auto flight = medium.beginFlight(ray);
         if (!flight) throw std::runtime_error("selected camera ray has no flight inside the domain");
+        std::optional<RenewalBatchSession> batch;
+        if (config.renewal.resolvedBackend != "scalar")
+            batch.emplace(model,1,config.renewal.resolvedBackend);
+        Json sourceHit;
+        double pathPrefix = domain.entry;
+        if (afterHit) {
+            // Replay sample 0 with the selected inference backend and the same
+            // RNG order as the renderer. Query mixture before advancing again,
+            // so its cached entering state belongs to the hit segment.
+            const double firstOpticalDepth = -std::log(rng.openUniform01());
+            double remaining = firstOpticalDepth;
+            auto firstState = model.initialize(flight->mean.segment(0),flight->start);
+            if (batch) batch->initialize({0},{flight->mean.segment(0)},{flight->start});
+            RenewalSurfaceSample hit;
+            for (std::size_t i = 0; flight->mean.hasSegment(i); ++i) {
+                const auto& segment = flight->mean.segment(i);
+                const auto step = model.evaluate(firstState,segment);
+                const auto rates = batch ? batch->evaluate({0},{segment}).front() : step.rates;
+                const RenewalHazardSegment hazard(segment.begin,segment.end,rates);
+                if (remaining < hazard.cumulative(1)) {
+                    const double coordinate = hazard.inverse(remaining,0,1,
+                        config.numeric.distanceAbsoluteTolerance/flight->ell);
+                    const auto mixture = batch ? batch->mixture({0},{coordinate}).front()
+                                               : model.mixture(firstState,segment,coordinate);
+                    hit = medium.sampleHit(*flight,i,coordinate,mixture,rng);
+                    break;
+                }
+                remaining -= hazard.cumulative(1);
+                firstState = step.nextState;
+            }
+            if (!hit.hit) throw std::invalid_argument("selected camera sample escapes without a first hit");
+            const Vector3 outgoing = normalizedOrThrow(reflectTravelDirection(ray.direction,hit.normal));
+            if (!(outgoing.dot(hit.gradient) > 0))
+                throw std::runtime_error("reflected direction does not leave the sampled surface");
+            sourceHit = {{"position",vectorJson(hit.position)},{"value",0.0},
+                {"gradient",vectorJson(hit.gradient)},{"normal",vectorJson(hit.normal)},
+                {"incoming_direction",vectorJson(ray.direction)},{"outgoing_direction",vectorJson(outgoing)},
+                {"camera_entry_origin",vectorJson(ray.origin)},{"distance_from_camera_entry",hit.distance},
+                {"distance_from_camera",domain.entry+hit.distance},{"speed",hit.speed},
+                {"mean_value",config.field.mean->evaluate(hit.position).value},
+                {"outward_derivative",outgoing.dot(hit.gradient)},
+                {"optical_depth",firstOpticalDepth},{"backend",config.renewal.resolvedBackend}};
+            pathPrefix += hit.distance;
+            ray = {hit.position,outgoing};
+            flight = medium.beginFlight(ray,hit.gradient);
+            if (!flight) throw std::runtime_error("sampled hit has no outgoing flight inside the domain");
+            sourceHit["normalized_outward_derivative"] = flight->ell/flight->sigma*outgoing.dot(hit.gradient);
+        }
         // Query cutoffs never alter the renderer's original neural segments.
         // Leave only a roundoff-sized margin for the independent field preflight.
         const double maxX = flight->mean.maximumX()*(1.0-1e-12);
         const double coarseStep = maxX/std::ceil(maxX*32.0);
         const int bins = 4096;
         const double opticalDepth = -std::log(rng.openUniform01());
-        std::optional<RenewalBatchSession> batch;
-        if (config.renewal.resolvedBackend != "scalar")
-            batch.emplace(model,1,config.renewal.resolvedBackend);
         auto state = model.initialize(flight->mean.segment(0),flight->start);
         if (batch) batch->initialize({0},{flight->mean.segment(0)},{flight->start});
         std::vector<RenewalHazardSegment> hazards,scalarHazards;
@@ -116,7 +162,7 @@ int main(int argc,char** argv) {
                 throw std::runtime_error("invalid/nonmonotone neural transmittance");
             previous = t;
             maxBackendDifference = std::max(maxBackendDifference,std::abs(t-ts));
-            curves << x << ',' << distance << ',' << domain.entry+distance << ',' << t << ',' << ts << ','
+            curves << x << ',' << distance << ',' << pathPrefix+distance << ',' << t << ',' << ts << ','
                    << distribution.cumulativeHazard(distance) << ','
                    << config.field.mean->evaluate(ray.origin+distance*ray.direction).value << ','
                    << flight->sigma*flight->mean.segment(segmentIndex).value(x) << '\n';
@@ -128,9 +174,9 @@ int main(int argc,char** argv) {
             {"height",config.render.height},{"sample_index",0},{"pixel_seed",pixelSeed},
             {"jitter",{jitterX,jitterY}},{"camera_origin",vectorJson(config.render.cameraPosition)},
             {"entry_origin",vectorJson(ray.origin)},{"direction",vectorJson(ray.direction)},
-            {"entry_distance",domain.entry},{"domain_exit_distance",domain.exit},
+            {"entry_distance",pathPrefix},{"domain_exit_distance",afterHit ? pathPrefix+flight->maximumDistance() : domain.exit},
             {"reference_maximum_x",maxX},{"sigma",flight->sigma},{"ell",flight->ell},
-            {"kernel",kernelType+"_"+parameterization},{"start_condition","positive_exterior"},
+            {"kernel",kernelType+"_"+parameterization},{"start_condition",afterHit ? "collision_state" : "positive_exterior"},
             {"profile_mode",config.renewal.profileMode},{"profile_maximum_step",config.renewal.profileMaximumStep},
             {"backend",config.renewal.resolvedBackend},{"checkpoint_sha256",model.checkpointSha256()},
             {"model",source.at("transport").at("renewal").at("model")},{"field",source.at("field")},
@@ -138,6 +184,12 @@ int main(int argc,char** argv) {
             {"replayed_sample_hit",sampled.hit},{"replayed_sample_distance_from_entry",sampled.distance},
             {"optical_depth",opticalDepth},
             {"note","Sample 0 camera ray reproduced from renderer RNG; selected backend replay uses batch size 1, so floating-point rounding may differ from full wavefront batches. Reference uses full trilinear mean; neural uses configured mean approximation."}};
+        if (afterHit) {
+            metadata["source_hit"] = sourceHit;
+            metadata["flight_index"] = 1;
+            metadata["conditioning_scope"] = "F(origin)=0 and full sampled gradient at the first neural hit; no prior-path survival observations. classic_local ignores the birth observation.";
+            metadata["distance_convention"] = "distance_from_entry is distance from the hit; distance_from_camera is total broken-ray path length.";
+        }
         writeJson(output/"ray.json",metadata);
         writeJson(output/"neural_segments.json",segments);
         writeJson(output/"render_config_snapshot.json",source);
@@ -147,7 +199,7 @@ int main(int argc,char** argv) {
             Json reference{{"schema_version",1},{"seed",config.seed+20261009+resolution*104729},
                 {"first_passage",{
                     {"process",{{"mean",0},{"threshold",0},{"mean_field",source.at("field")}}},
-                    {"initial_condition",{{"type","positive_exterior"},{"rays",Json::array({
+                    {"initial_condition",{{"type",afterHit ? "collision_state" : "positive_exterior"},{"rays",Json::array({
                         {{"id","camera_pixel"},{"origin",vectorJson(ray.origin)},{"direction",vectorJson(ray.direction)}}})}}},
                     {"grid",{{"max_time",maxX},{"step_sizes",{step}}}},
                     {"profile",{{"maximum_step",config.renewal.profileMaximumStep}}},
@@ -160,6 +212,8 @@ int main(int argc,char** argv) {
                         {"parameterization",parameterization},{"variance",flight->sigma*flight->sigma},
                         {"length_scale",flight->ell}}})}}},
                 {"output_directory",(output/name).string()}};
+            if (afterHit)
+                reference["first_passage"]["initial_condition"]["rays"][0]["gradient"] = sourceHit.at("gradient");
             writeJson(output/(std::string("reference_")+name+".json"),reference);
         }
         std::cout << metadata.dump(2) << '\n';
