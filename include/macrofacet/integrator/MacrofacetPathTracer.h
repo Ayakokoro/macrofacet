@@ -4,6 +4,7 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/transport/ClassicNullTracking.h"
 #include "macrofacet/transport/RenewalMedium.h"
+#include "macrofacet/transport/FirstHitSEMedium.h"
 #include <algorithm>
 #include <atomic>
 #include <vector>
@@ -20,6 +21,9 @@ struct RenderStatistics {
     std::uint64_t safetyCapTerminations = 0;
     std::uint64_t numericalFailures = 0;
     double accumulatedPathDepth = 0.0;
+    std::uint64_t firstHitFlights = 0, firstHits = 0, firstHitEscapes = 0;
+    std::uint64_t firstHitDomainMisses = 0, firstHitUpcrossings = 0;
+    std::uint64_t classicFlights = 0;
     DdaTrackingDiagnostics tracking;
     RenewalTrackingDiagnostics renewal;
 };
@@ -48,6 +52,12 @@ inline void mergeInto(RenderStatistics& destination, const RenderStatistics& sou
     destination.renewal.maximumMixtureWait = std::max(destination.renewal.maximumMixtureWait,source.renewal.maximumMixtureWait);
     destination.renewal.rayPoolSize = std::max(destination.renewal.rayPoolSize,source.renewal.rayPoolSize);
     destination.paths += source.paths;
+    destination.firstHitFlights += source.firstHitFlights;
+    destination.firstHits += source.firstHits;
+    destination.firstHitEscapes += source.firstHitEscapes;
+    destination.firstHitDomainMisses += source.firstHitDomainMisses;
+    destination.firstHitUpcrossings += source.firstHitUpcrossings;
+    destination.classicFlights += source.classicFlights;
     destination.realCollisions += source.realCollisions;
     destination.escapedPaths += source.escapedPaths;
     destination.rouletteTerminations += source.rouletteTerminations;
@@ -78,12 +88,29 @@ inline void mergeInto(RenderStatistics& destination, const RenderStatistics& sou
         source.tracking.maximumConditionalIntervalMajorant);
 }
 
+struct FirstHitRenderRecord {
+    Ray cameraRay;
+    FirstHitSESurfaceSample first;
+    Spectrum radiance = Spectrum::Zero();
+};
+
+struct RenewalPathState {
+    Ray ray;
+    Vector3 gradient = Vector3::Zero(); // oriented to this continuation's positive side
+    Spectrum throughput = Spectrum::Ones();
+    int depth = 1; // already completed collisions; roulette at these collisions is already applied
+};
+
 struct RenderedImage {
     int width = 0;
     int height = 0;
     std::vector<Spectrum> pixels;
     RenderStatistics statistics;
+    std::vector<FirstHitRenderRecord> firstHitRecords; // pixel-major, sample-minor, optional
 };
+
+Spectrum traceRenewalFromSurface(const RenewalPathState& state, const ExperimentConfig& config,
+    const RenewalMedium& medium, Random& rng, RenderStatistics& statistics);
 
 Spectrum traceCameraPath(const Ray& initialRay,
                          const ExperimentConfig& config, Random& rng,

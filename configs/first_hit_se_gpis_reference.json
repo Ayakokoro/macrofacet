@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "seed": 20261014,
+  "first_passage": {
+    "initial_condition": {
+      "type": "unconditioned_first_zero",
+      "profiles": [
+        {"id": "flat", "beta_0": 0.0, "beta_a": 0.0},
+        {"id": "entering", "beta_0": 1.0, "beta_a": -0.5}
+      ]
+    },
+    "grid": {"max_time": 4.03},
+    "profile": {"maximum_step": 0.25},
+    "curve": {"bins": 128},
+    "monte_carlo": {"trajectories": 4096, "thread_count": 4, "write_raw_samples": true},
+    "sampler": {
+      "type": "gpis_function_space",
+      "history_points": 1,
+      "batch_size": 8,
+      "step_size": 0.015625,
+      "rank_tolerance": 1e-10,
+      "crossing_rule": "tungsten_linear"
+    },
+    "kernels": [
+      {"id": "se", "type": "squared_exponential", "parameterization": "unit_length", "variance": 1.0, "length_scale": 1.0}
+    ]
+  },
+  "output_directory": "outputs/first_hit_se_gpis_linear_reference_h1_b8_dq64"
+}

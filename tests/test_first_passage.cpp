@@ -468,5 +468,34 @@ void testFirstPassage(TestContext& context) {
     try { (void)loadFirstPassageExperimentConfig(collisionInput); }
     catch (const std::invalid_argument&) { endpointRejected = true; }
     context.require(endpointRejected, "off-grid endpoint distances are rejected instead of silently rounded");
+    auto zeroRoot = root;
+    zeroRoot["first_passage"] = {
+        {"initial_condition",{{"type","unconditioned_first_zero"},{"profiles",{
+            {{"id","symmetric"},{"beta_0",0.0},{"beta_a",0.0}}}}}},
+        {"grid",{{"max_time",1.0},{"step_sizes",{1.0/64}}}},
+        {"monte_carlo",{{"trajectories",4096},{"thread_count",4}}},
+        {"kernels",{{{"id","se"},{"type","squared_exponential"},{"parameterization","unit_length"},
+                     {"variance",1.0},{"length_scale",1.0}}}}};
+    zeroRoot["output_directory"]=(directory/"first_zero").string();
+    { std::ofstream output(collisionInput); output << zeroRoot; }
+    const auto firstZero=loadFirstPassageExperimentConfig(collisionInput);
+    runFirstPassageExperiment(firstZero);
+    const auto zeroRows=readTable(firstZero.outputDirectory/"first_passage_samples.csv");
+    int positive=0,negative=0,up=0,down=0;
+    for (const auto& row:zeroRows.second) {
+        const auto number=[&](const std::string& key) { return std::stod(row.at(zeroRows.first.at(key))); };
+        const int sign=static_cast<int>(number("initial_sign"));
+        if (sign>0) ++positive; else ++negative;
+        context.require(number("event_q")>0,"unconditioned first zero has no entry atom");
+        if (number("event")) {
+            const double derivative=number("crossing_derivative");
+            context.require(sign*derivative<0,"first-zero crossing opposes its entry sign");
+            context.near(-sign*derivative,number("crossing_slope"),1e-12,"signed first-zero derivative matches speed");
+            if (derivative>0) ++up; else ++down;
+        }
+    }
+    context.near(positive/4096.,.5,.04,"unconditioned SE retains the analytic entry-sign probability");
+    context.require(negative>0 && up>100 && down>100,"first-zero references include both crossing directions");
+    context.require(fs::exists(firstZero.outputDirectory/"first_hit_geometry.json"),"first-zero reference exports gradient geometry");
     fs::remove_all(directory);
 }

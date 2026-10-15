@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "seed": 20261013,
+  "first_passage": {
+    "initial_condition": {
+      "type": "unconditioned_first_zero",
+      "profiles": [
+        {
+          "id": "test_000",
+          "beta_0": 3.509561,
+          "beta_a": 0.444459
+        },
+        {
+          "id": "test_001",
+          "beta_0": 1.566661,
+          "beta_a": 0.469905
+        },
+        {
+          "id": "test_002",
+          "beta_0": 2.351519,
+          "beta_a": 0.598396
+        },
+        {
+          "id": "test_003",
+          "beta_0": 9.033119,
+          "beta_a": -1.980297
+        },
+        {
+          "id": "test_004",
+          "beta_0": 5.756562,
+          "beta_a": -1.139579
+        },
+        {
+          "id": "test_005",
+          "beta_0": 3.955087,
+          "beta_a": -0.74356
+        },
+        {
+          "id": "test_006",
+          "beta_0": 7.028322,
+          "beta_a": -0.991674
+        },
+        {
+          "id": "test_007",
+          "beta_0": 3.857504,
+          "beta_a": -0.172112
+        }
+      ]
+    },
+    "grid": {
+      "max_time": 8.0,
+      "step_sizes": [
+        0.015625,
+        0.0078125
+      ]
+    },
+    "profile": {
+      "maximum_step": 0.25
+    },
+    "curve": {
+      "bins": 128
+    },
+    "monte_carlo": {
+      "trajectories": 4096,
+      "thread_count": 4,
+      "write_raw_samples": true
+    },
+    "kernels": [
+      {
+        "id": "se",
+        "type": "squared_exponential",
+        "parameterization": "unit_length",
+        "variance": 1.0,
+        "length_scale": 1.0
+      }
+    ]
+  },
+  "output_directory": "outputs/first_hit_se_affine_test_v2"
+}

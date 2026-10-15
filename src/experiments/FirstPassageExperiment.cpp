@@ -120,6 +120,14 @@ public:
             kernel_.config().id + "; increase sampler.max_embedding_expansions");
     }
 
+    std::vector<double> sampleUnconditioned(Random& rng, double& birthDerivative) {
+        drawZeroMean(rng);
+        std::vector<double> result(sampleCount_);
+        for (std::size_t i = 0; i < sampleCount_; ++i) result[i] = time_[i].real();
+        birthDerivative = (time_[1].real()-time_[embeddingSize_-1].real())/(2*step_);
+        return result;
+    }
+
     std::vector<double> sampleConditionedValue(Random& rng, double mean,
                                                  double initialValue) {
         drawZeroMean(rng);
@@ -351,6 +359,7 @@ struct CollisionSample {
     std::uint64_t transitions = 0;
     std::uint64_t bridgeRefinements = 0;
     int deepestRefinement = 0;
+    int initialSign = 1; // Supervision label, never an observed GP input.
 };
 
 struct MeanProfileSegment {
@@ -382,7 +391,8 @@ std::vector<MeanProfileSegment> prepareMeanProfile(
     std::vector<MeanProfileSegment> segments;
     if (!config.processMeanField && !includeAffine) return segments;
     const auto profile=rayMeanProfile(config,kernel,state,config.profileMaximumStep);
-    const auto intervals=static_cast<std::size_t>(std::llround(config.maximumTime/step));
+    const auto intervals=static_cast<std::size_t>(config.samplerType == "gpis_function_space"
+        ? std::ceil(config.maximumTime/step) : std::llround(config.maximumTime/step));
     std::vector<double> knots{0.0};
     for (const auto& segment : profile.segments()) knots.push_back(segment.end);
     for (std::size_t i=1; i<intervals; ++i) knots.push_back(i*step);
@@ -423,15 +433,19 @@ std::uint64_t collisionSeed(std::uint64_t root, std::size_t kernel,
 CollisionSample sampleGridCollisionFirstPassage(
     CirculantSampler& sampler, const FirstPassageCollisionState& parameter,
     double maximumQ, double step, std::uint64_t seed,
-    const std::vector<MeanProfileSegment>& profile, bool positiveExterior = false) {
+    const std::vector<MeanProfileSegment>& profile, bool positiveExterior = false,
+    bool unconditionedFirstZero = false) {
     CollisionSample result;
     result.eventQ = maximumQ;
     result.seed = seed;
     Random rng(seed);
     double birthDerivative = parameter.betaCollisionSlope - parameter.betaMeanSlope;
-    const std::vector<double> residual = positiveExterior
+    const std::vector<double> residual = unconditionedFirstZero
+        ? sampler.sampleUnconditioned(rng,birthDerivative) : positiveExterior
         ? sampler.samplePositiveExterior(rng,parameter.beta0,birthDerivative)
         : sampler.sampleConditionedValueDerivative(rng,-parameter.beta0,birthDerivative);
+    if (unconditionedFirstZero) result.initialSign = parameter.beta0+residual[0] < 0 ? -1 : 1;
+    const double sign = static_cast<double>(result.initialSign);
     result.transitions = residual.size() - 1;
     if (!profile.empty()) {
         // Add the complete, cell-wise mean to a Hermite interpolation of the
@@ -455,10 +469,11 @@ CollisionSample sampleGridCollisionFirstPassage(
             HermitePolynomial total{part.a + segment.mean.a, part.b + segment.mean.b,
                                     part.c + segment.mean.c, part.d + segment.mean.d};
             // The prescribed birth is not itself a new collision.
-            if (segment.qBegin == 0.0 && !positiveExterior) {
+            if (segment.qBegin == 0.0 && !positiveExterior && !unconditionedFirstZero) {
                 total.d = 0.0;
                 total.c = width * parameter.betaCollisionSlope;
             }
+            total = {sign*total.a,sign*total.b,sign*total.c,sign*total.d};
             const auto crossing = firstHermiteDowncrossing(total, width, 1e-12 * width);
             if (crossing.found) {
                 result.event = true;
@@ -470,7 +485,7 @@ CollisionSample sampleGridCollisionFirstPassage(
         return result;
     }
     std::vector<double> values(residual.size());
-    values[0] = positiveExterior ? parameter.beta0+residual[0] : 0.0;
+    values[0] = positiveExterior || unconditionedFirstZero ? parameter.beta0+residual[0] : 0.0;
     for (std::size_t index = 1; index < residual.size(); ++index) {
         const double q = static_cast<double>(index) * step;
         values[index] = parameter.beta0 + parameter.betaMeanSlope * q +
@@ -478,13 +493,13 @@ CollisionSample sampleGridCollisionFirstPassage(
     }
     for (std::size_t index = 1; index < values.size(); ++index) {
         const double derivative0 = index == 1
-            ? (positiveExterior ? parameter.betaMeanSlope+birthDerivative : parameter.betaCollisionSlope)
+            ? (positiveExterior || unconditionedFirstZero ? parameter.betaMeanSlope+birthDerivative : parameter.betaCollisionSlope)
             : (values[index] - values[index - 2]) / (2.0 * step);
         const double derivative1 = index + 1 < values.size()
             ? (values[index + 1] - values[index - 1]) / (2.0 * step)
             : (values[index] - values[index - 1]) / step;
         const HermitePolynomial polynomial = hermitePolynomial(
-            values[index - 1], derivative0, values[index], derivative1, step);
+            sign*values[index - 1], sign*derivative0, sign*values[index], sign*derivative1, step);
         const HermiteCrossing crossing = firstHermiteDowncrossing(
             polynomial, step, 1e-12 * step);
         if (crossing.found) {
@@ -1196,6 +1211,27 @@ void validateMeanFieldRays(const FirstPassageExperimentConfig& config) {
     }
 }
 
+void validateFunctionSpace(const FirstPassageExperimentConfig& config) {
+    if (config.samplerType != "gpis_function_space") return;
+    if (config.initialConditionType != "unconditioned_first_zero" &&
+        config.initialConditionType != "positive_exterior" &&
+        config.initialConditionType != "collision_state")
+        throw std::invalid_argument("gpis_function_space requires a first-zero or renewal start mode");
+    for (const auto& kernel : config.kernels)
+        if (kernel.type != "squared_exponential")
+            throw std::invalid_argument("gpis_function_space requires squared_exponential");
+    if (config.fixedEndpoint.enabled || config.fixedEndpoint.only)
+        throw std::invalid_argument("gpis_function_space does not support fixed_endpoint sampling");
+    if (config.stepSizes.size() != 1 || !std::isfinite(config.stepSizes.front()) ||
+        std::abs(config.stepSizes.front()-config.functionSpace.step) > 1e-12*config.functionSpace.step)
+        throw std::invalid_argument("gpis_function_space requires one grid step equal to sampler.step_size");
+    if (!(config.maximumTime > 0.0) || !std::isfinite(config.maximumTime/config.functionSpace.step) ||
+        config.maximumTime/config.functionSpace.step > 10000000.0)
+        throw std::invalid_argument("invalid gpis_function_space horizon or step count");
+    // Validate the covariance factorization before writing any output files.
+    const FunctionSpaceRaySampler checked(config.functionSpace);
+}
+
 void validateFixedEndpoints(const FirstPassageExperimentConfig& config) {
     const auto& fixed = config.fixedEndpoint;
     if (fixed.only && !fixed.enabled) throw std::invalid_argument("fixed_endpoint.only requires enabled=true");
@@ -1256,7 +1292,7 @@ FirstPassageExperimentConfig loadFirstPassageExperimentConfig(
         config.initialConditionType = type;
         if (type == "fixed_value") {
             config.initialValue = initial.at("value").get<double>();
-        } else if (type == "collision_state" || type == "positive_exterior") {
+        } else if (type == "collision_state" || type == "positive_exterior" || type == "unconditioned_first_zero") {
             if (config.processMeanField) {
                 if (initial.contains("parameter_space") || !initial.contains("rays") ||
                     !initial.at("rays").is_array() || initial.at("rays").empty()) {
@@ -1271,7 +1307,7 @@ FirstPassageExperimentConfig loadFirstPassageExperimentConfig(
                     if (type=="collision_state")
                         ray.gradient = firstPassageVector(source.at("gradient"), "ray.gradient");
                     else if (source.contains("gradient"))
-                        throw std::invalid_argument("positive_exterior must not specify an observed gradient");
+                        throw std::invalid_argument(type+" must not specify an observed gradient");
                     FirstPassageCollisionState state;
                     state.id = source.at("id").get<std::string>();
                     state.ray = ray;
@@ -1286,10 +1322,10 @@ FirstPassageExperimentConfig loadFirstPassageExperimentConfig(
                 } else {
                     if (!initial.contains("profiles") || !initial.at("profiles").is_array() ||
                         initial.at("profiles").empty() || initial.contains("parameter_space"))
-                        throw std::invalid_argument("positive_exterior requires nonempty affine profiles or mean_field rays");
+                        throw std::invalid_argument(type+" requires nonempty affine profiles or mean_field rays");
                     for (const auto& source : initial.at("profiles")) {
                         if (source.contains("beta_g") || source.contains("value") || source.contains("gradient"))
-                            throw std::invalid_argument("positive_exterior profiles contain only known mean information");
+                            throw std::invalid_argument(type+" profiles contain only known mean information");
                         FirstPassageCollisionState state;
                         state.id=source.at("id").get<std::string>();
                         state.beta0=source.at("beta_0").get<double>();
@@ -1305,7 +1341,7 @@ FirstPassageExperimentConfig loadFirstPassageExperimentConfig(
             config.writeRawSamples = true;
         } else {
             throw std::invalid_argument(
-                "first_passage.initial_condition.type must be fixed_value, collision_state or positive_exterior");
+                "first_passage.initial_condition.type must be fixed_value, collision_state, positive_exterior or unconditioned_first_zero");
         }
     }
     if (experiment.contains("grid")) {
@@ -1345,14 +1381,27 @@ FirstPassageExperimentConfig loadFirstPassageExperimentConfig(
         const std::string defaultType = config.initialConditionType != "fixed_value"
             ? "collision_state_auto" : "exact_grid_circulant";
         const std::string type = sampler.value("type", defaultType);
+        config.samplerType = type;
         if (config.initialConditionType == "fixed_value" && type != "exact_grid_circulant") {
             throw std::invalid_argument(
                 "fixed_value first passage requires sampler.type=exact_grid_circulant");
         }
         if (config.initialConditionType != "fixed_value" &&
-            type != "collision_state_auto") {
+            type != "collision_state_auto" && type != "gpis_function_space") {
             throw std::invalid_argument(
-                "collision_state requires sampler.type=collision_state_auto");
+                "first passage requires sampler.type=collision_state_auto or gpis_function_space");
+        }
+        if (type == "gpis_function_space") {
+            for (const char* key : {"history_points", "batch_size"})
+                if (sampler.contains(key) && !sampler.at(key).is_number_integer())
+                    throw std::invalid_argument(std::string("sampler.")+key+" must be an integer");
+            config.functionSpace.historyPoints = sampler.value("history_points", config.functionSpace.historyPoints);
+            config.functionSpace.batchSize = sampler.value("batch_size", config.functionSpace.batchSize);
+            config.functionSpace.step = sampler.value("step_size", config.functionSpace.step);
+            config.functionSpace.rankTolerance = sampler.value("rank_tolerance", config.functionSpace.rankTolerance);
+            config.functionSpace.crossingRule = sampler.value("crossing_rule", config.functionSpace.crossingRule);
+            if (!experiment.contains("grid") || !experiment.at("grid").contains("step_sizes"))
+                config.stepSizes = {config.functionSpace.step};
         }
         config.maximumEmbeddingExpansions = sampler.value(
             "max_embedding_expansions", config.maximumEmbeddingExpansions);
@@ -1442,6 +1491,10 @@ FirstPassageExperimentConfig loadFirstPassageExperimentConfig(
             if (kernel.type!="matern_3_2" && kernel.type!="squared_exponential")
                 throw std::invalid_argument("positive_exterior reference supports matern_3_2 and squared_exponential");
     }
+    if (config.initialConditionType == "unconditioned_first_zero")
+        for (const auto& kernel : config.kernels)
+            if (kernel.type != "squared_exponential")
+                throw std::invalid_argument("unconditioned_first_zero requires squared_exponential");
     requireFinite(config.processMean, "first_passage.process.mean");
     requireFinite(config.threshold, "first_passage.process.threshold");
     if (config.initialConditionType == "fixed_value") {
@@ -1501,7 +1554,7 @@ FirstPassageExperimentConfig loadFirstPassageExperimentConfig(
                 "every grid step must be an integer multiple of the finest step and divide max_time");
         }
     }
-    if (config.initialConditionType != "fixed_value") {
+    if (config.initialConditionType != "fixed_value" && config.samplerType != "gpis_function_space") {
         const double largestStep = *std::max_element(config.stepSizes.begin(), config.stepSizes.end());
         for (double step : config.stepSizes) {
             if (!closeInteger(config.maximumTime / step)) {
@@ -1558,6 +1611,7 @@ FirstPassageExperimentConfig loadFirstPassageExperimentConfig(
             throw std::invalid_argument("state_analysis.derivative_range must be increasing");
         }
     }
+    validateFunctionSpace(config);
     validateFixedEndpoints(config);
     validateMeanFieldRays(config);
     return config;
@@ -1596,7 +1650,7 @@ void writeResolvedFirstPassageConfig(const FirstPassageExperimentConfig& config,
         initial = {{"type", config.initialConditionType},
                    {"parameter_space", {{"type", "explicit"},
                                         {"states", std::move(states)}}}};
-        if (config.initialConditionType=="positive_exterior") {
+        if (config.initialConditionType!="collision_state") {
             Json profiles=Json::array();
             for (const auto& item : config.collisionStates)
                 profiles.push_back({{"id",item.id},{"beta_0",item.beta0},{"beta_a",item.betaMeanSlope}});
@@ -1611,7 +1665,7 @@ void writeResolvedFirstPassageConfig(const FirstPassageExperimentConfig& config,
                     {"direction", {ray.direction.x(), ray.direction.y(), ray.direction.z()}},
                     {"gradient", {ray.gradient.x(), ray.gradient.y(), ray.gradient.z()}}});
             }
-            if (config.initialConditionType=="positive_exterior")
+            if (config.initialConditionType!="collision_state")
                 for (auto& ray : rays) ray.erase("gradient");
             initial = {{"type", config.initialConditionType}, {"rays", std::move(rays)}};
         }
@@ -1626,6 +1680,16 @@ void writeResolvedFirstPassageConfig(const FirstPassageExperimentConfig& config,
         initial = {{"type", "fixed_value"}, {"value", config.initialValue}};
         sampler = {{"type", "exact_grid_circulant"},
                    {"max_embedding_expansions", config.maximumEmbeddingExpansions}};
+    }
+    if (config.samplerType == "gpis_function_space") {
+        sampler = {{"type", config.samplerType}, {"version", 1},
+            {"history_points", config.functionSpace.historyPoints},
+            {"batch_size", config.functionSpace.batchSize},
+            {"step_size", config.functionSpace.step},
+            {"rank_tolerance", config.functionSpace.rankTolerance},
+            {"history_derivatives", "latest"}, {"grid_rule", "fixed_from_entry"},
+            {"derivative_observations", "analytic"},
+            {"crossing_rule", config.functionSpace.crossingRule}};
     }
     Json root{
         {"schema_version", config.schemaVersion},
@@ -1686,7 +1750,8 @@ void writeResolvedFirstPassageConfig(const FirstPassageExperimentConfig& config,
             {"ray_coverage_validated", true},
             {"start_mode",config.initialConditionType},
             {"sampler", "kernel_dependent_see_sample_rows"},
-            {"derivative_condition", "matern32_exact_other_kernels_central_difference"},
+            {"derivative_condition", config.samplerType == "gpis_function_space"
+                ? "analytic" : "matern32_exact_other_kernels_central_difference"},
             {"mean_interpolation", "cellwise_cubic_along_ray"}};
     }
     std::ofstream output = openOutput(path);
@@ -1695,14 +1760,19 @@ void writeResolvedFirstPassageConfig(const FirstPassageExperimentConfig& config,
 
 namespace {
 
-const char* collisionSamplerName(const FirstPassageExperimentConfig&,
+const char* collisionSamplerName(const FirstPassageExperimentConfig& config,
                                  const FirstPassageKernelConfig& kernel) {
+    if (config.samplerType == "gpis_function_space") return "gpis_function_space";
+    if (config.initialConditionType=="unconditioned_first_zero") return "unconditioned_grid_circulant";
     return kernel.type == "matern_3_2"
         ? "matern32_state_space" : "conditioned_grid_circulant";
 }
 
 const char* collisionSlopeMethod(const FirstPassageExperimentConfig& config,
                                  const FirstPassageKernelConfig& kernel) {
+    if (config.samplerType == "gpis_function_space")
+        return config.functionSpace.crossingRule == "tungsten_linear"
+            ? "total_field_linear_secant" : "analytic_derivative_hermite_cellwise_mean";
     if (config.processMeanField) return kernel.type == "matern_3_2"
         ? "state_bridge_hermite_cellwise_mean" : "grid_residual_hermite_cellwise_mean";
     return kernel.type == "matern_3_2" ? "state_bridge_hermite" : "grid_cubic_hermite";
@@ -1727,9 +1797,12 @@ std::vector<CollisionSample> generateCollisionSamples(
     normalizedKernel.lengthScale = 1.0;
     const StationaryKernel dimensionlessKernel(normalizedKernel);
     const bool stateSpace = kernel.type == "matern_3_2";
-    const auto profile = stateSpace ? std::vector<MeanProfileSegment>{}
+    const bool functionSpace = config.samplerType == "gpis_function_space";
+    std::optional<FunctionSpaceRaySampler> functionSampler;
+    if (functionSpace) functionSampler.emplace(config.functionSpace);
+    const auto profile = stateSpace || functionSpace ? std::vector<MeanProfileSegment>{}
                                    : prepareMeanProfile(config, kernel, state, step);
-    const auto referenceProfile=stateSpace ? std::make_optional(rayMeanProfile(config,kernel,state,config.profileMaximumStep))
+    const auto referenceProfile=stateSpace || functionSpace ? std::make_optional(rayMeanProfile(config,kernel,state,config.profileMaximumStep))
                                            : std::nullopt;
     const std::size_t gridSamples = static_cast<std::size_t>(
         std::llround(config.maximumTime / step)) + 1;
@@ -1741,7 +1814,7 @@ std::vector<CollisionSample> generateCollisionSamples(
         workers.emplace_back([&, worker, begin, end]() {
             try {
                 std::optional<CirculantSampler> gridSampler;
-                if (!stateSpace) {
+                if (!stateSpace && !functionSpace) {
                     gridSampler.emplace(dimensionlessKernel, gridSamples, step,
                                         config.maximumEmbeddingExpansions);
                 }
@@ -1749,7 +1822,17 @@ std::vector<CollisionSample> generateCollisionSamples(
                     const std::uint64_t seed = collisionSeed(
                         config.seed, kernelIndex, stateIndex, resolutionIndex,
                         static_cast<std::uint64_t>(trajectory));
-                    if (stateSpace) {
+                    if (functionSpace) {
+                        Random rng(seed);
+                        const auto start = config.initialConditionType == "unconditioned_first_zero"
+                            ? FunctionSpaceStart::Unconditioned
+                            : config.initialConditionType == "positive_exterior"
+                            ? FunctionSpaceStart::PositiveExterior : FunctionSpaceStart::SurfaceOutward;
+                        const auto sample = sampleFunctionSpaceFirstPassage(*functionSampler,
+                            *referenceProfile, start, state.betaCollisionSlope, rng);
+                        result[static_cast<std::size_t>(trajectory)] = {sample.distance, sample.hit,
+                            sample.speed, seed, sample.generatedPoints, 0, 0, sample.initialSign};
+                    } else if (stateSpace) {
                         Random rng(seed);
                         const RayStartCondition start{
                             config.initialConditionType=="positive_exterior"
@@ -1765,7 +1848,8 @@ std::vector<CollisionSample> generateCollisionSamples(
                     } else {
                         result[static_cast<std::size_t>(trajectory)]=sampleGridCollisionFirstPassage(
                             *gridSampler,state,config.maximumTime,step,seed,profile,
-                            config.initialConditionType=="positive_exterior");
+                            config.initialConditionType=="positive_exterior",
+                            config.initialConditionType=="unconditioned_first_zero");
                     }
                 }
             } catch (...) {
@@ -1815,7 +1899,7 @@ void writeCollisionSamples(std::ofstream& output,
                << (sample.event ? 1 : 0) << ',' << (sample.event ? 0 : 1) << ',';
         if (sample.event) {
             output << sample.crossingSlope << ','
-                   << -sample.crossingSlope * sigma / kernel.lengthScale;
+                   << -sample.initialSign * sample.crossingSlope * sigma / kernel.lengthScale;
         } else {
             output << ',';
         }
@@ -1824,6 +1908,7 @@ void writeCollisionSamples(std::ofstream& output,
                << sample.transitions << ',' << sample.bridgeRefinements << ','
                << sample.deepestRefinement;
         if (config.processMeanField) output << ",full_field";
+        if (config.initialConditionType=="unconditioned_first_zero") output << ',' << sample.initialSign;
         output << '\n';
     }
 }
@@ -2120,6 +2205,7 @@ void runCollisionStateFirstPassage(const FirstPassageExperimentConfig& config) {
                     "crossing_slope,crossing_derivative,seed,integrator_tolerance,minimum_step,"
                     "bridge_sigma_margin,transitions,bridge_refinements,deepest_refinement";
         if (config.processMeanField) *samples << ",mean_profile_type";
+        if (config.initialConditionType=="unconditioned_first_zero") *samples << ",initial_sign";
         *samples << '\n';
     }
     std::ofstream summary = openOutput(config.outputDirectory / "first_passage_summary.csv");
@@ -2146,6 +2232,7 @@ void runCollisionStateFirstPassage(const FirstPassageExperimentConfig& config) {
     }
 
     auto meanSegments=openOutput(config.outputDirectory / "first_passage_mean_segments.csv");
+    Json firstHitGeometry = Json::array();
     meanSegments << "kernel_id,state_id,start_mode,segment,x_begin,x_end,b0,b1,dx_db0,dx_db1,log_dx,cubic_a,cubic_b,cubic_c,cubic_d\n";
     const double trainingStep = *std::min_element(config.stepSizes.begin(), config.stepSizes.end());
     for (std::size_t kernelIndex = 0; kernelIndex < config.kernels.size(); ++kernelIndex) {
@@ -2159,7 +2246,7 @@ void runCollisionStateFirstPassage(const FirstPassageExperimentConfig& config) {
                 state.beta0 = jet.value / sigma;
                 state.betaMeanSlope = rayMeanProfile(config,kernel,state,config.profileMaximumStep)
                     .segments().front().derivative(0.0);
-                state.betaCollisionSlope = config.initialConditionType=="positive_exterior" ? 0.0
+                state.betaCollisionSlope = config.initialConditionType!="collision_state" ? 0.0
                     : kernel.lengthScale * ray.gradient.dot(ray.direction) / sigma;
                 // Record the actual profile at the finest grid and voxel faces.
                 const auto prepared = prepareMeanProfile(config, kernel, state, trainingStep);
@@ -2172,6 +2259,16 @@ void runCollisionStateFirstPassage(const FirstPassageExperimentConfig& config) {
                 }
             }
             const auto exportedProfile=rayMeanProfile(config,kernel,state,config.profileMaximumStep);
+            Json geometry;
+            if (config.initialConditionType=="unconditioned_first_zero") {
+                const auto direction = state.ray ? state.ray->direction : Vector3::UnitZ().eval();
+                const auto origin = state.ray ? state.ray->origin : Point3::Zero().eval();
+                geometry = {{"kernel_id",kernel.id},{"state_id",state.id},
+                    {"sigma",std::sqrt(kernel.variance)},{"ell",kernel.lengthScale},
+                    {"origin",{origin.x(),origin.y(),origin.z()}},
+                    {"direction",{direction.x(),direction.y(),direction.z()}},
+                    {"mean_gradient_polynomials",Json::array()}};
+            }
             for (std::size_t i=0; i<exportedProfile.segments().size(); ++i) {
                 const auto& segment=exportedProfile.segments()[i];
                 meanSegments << csv(kernel.id) << ',' << csv(state.id) << ','
@@ -2179,7 +2276,21 @@ void runCollisionStateFirstPassage(const FirstPassageExperimentConfig& config) {
                 for (double feature : segment.features()) meanSegments << ',' << feature;
                 const auto& p=segment.polynomial;
                 meanSegments << ',' << p.a << ',' << p.b << ',' << p.c << ',' << p.d << '\n';
+                if (!geometry.is_null()) {
+                    const auto gradient = [&](double u) -> Vector3 {
+                        const double q=segment.begin+u*(segment.end-segment.begin);
+                        if (!state.ray) return Vector3(0,0,std::sqrt(kernel.variance)/kernel.lengthScale*segment.derivative(q));
+                        const auto& ray=*state.ray;
+                        const Point3 interior=ray.origin+kernel.lengthScale*(segment.begin+segment.end)*0.5*ray.direction;
+                        return config.processMeanField->evaluateInCell(ray.origin+q*kernel.lengthScale*ray.direction,interior).gradient;
+                    };
+                    const Vector3 g0=gradient(0), gm=gradient(0.5), g1=gradient(1);
+                    const Vector3 a=2*(g1+g0-2*gm), b=g1-g0-a;
+                    geometry["mean_gradient_polynomials"].push_back({
+                        {a.x(),b.x(),g0.x()},{a.y(),b.y(),g0.y()},{a.z(),b.z(),g0.z()}});
+                }
             }
+            if (!geometry.is_null()) firstHitGeometry.push_back(std::move(geometry));
             for (std::size_t resolution = 0; resolution < config.stepSizes.size(); ++resolution) {
                 const double step = config.stepSizes[resolution];
                 const bool trainingResolution =
@@ -2197,12 +2308,21 @@ void runCollisionStateFirstPassage(const FirstPassageExperimentConfig& config) {
             }
         }
     }
+    if (config.initialConditionType=="unconditioned_first_zero") {
+        auto output=openOutput(config.outputDirectory / "first_hit_geometry.json");
+        output << firstHitGeometry.dump(2) << '\n';
+    }
 }
 
 } // namespace
 
 void runFirstPassageExperiment(const FirstPassageExperimentConfig& config) {
     // Fail before writing or replacing any experiment output.
+    validateFunctionSpace(config);
+    if (config.initialConditionType=="unconditioned_first_zero")
+        for (const auto& kernel:config.kernels)
+            if (kernel.type!="squared_exponential")
+                throw std::invalid_argument("unconditioned_first_zero requires squared_exponential");
     validateFixedEndpoints(config);
     validateMeanFieldRays(config);
     std::filesystem::create_directories(config.outputDirectory);

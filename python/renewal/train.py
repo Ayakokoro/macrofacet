@@ -15,6 +15,7 @@ from .data import SequenceDataset, collate, load_data, to_device
 from .evaluate import likelihood, evaluate
 from .model import ModelConfig, RenewalNetwork
 from .profiles import with_profile_mode
+from .reference_sampler import require_same_sampler
 
 
 def train(config_path: Path, resume: bool = False):
@@ -33,6 +34,8 @@ def train(config_path: Path, resume: bool = False):
     dataset_path = resolve(config["dataset"])
     dataset_hash = digest(dataset_path)
     data = with_profile_mode(load_data(dataset_path), config.get("profile_mode", "cubic"))
+    if "reference_sampler" in config:
+        require_same_sampler(config["reference_sampler"], data.get("reference_sampler"), "training config and dataset")
     if "kernel" in config and validate_kernel(config["kernel"]) != data["kernel"]:
         raise ValueError("training kernel differs from dataset kernel")
     augmentation = config.get("augmentation", {})
@@ -105,6 +108,7 @@ def train(config_path: Path, resume: bool = False):
                  "seconds": time.perf_counter()-began, "best": improved}
         history.append(entry)
         bundle = {"format_version": FORMAT_VERSION, "kernel": data["kernel"], "model_config": model.configuration(),
+                  "reference_sampler": data.get("reference_sampler"),
                   "model_state": model.state_dict(), "epoch": epoch, "dataset_sha256": dataset_hash,
                   "training_config": config, "validation": metrics,
                   "profile_mode": data.get("profile_mode", "cubic")}

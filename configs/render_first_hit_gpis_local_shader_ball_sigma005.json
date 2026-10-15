@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "seed": 17429,
+  "field": {
+    "mean_type": "nanovdb",
+    "grid_file": "outputs/fields/shader_ball_full_0.02.nvdb",
+    "use_alpha_grid": false,
+    "kernel_type": "squared_exponential"
+  },
+  "material": {
+    "ndf_family": "generalized_gaussian",
+    "gp_model": "local_tangent",
+    "eta_rgb": [0.2, 0.9, 1.1],
+    "k_rgb": [3.9, 2.5, 2.2],
+    "roughness": 0.5
+  },
+  "transport": {
+    "mode": "hybrid_first_hit",
+    "first_hit": {
+      "method": "gpis_function_space",
+      "profile_mode": "cubic",
+      "profile_maximum_step": 0.25,
+      "backend": "scalar",
+      "sampler": {
+        "history_points": 1,
+        "batch_size": 8,
+        "step_size": 0.015625,
+        "rank_tolerance": 1e-10,
+        "crossing_rule": "tungsten_linear"
+      }
+    },
+    "continuation": {
+      "method": "classic_local",
+      "backend": "scalar"
+    },
+    "classic_phase_proposal": "target_vndf",
+    "roulette_start_depth": 8
+  },
+  "numeric": {
+    "relative_tolerance": 1e-6,
+    "absolute_tolerance": 1e-9,
+    "max_quadrature_subdivisions": 2048,
+    "max_root_iterations": 128,
+    "distance_absolute_tolerance": 1e-10
+  },
+  "render": {
+    "width": 512,
+    "height": 512,
+    "samples_per_pixel": 128,
+    "camera_position": [2.27, -1.09, 1.42],
+    "camera_target": [0.0, 0.0, 0.35],
+    "vertical_fov_degrees": 25.0,
+    "environment": "directional_gradient",
+    "thread_count": 0,
+    "safety_depth_cap": 128
+  },
+  "output_directory": "outputs/render_first_hit_gpis_local_shader_ball_sigma002"
+}

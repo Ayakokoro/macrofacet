@@ -30,6 +30,10 @@ int main() {
     catch (const std::exception& e) { context.require(false, std::string("renewal transport threw: ") + e.what()); }
     try { testFirstPassage(context); }
     catch (const std::exception& e) { context.require(false, std::string("first passage threw: ") + e.what()); }
+    try { testFunctionSpace(context); }
+    catch (const std::exception& e) { context.require(false, std::string("function space threw: ") + e.what()); }
+    try { testFirstHitRender(context); }
+    catch (const std::exception& e) { context.require(false, std::string("first-hit render threw: ") + e.what()); }
 #if defined(MACROFACET_TEST_FIELDS)
     try { testNanoVdbField(context); }
     catch (const std::exception& e) { context.require(false, std::string("nanovdb field threw: ") + e.what()); }

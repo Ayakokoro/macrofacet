@@ -1,0 +1,26 @@
+{
+  "output_directory": "outputs/first_hit_se_joint_h16_20261013",
+  "model_directory": "outputs/models/first_hit_se_joint_h16_v1",
+  "dataset": "outputs/first_hit_se_data_ablation_20261013/datasets/samples.pt",
+  "evaluation_dataset": "outputs/first_hit_se_camera_dataset_v2/dataset.pt",
+  "scene_dataset": "outputs/first_hit_se_render_scene_sigma005_dataset_20261013/dataset.pt",
+  "initialize_from": "outputs/models/first_hit_se_ablation_v3/h16_nll_s20261022/last.pt",
+  "training_contexts": "outputs/first_hit_se_data_ablation_20261013/contexts_samples.pt",
+  "evaluation_contexts": "outputs/first_hit_se_gradient_head_20261013/contexts.pt",
+  "device": "cuda",
+  "cpu_threads": 1,
+  "seeds": [20261031, 20261032, 20261033],
+  "representative_seed": 20261032,
+  "modes": ["head_only", "joint"],
+  "training": {
+    "epochs": 192,
+    "profiles_per_batch": 32,
+    "samples_per_profile": 256,
+    "learning_rate": 0.0003,
+    "minimum_learning_rate": 0.00003,
+    "weight_decay": 0.00001,
+    "gradient_clip": 1.0,
+    "validation_every": 8,
+    "cuda_graph_solver": true
+  }
+}

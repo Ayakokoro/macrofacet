@@ -1,0 +1,26 @@
+{
+  "seed": 20261015,
+  "output_directory": "outputs/first_hit_se_render_scene_sigma002_dataset_20261013",
+  "split_unit": "ray",
+  "realizations_per_profile": 4096,
+  "reference_steps": [0.015625, 0.0078125],
+  "threads": 4,
+  "skip_domain_misses": true,
+  "sources": [
+    {
+      "scene_id": "render_shader_ball_sigma002",
+      "split": "test",
+      "render_config": "configs/render_neural_renewal_shader_ball_ply_point_linear_se_h16.json",
+      "pixels": [
+        [32, 32],
+        [144, 144],
+        [144, 368],
+        [256, 144],
+        [256, 256],
+        [368, 256],
+        [368, 368],
+        [376, 96]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "seed": 20261013,
+  "dataset": "outputs/first_hit_se_camera_dataset_v1/dataset.pt",
+  "output_directory": "outputs/models/first_hit_se_rno_h16_v1",
+  "device": "cpu",
+  "cpu_threads": 4,
+  "profiles_per_batch": 4,
+  "samples_per_profile_per_epoch": 128,
+  "epochs": 32,
+  "patience": 8,
+  "learning_rate": 0.0003,
+  "weight_decay": 0.00001,
+  "gradient_clip": 1.0,
+  "subdivision_factors": [1],
+  "model": {"architecture": "rno", "hidden": 16, "width": 64, "mixture_width": 128, "components": 8, "sigma_floor": 0.01, "maximum_step": 0.03125}
+}

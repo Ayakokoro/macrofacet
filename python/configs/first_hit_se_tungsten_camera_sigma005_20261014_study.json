@@ -1,0 +1,63 @@
+{
+  "render_config": "configs/render_neural_renewal_shader_ball_ply_point_linear_se_h16_sigma_0.05.json",
+  "collection_config": "python/configs/first_hit_se_tungsten_camera_sigma005_20261014_dataset.json",
+  "training_config": "python/configs/first_hit_se_tungsten_camera_sigma005_20261014_rno_h16.json",
+  "output_directory": "outputs/first_hit_se_tungsten_camera_sigma005_20261014",
+  "dataset": "outputs/first_hit_se_tungsten_camera_sigma005_20261014/data/dataset.pt",
+  "checkpoint": "outputs/models/first_hit_se_tungsten_camera_sigma005_20261014_rno_h16/best.pt",
+  "visualization_pixels": [
+    [
+      32,
+      32
+    ],
+    [
+      144,
+      144
+    ],
+    [
+      144,
+      368
+    ],
+    [
+      256,
+      144
+    ],
+    [
+      256,
+      256
+    ],
+    [
+      368,
+      256
+    ],
+    [
+      368,
+      368
+    ],
+    [
+      376,
+      96
+    ]
+  ],
+  "gradient_pixels": [
+    [
+      256,
+      256
+    ],
+    [
+      144,
+      368
+    ],
+    [
+      368,
+      368
+    ]
+  ],
+  "gradient_quantiles": [
+    0.2,
+    0.5,
+    0.8
+  ],
+  "gradient_quantile_half_width": 0.075,
+  "seed": 20261014
+}

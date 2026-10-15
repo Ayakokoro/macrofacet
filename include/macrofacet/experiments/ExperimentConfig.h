@@ -1,6 +1,7 @@
 #pragma once
 
 #include "macrofacet/gpss/GPSSField.h"
+#include "macrofacet/gpss/FunctionSpaceRaySampler.h"
 #include "macrofacet/macrofacet/MaterialConfig.h"
 #include "macrofacet/mathutility/NumericPolicy.h"
 #include "macrofacet/transport/FlightState.h"
@@ -14,6 +15,16 @@
 namespace mf {
 
 class RenewalHazardModel;
+class FirstHitSEModel;
+
+struct FirstHitRenderConfig {
+    std::string method = "neural_first_hit_se";
+    std::filesystem::path modelPath;
+    std::string profileMode = "cubic", backend = "scalar";
+    double profileMaximumStep = 0.25;
+    FunctionSpaceSamplerConfig reference;
+    std::shared_ptr<const FirstHitSEModel> model;
+};
 
 struct RenewalRenderConfig {
     std::filesystem::path modelPath;
@@ -41,6 +52,7 @@ struct RenderConfig {
     int rouletteStartDepth = 5;
     int safetyDepthCap = 64;
     int threadCount = 0;  // 0 selects the hardware concurrency
+    bool writeFirstHitSamples = false; // optional sample-indexed diagnostics for small hybrid renders
 };
 
 struct ConditionalBirthConfig {
@@ -107,10 +119,13 @@ struct ExperimentConfig {
     // classic obeys material.gp_model; comparison modes select it explicitly.
     std::string transportMode = "classic";
     RenewalRenderConfig renewal;
+    FirstHitRenderConfig firstHit;
+    std::string continuationMethod = "neural_renewal"; // neural_renewal or classic_local (CPU scalar)
 };
 
 ExperimentConfig loadExperimentConfig(const std::filesystem::path& path);
 void prepareRenewalModel(ExperimentConfig& config);
+void prepareFirstHitModel(ExperimentConfig& config);
 void requireNanoVdbField(const ExperimentConfig& config);
 void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
                          std::optional<double> roughness, bool preserveSlope);

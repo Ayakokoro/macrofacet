@@ -1,0 +1,17 @@
+{
+  "seed": 20261014,
+  "dataset": "outputs/first_hit_se_gpis_linear_h1_b8_dq64/dataset.pt",
+  "output_directory": "outputs/models/first_hit_se_gpis_linear_h1_b8_dq64_gru_h16",
+  "reference_sampler": {"type": "gpis_function_space", "history_points": 1, "batch_size": 8, "step_size": 0.015625, "rank_tolerance": 1e-10, "crossing_rule": "tungsten_linear"},
+  "device": "cpu",
+  "cpu_threads": 4,
+  "profiles_per_batch": 4,
+  "samples_per_profile_per_epoch": 256,
+  "epochs": 32,
+  "patience": 8,
+  "learning_rate": 0.0003,
+  "weight_decay": 0.00001,
+  "gradient_clip": 1.0,
+  "subdivision_factors": [1],
+  "model": {"architecture": "gru", "hidden": 16, "width": 64, "mixture_width": 128, "components": 8, "sigma_floor": 0.01, "maximum_step": 0.03125}
+}

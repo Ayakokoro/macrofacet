@@ -6,12 +6,12 @@
 
 namespace mf {
 
-Vector3 sampleRenewalGradient(const CovarianceKernel& kernel, const Vector3& direction,
+static Vector3 reconstructRenewalGradient(const CovarianceKernel& kernel, const Vector3& direction,
     double x, double derivative, const Vector3& meanGradient,
     const Vector3& birthMeanGradient, const std::optional<Vector3>& birthGradient, Random& rng) {
     if ((kernel.type() != CovarianceKernelType::Matern32 &&
          kernel.type() != CovarianceKernelType::SquaredExponential) || !(x >= 0) || !std::isfinite(x) ||
-        !(derivative < 0) || !std::isfinite(derivative) || !meanGradient.allFinite() ||
+        !std::isfinite(derivative) || !meanGradient.allFinite() ||
         !birthMeanGradient.allFinite() || (birthGradient && !birthGradient->allFinite()))
         throw std::invalid_argument("invalid Renewal gradient reconstruction inputs");
     const Vector3 w = normalizedOrThrow(direction);
@@ -47,6 +47,20 @@ Vector3 sampleRenewalGradient(const CovarianceKernel& kernel, const Vector3& dir
     const Vector3 longitudinal = meanGradient+regression*(derivative-w.dot(meanGradient));
     // Construct in the ray frame so transverse roundoff cannot flip V's sign.
     return derivative*w + basis*(basis.transpose()*longitudinal+residual);
+}
+
+Vector3 sampleRenewalGradient(const CovarianceKernel& kernel, const Vector3& direction,
+    double x, double derivative, const Vector3& meanGradient,
+    const Vector3& birthMeanGradient, const std::optional<Vector3>& birthGradient, Random& rng) {
+    if (!(derivative < 0)) throw std::invalid_argument("Renewal requires a negative crossing derivative");
+    return reconstructRenewalGradient(kernel,direction,x,derivative,meanGradient,birthMeanGradient,birthGradient,rng);
+}
+
+Vector3 sampleFirstHitSEGradient(const CovarianceKernel& kernel, const Vector3& direction,
+    double derivative, const Vector3& meanGradient, Random& rng) {
+    if (kernel.type()!=CovarianceKernelType::SquaredExponential)
+        throw std::invalid_argument("first-zero gradient reconstruction requires SE");
+    return reconstructRenewalGradient(kernel,direction,0,derivative,meanGradient,Vector3::Zero(),std::nullopt,rng);
 }
 
 RenewalMedium::RenewalMedium(const GPSSField& field, const RenewalHazardModel& model, double maximumStep,

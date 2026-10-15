@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "seed": 20261013,
+  "first_passage": {
+    "initial_condition": {
+      "type": "unconditioned_first_zero",
+      "profiles": [
+        {"id": "flat", "beta_0": 0.0, "beta_a": 0.0},
+        {"id": "descending", "beta_0": 1.0, "beta_a": -0.8},
+        {"id": "ascending", "beta_0": -1.0, "beta_a": 0.8}
+      ]
+    },
+    "grid": {"max_time": 2.0, "step_sizes": [0.015625, 0.0078125]},
+    "profile": {"maximum_step": 0.25},
+    "curve": {"bins": 128},
+    "monte_carlo": {"trajectories": 4096, "thread_count": 4, "write_raw_samples": true},
+    "kernels": [{"id": "se", "type": "squared_exponential", "parameterization": "unit_length", "variance": 1.0, "length_scale": 1.0}]
+  },
+  "output_directory": "outputs/first_hit_se_affine_reference"
+}

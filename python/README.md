@@ -1,5 +1,22 @@
 # Renewal+ 序列数据与网络训练
 
+新增的无条件 SE 相机 first-hit 连续状态模型和保留 GRU 的对比流程见 [SE first hit](../docs/FIRST_HIT_SE.md)。它从介质入口计距，允许负侧出发的首次上穿，使用独立的数据、训练入口和导出格式。
+
+指定 σ=0.05 shader-ball 场景的 **Tungsten 线性采样、仅相机首次碰撞**流程：
+
+```powershell
+python python/first_hit_se_cli.py camera-study --config python/configs/first_hit_se_tungsten_camera_sigma005_20261014_study.json --phase all
+```
+
+可分别运行 `--phase collect`、`train`、`report`。采集使用相机在 `activeDomain` 的入口作为零点，
+从实际 NanoVDB 读取 σ 与 ℓ；配置中的原 renewal 权重不参与此次训练。
+H=1、B=8、Δq=1/64、`tungsten_linear` 固定，RNO h16 从随机初始化训练；
+训练/验证/测试按不同像素射线划分，未命中保留为删失标签。
+输出为 `outputs/first_hit_se_tungsten_camera_sigma005_20261014/summary.html`，包括数据审计、
+8 条测试射线透射率、9 个代表首碰位置的梯度窗口分布、PNG/SVG/CSV/NPZ 与 C++ 推理校验。
+三维梯度由参考或 RNO 的纵向割线标签和 SE 条件横向高斯重建；窗口参考不是精确固定点条件采样。
+`collection_workers` 只控制独立射线采集的并发数，不改变采样器 B 或各射线的种子；默认仍为 1。
+
 实现 [方案](../GPIS_RenewalPlus_Neural_Rendering.md) 第 5–9 节：共享三次均值剖面、A/B 起点、GRU 历史状态、单调累计 hazard、正半轴截断 Gaussian mixture 和联合删失似然。默认核为 `rho(x)=(1+x)exp(-x)`，`beta=1`；另支持独立训练 SE 核 `rho(x)=exp(-x*x/2)`，见下文。旧 I-spline 包和旧 Matérn-3/2 配置不参与此流程。
 
 ## 运行
@@ -145,6 +162,12 @@ A 起点只条件于 `F(0)>0`：先抽取截断正态起始残差，再条件生
 且不会成为网络输入。B 起点沿用网格中心差分导数条件。参考步长为 `1/64` 和 `1/128`，
 后者用于训练；SE 不执行 Matérn bridge 自适应细分，`minimum_step` 不代表 SE 的分辨率。
 两档步长的统计审计用于检查离散误差，不能当作连续首达精度保证。
+
+另有独立的 [固定历史 GPIS 函数空间后端](../docs/GPIS_FUNCTION_SPACE.md)，可通过采集配置
+`reference_sampler` 选择。其默认规则 `crossing_rule=tungsten_linear` 用总场端点线性求交、
+割线速度生成训练标签；`hermite_residual_cellwise_mean` 保留为对照。
+`first_hit_se_gpis_dataset.json` 与对应 GRU / RNO 配置已采用线性参考及独立输出目录。
+每个 H、采样批大小、步长和求交规则组合分别生成数据、训练权重；网络结构不变。
 
 SE 模型可用于 C++ 标量、LibTorch CPU/CUDA 渲染及 `renewal-query`。场必须设置
 `kernel_type=squared_exponential`，与导出权重的 `unit_length` 核匹配。

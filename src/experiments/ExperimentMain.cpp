@@ -202,11 +202,13 @@ int main(int argc, char** argv) {
         if (options.mode) config.transportMode = *options.mode;
         if (config.transportMode != "classic" && config.transportMode != "classic_local" &&
             config.transportMode != "classic_global" &&
-            config.transportMode != "global_conditional" && config.transportMode != "neural_renewal" && config.transportMode != "all")
+            config.transportMode != "global_conditional" && config.transportMode != "neural_renewal" &&
+            config.transportMode != "hybrid_first_hit" && config.transportMode != "all")
             throw std::invalid_argument("unknown transport mode: " + config.transportMode);
-        if (command == "curves" && config.transportMode == "neural_renewal")
+        if (command == "curves" && (config.transportMode == "neural_renewal" || config.transportMode == "hybrid_first_hit"))
             throw std::invalid_argument("use renewal-query for neural curves and render for neural path tracing");
         mf::prepareRenewalModel(config);
+        mf::prepareFirstHitModel(config);
         if (command == "curves" && config.transmittance) {
             if (options.rays) {
                 throw std::invalid_argument(

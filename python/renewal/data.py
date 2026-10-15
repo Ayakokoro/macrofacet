@@ -15,6 +15,8 @@ from torch.utils.data import Dataset
 from . import FORMAT_VERSION, KERNEL, validate_kernel
 from .collect import digest, write_json
 from .profiles import subdivide_features, validate_subdivision_factors
+from .reference_sampler import reference_sampler, sampler_from_source, require_same_sampler
+from .reference_sampler import validate_sampler_row
 
 SPLITS = {"train": 0, "validation": 1, "test": 2}
 FEATURES = ("b0", "b1", "dx_db0", "dx_db1", "log_dx")
@@ -30,7 +32,6 @@ def prepare(manifest_path: Path, output: Path) -> dict:
     if manifest.get("schema_version") != FORMAT_VERSION:
         raise ValueError("unsupported dataset schema")
     convention = validate_kernel(manifest.get("kernel"))
-    expected_sampler = "matern32_state_space" if convention == KERNEL else "conditioned_grid_circulant"
     packed = {"format_version": FORMAT_VERSION, "kernel": convention, "feature_names": list(FEATURES),
               "manifest_sha256": digest(manifest_path)}
     features, offsets, initial, horizons = [], [0], [], []
@@ -53,6 +54,14 @@ def prepare(manifest_path: Path, output: Path) -> dict:
             raise ValueError("identical geometry appears in multiple splits")
         config_path = directory / "resolved_first_passage_config.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))["first_passage"]
+        sampler = sampler_from_source(config)
+        if "reference_sampler" in manifest:
+            require_same_sampler(manifest["reference_sampler"], sampler, "manifest and source")
+        if "reference_sampler" in packed:
+            require_same_sampler(packed["reference_sampler"], sampler, "dataset sources")
+        packed["reference_sampler"] = sampler
+        expected_sampler = sampler["type"] if sampler else (
+            "matern32_state_space" if convention == KERNEL else "conditioned_grid_circulant")
         kernels = {k["id"]: k for k in config["kernels"]}
         if not kernels or any(k.get("parameterization") != convention["parameterization"] or k["type"] != convention["type"]
                for k in kernels.values()):
@@ -102,6 +111,7 @@ def prepare(manifest_path: Path, output: Path) -> dict:
                 continue
             if row["sampler_type"] != expected_sampler:
                 raise ValueError("reference sampler does not match the declared kernel")
+            validate_sampler_row(sampler, row)
             key = (row["kernel_id"], row["state_id"])
             p = mapping[key]
             if not math.isclose(float(row["base_step"]), min(config["grid"]["step_sizes"]), rel_tol=1e-10):
@@ -185,6 +195,7 @@ def prepare(manifest_path: Path, output: Path) -> dict:
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(packed, output)
     report = {"counts": counts, "kernel": convention, "finest_resolution_counts": dict(resolution_counts),
+              "reference_sampler": packed["reference_sampler"],
               "segments": len(features), "manifest_sha256": packed["manifest_sha256"],
               "dataset_sha256": digest(output)}
     write_json(output.with_suffix(".json"), report)
@@ -196,6 +207,9 @@ def load_data(path: Path) -> dict:
     if data.get("format_version") != FORMAT_VERSION:
         raise ValueError("unsupported dataset format")
     validate_kernel(data.get("kernel"))
+    data["reference_sampler"] = reference_sampler(data.get("reference_sampler"))
+    for source in data.get("provenance", []):
+        require_same_sampler(data["reference_sampler"], source.get("sampler"), "dataset provenance")
     return data
 
 

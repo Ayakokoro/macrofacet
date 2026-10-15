@@ -43,6 +43,8 @@ void testMaterialRoughness(TestContext& context);
 void testRenewalReference(TestContext& context);
 void testRenewalTransport(TestContext& context);
 void testFirstPassage(TestContext& context);
+void testFunctionSpace(TestContext& context);
+void testFirstHitRender(TestContext& context);
 
 #if defined(MACROFACET_TEST_FIELDS)
 void testNanoVdbField(TestContext& context);

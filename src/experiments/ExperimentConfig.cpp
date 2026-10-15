@@ -3,6 +3,7 @@
 #include "macrofacet/fields/MeanFactory.h"
 #include "macrofacet/gpss/ShaderBallMean.h"
 #include "macrofacet/transport/RenewalMedium.h"
+#include "macrofacet/transport/FirstHitSEMedium.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
@@ -120,7 +121,17 @@ void requireNanoVdbField(const ExperimentConfig& config) {
 }
 
 void prepareRenewalModel(ExperimentConfig& config) {
-    if (config.transportMode != "neural_renewal") return;
+    if (config.transportMode != "neural_renewal" && config.transportMode != "hybrid_first_hit") return;
+    if (config.transportMode == "hybrid_first_hit") {
+        if ((config.continuationMethod != "neural_renewal" && config.continuationMethod != "classic_local") ||
+            config.renewal.backend != "scalar")
+            throw std::invalid_argument("hybrid_first_hit requires scalar neural_renewal or classic_local continuation");
+        if (config.continuationMethod == "classic_local") {
+            if (config.material.gpModel != GpModel::LocalTangent) config.preparedAreaMajorant.reset();
+            config.material.gpModel = GpModel::LocalTangent;
+            return; // Local continuation needs the scene density, not a renewal model.
+        }
+    }
     if (config.renewal.batchSize < 1 || config.renewal.batchSize > 65536)
         throw std::invalid_argument("transport.renewal.batch_size must be 1..65536");
     if (config.renewal.rayPoolSize < 0 || config.renewal.rayPoolSize > 65536)
@@ -142,7 +153,25 @@ void prepareRenewalModel(ExperimentConfig& config) {
     }
     (void)RenewalMedium(config.field, *config.renewal.model, config.renewal.profileMaximumStep,
                         config.renewal.profileMode);
+    if (config.material.gpModel != GpModel::GlobalPointwise) config.preparedAreaMajorant.reset();
     config.material.gpModel = GpModel::GlobalPointwise;
+}
+
+void prepareFirstHitModel(ExperimentConfig& config) {
+    if (config.transportMode != "hybrid_first_hit") return;
+    if (config.firstHit.method != "neural_first_hit_se" && config.firstHit.method != "gpis_function_space")
+        throw std::invalid_argument("unknown transport.first_hit.method");
+    if (config.firstHit.profileMode != "cubic" || config.firstHit.backend != "scalar")
+        throw std::invalid_argument("first-hit rendering requires cubic profiles and backend=scalar");
+    if (config.material.ndfFamily != NdfFamily::GeneralizedGaussian || config.material.alphaField)
+        throw std::invalid_argument("first-hit rendering requires generalized_gaussian without alpha grid");
+    if (config.firstHit.method == "neural_first_hit_se" && !config.firstHit.model) {
+        if (config.firstHit.modelPath.empty()) throw std::invalid_argument("transport.first_hit.model is required");
+        config.firstHit.model = std::make_shared<const FirstHitSEModel>(FirstHitSEModel::load(config.firstHit.modelPath));
+    }
+    if (config.firstHit.method == "gpis_function_space") config.firstHit.model.reset();
+    (void)FirstHitSEMedium(config.field,config.firstHit.model,
+        config.firstHit.profileMaximumStep,config.firstHit.reference);
 }
 
 void applyFieldOverrides(ExperimentConfig& config, std::optional<double> sigma,
@@ -312,10 +341,43 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.transportMode = transport.value("mode", "classic");
     if (config.transportMode != "classic" && config.transportMode != "classic_local" &&
         config.transportMode != "classic_global" &&
-        config.transportMode != "global_conditional" && config.transportMode != "neural_renewal" && config.transportMode != "all")
+        config.transportMode != "global_conditional" && config.transportMode != "neural_renewal" &&
+        config.transportMode != "hybrid_first_hit" && config.transportMode != "all")
         throw std::invalid_argument("unknown transport.mode: " + config.transportMode);
-    if (transport.contains("renewal")) {
-        const auto& renewal = transport.at("renewal");
+    const nlohmann::json* renewalJson = transport.contains("renewal") ? &transport.at("renewal") : nullptr;
+    if (config.transportMode == "hybrid_first_hit") {
+        if (renewalJson) throw std::invalid_argument("hybrid_first_hit uses transport.continuation, not transport.renewal");
+        const auto& first = transport.at("first_hit");
+        config.firstHit.method = first.at("method").get<std::string>();
+        config.firstHit.modelPath = first.value("model", "");
+        config.firstHit.profileMode = first.value("profile_mode", "cubic");
+        config.firstHit.profileMaximumStep = first.value("profile_maximum_step", 0.25);
+        config.firstHit.backend = first.value("backend", "scalar");
+        if (config.firstHit.method != "neural_first_hit_se" && config.firstHit.method != "gpis_function_space")
+            throw std::invalid_argument("unknown transport.first_hit.method");
+        if (config.firstHit.profileMode != "cubic" || config.firstHit.backend != "scalar")
+            throw std::invalid_argument("first-hit rendering requires cubic profiles and backend=scalar");
+        requirePositiveFinite(config.firstHit.profileMaximumStep,"transport.first_hit.profile_maximum_step");
+        if (first.contains("sampler")) {
+            const auto& sampler = first.at("sampler");
+            auto& r = config.firstHit.reference;
+            r.historyPoints = sampler.value("history_points",1);
+            r.batchSize = sampler.value("batch_size",8);
+            r.step = sampler.value("step_size",1.0/64.0);
+            r.rankTolerance = sampler.value("rank_tolerance",1e-10);
+            r.crossingRule = sampler.value("crossing_rule","tungsten_linear");
+        }
+        (void)FunctionSpaceRaySampler(config.firstHit.reference);
+        const auto& continuation = transport.at("continuation");
+        config.continuationMethod = continuation.at("method").get<std::string>();
+        config.renewal.backend = continuation.value("backend","scalar");
+        if ((config.continuationMethod != "neural_renewal" && config.continuationMethod != "classic_local") ||
+            config.renewal.backend != "scalar")
+            throw std::invalid_argument("hybrid_first_hit requires scalar neural_renewal or classic_local continuation");
+        renewalJson = config.continuationMethod == "neural_renewal" ? &continuation : nullptr;
+    }
+    if (renewalJson) {
+        const auto& renewal = *renewalJson;
         config.renewal.modelPath = renewal.at("model").get<std::string>();
         config.renewal.profileMaximumStep = renewal.value("profile_maximum_step", 0.25);
         config.renewal.profileMode = renewal.value("profile_mode", "cubic");
@@ -386,6 +448,7 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     if (render.contains("flight_table_cells"))
         throw std::invalid_argument("obsolete render.flight_table_cells setting");
     config.render.threadCount = render.value("thread_count", 0);
+    config.render.writeFirstHitSamples = render.value("write_first_hit_samples", false);
     config.render.safetyDepthCap = render.value("safety_depth_cap", config.render.safetyDepthCap);
 
     if (root.contains("transmittance")) {
@@ -583,7 +646,8 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                           {"render_threads", config.render.threadCount}};
     result["classic_phase_proposal"] = config.classicPhaseProposal;
     result["transport"]["mode"] = config.transportMode;
-    if (!config.renewal.modelPath.empty() || config.renewal.model) {
+    if ((!config.renewal.modelPath.empty() || config.renewal.model) &&
+        !(config.transportMode == "hybrid_first_hit" && config.continuationMethod == "classic_local")) {
         result["transport"]["renewal"] = {
             {"model", config.renewal.modelPath.string()},
             {"profile_maximum_step", config.renewal.profileMaximumStep},
@@ -599,6 +663,34 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
             result["transport"]["renewal"]["checkpoint_sha256"] = config.renewal.model->checkpointSha256();
             result["transport"]["renewal"]["model_kernel_type"] = covarianceKernelTypeName(config.renewal.model->kernelType());
         }
+    }
+    if (config.transportMode == "hybrid_first_hit") {
+        if (config.continuationMethod == "classic_local") {
+            result["transport"]["continuation"] = {
+                {"backend","scalar"},{"resolved_backend","scalar"},
+                {"sampler","dda_null_tracking"},{"gp_model","local_tangent"},
+                {"classic_phase_proposal",config.classicPhaseProposal}};
+        } else result["transport"]["continuation"] = result["transport"].at("renewal");
+        result["transport"].erase("renewal");
+        result["transport"]["continuation"]["method"] = config.continuationMethod;
+        const auto& r = config.firstHit.reference;
+        result["transport"]["first_hit"] = {
+            {"method",config.firstHit.method},{"model",config.firstHit.modelPath.string()},
+            {"profile_mode",config.firstHit.profileMode},{"profile_maximum_step",config.firstHit.profileMaximumStep},
+            {"backend",config.firstHit.backend},{"distance_convention","distance from activeDomain entry"},
+            {"event","unconditioned_first_zero"},{"gradient","signed secant plus conditional SE transverse Gaussian"},
+            {"sampler",{{"history_points",r.historyPoints},{"batch_size",r.batchSize},{"step_size",r.step},
+                {"rank_tolerance",r.rankTolerance},{"crossing_rule",r.crossingRule}}}};
+        if (config.firstHit.model) {
+            result["transport"]["first_hit"]["architecture"] = config.firstHit.model->architecture();
+            if (config.firstHit.model->architecture() == "spline")
+                result["transport"]["first_hit"]["distance_sampler"] = "analytic_rational_quadratic_inverse";
+            else result["transport"]["first_hit"]["integration_maximum_step"] = config.firstHit.model->maximumStep();
+        }
+        result["transport"]["side_convention"] = config.continuationMethod == "classic_local"
+            ? "first_hit preserves initial_sign; classic_local uses scene density and original field orientation"
+            : "side=initial_sign; continuation uses side*mean and side*gradient";
+        result["budgets"]["write_first_hit_samples"] = config.render.writeFirstHitSamples;
     }
     result["budgets"]["safety_depth_cap"] = config.render.safetyDepthCap;
     result["budgets"]["roulette_start_depth"] = config.render.rouletteStartDepth;
@@ -648,7 +740,8 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         {"distance_relative_tolerance", config.numeric.distanceRelativeTolerance},
         {"max_root_iterations", config.numeric.maxRootIterations},
         {"max_quadrature_subdivisions", config.numeric.maxQuadratureSubdivisions}};
-    result["rng_stream"] = "per_pixel_v1";
+    result["rng_stream"] = config.transportMode == "hybrid_first_hit"
+        ? "first_hit_split_v1: seed,pixel,sample; camera=0,event=1,gradient=2,continuation=3" : "per_pixel_v1";
     std::ofstream stream(path);
     if (!stream) throw std::runtime_error("cannot write resolved config");
     stream << std::setw(2) << result << '\n';

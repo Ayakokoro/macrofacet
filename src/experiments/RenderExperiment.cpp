@@ -1,6 +1,7 @@
 #include "macrofacet/experiments/RenderExperiment.h"
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
+#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <chrono>
 #include <atomic>
@@ -75,6 +76,46 @@ std::uint64_t totalCameraRays(const mf::ExperimentConfig& config,
     return total;
 }
 
+void writeFirstHitDiagnostics(const mf::ExperimentConfig& config, const mf::RenderedImage& image,
+    double seconds) {
+    const auto& s = image.statistics;
+    nlohmann::json summary{{"first_hit_method",config.firstHit.method},
+        {"continuation_method",config.continuationMethod},{"backend","scalar"},
+        {"seconds",seconds},{"paths",s.paths},{"first_hit_flights",s.firstHitFlights},
+        {"first_hits",s.firstHits},{"first_hit_escapes",s.firstHitEscapes},
+        {"domain_misses",s.firstHitDomainMisses},{"upcrossings",s.firstHitUpcrossings},
+        {"real_collisions",s.realCollisions},
+        {"continuation_flights",config.continuationMethod == "classic_local" ? s.classicFlights : s.renewal.flights},
+        {"escaped_paths",s.escapedPaths},{"roulette_terminations",s.rouletteTerminations},
+        {"safety_cap_terminations",s.safetyCapTerminations},{"numerical_failures",s.numericalFailures},
+        {"mean_path_depth",s.paths ? s.accumulatedPathDepth/s.paths : 0},
+        {"distance_convention","distance from activeDomain entry"},
+        {"rng_stream","first_hit_split_v1"}};
+    std::ofstream output(config.outputDirectory/"hybrid_summary.json");
+    if (!output) throw std::runtime_error("cannot write hybrid summary");
+    output << std::setw(2) << summary << '\n';
+    if (image.firstHitRecords.empty()) return;
+    std::ofstream csv(config.outputDirectory/"first_hit_samples.csv");
+    if (!csv) throw std::runtime_error("cannot write first-hit diagnostics");
+    csv << std::setprecision(17)
+        << "pixel_x,pixel_y,sample,entered,hit,initial_sign,entry_distance,maximum_distance,q,distance,speed,"
+           "ray_dx,ray_dy,ray_dz,entry_x,entry_y,entry_z,x,y,z,gx,gy,gz,nx,ny,nz,radiance_r,radiance_g,radiance_b,"
+           "camera_seed,event_seed,gradient_seed,continuation_seed\n";
+    const auto vector = [&](const mf::Vector3& v) { csv << ',' << v.x() << ',' << v.y() << ',' << v.z(); };
+    for (std::size_t i = 0; i < image.firstHitRecords.size(); ++i) {
+        const auto pixel = i/config.render.samplesPerPixel, sample = i%config.render.samplesPerPixel;
+        const auto& r = image.firstHitRecords[i]; const auto& h = r.first;
+        csv << pixel%image.width << ',' << pixel/image.width << ',' << sample << ',' << h.enteredDomain << ','
+            << h.hit << ',' << h.initialSign << ',' << h.entryDistance << ',' << h.maximumDistance << ','
+            << h.q << ',' << h.distance << ',' << h.speed;
+        vector(r.cameraRay.direction); vector(h.entry); vector(h.position);
+        vector(h.gradient); vector(h.normal); vector(r.radiance);
+        for (int stream = 0; stream < 4; ++stream)
+            csv << ',' << mf::firstHitStreamSeed(config.seed,pixel,sample,stream);
+        csv << '\n';
+    }
+}
+
 } // namespace
 
 namespace mf {
@@ -100,8 +141,10 @@ void runRenderExperiments(const ExperimentConfig& config) {
         for (const std::string& mode : modes) for (const std::string& environment : environments) {
             ExperimentConfig renderConfig = config;
             renderConfig.transportMode = mode;
-            if (mode == "classic_local") renderConfig.material.gpModel = GpModel::LocalTangent;
-            if (mode == "classic_global" || mode == "global_conditional" || mode == "neural_renewal")
+            if (mode == "classic_local" || (mode == "hybrid_first_hit" && config.continuationMethod == "classic_local"))
+                renderConfig.material.gpModel = GpModel::LocalTangent;
+            if (mode == "classic_global" || mode == "global_conditional" || mode == "neural_renewal" ||
+                (mode == "hybrid_first_hit" && config.continuationMethod == "neural_renewal"))
                 renderConfig.material.gpModel = GpModel::GlobalPointwise;
             if (renderConfig.material.gpModel != config.material.gpModel)
                 renderConfig.preparedAreaMajorant.reset();
@@ -124,6 +167,7 @@ void runRenderExperiments(const ExperimentConfig& config) {
                 (mode == "classic" ? std::string("classic") : mode) + "_" + suffix;
             writePfm(config.outputDirectory / (stem + ".pfm"), image);
             writeBmpPreview(config.outputDirectory / (stem + ".bmp"), image);
+            if (mode == "hybrid_first_hit") writeFirstHitDiagnostics(renderConfig,image,seconds);
             const double meanDepth = image.statistics.paths > 0
                 ? image.statistics.accumulatedPathDepth / image.statistics.paths : 0.0;
             summary << mode << ',' << environment << ',' << image.width << ','

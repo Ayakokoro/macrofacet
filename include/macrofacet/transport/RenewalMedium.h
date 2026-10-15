@@ -42,6 +42,10 @@ Vector3 sampleRenewalGradient(const CovarianceKernel& kernel, const Vector3& dir
     double normalizedDistance, double derivative, const Vector3& meanGradient,
     const Vector3& birthMeanGradient, const std::optional<Vector3>& birthGradient, Random& rng);
 
+// Unconditioned first zero permits both signs of the physical directional derivative.
+Vector3 sampleFirstHitSEGradient(const CovarianceKernel& kernel, const Vector3& direction,
+    double signedDerivative, const Vector3& meanGradient, Random& rng);
+
 class RenewalMedium {
 public:
     RenewalMedium(const GPSSField& field, const RenewalHazardModel& model, double maximumStep = 0.25,

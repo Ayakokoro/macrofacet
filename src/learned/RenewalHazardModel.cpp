@@ -81,6 +81,10 @@ RenewalHazardModel::RenewalHazardModel(std::shared_ptr<const Impl> impl) : impl_
 RenewalHazardModel RenewalHazardModel::load(const std::filesystem::path& path) {
     std::ifstream stream(path);
     if (!stream) throw std::runtime_error("cannot open Renewal hazard bundle: " + path.string());
+    return load(stream);
+}
+
+RenewalHazardModel RenewalHazardModel::load(std::istream& stream) {
     Json root;
     stream >> root;
     const bool full = root.at("format") == "macrofacet.renewal";

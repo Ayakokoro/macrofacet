@@ -1,6 +1,7 @@
 #pragma once
 
 #include "macrofacet/gpss/MeanField.h"
+#include "macrofacet/gpss/FunctionSpaceRaySampler.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -99,6 +100,8 @@ struct FirstPassageExperimentConfig {
     double confidenceLevel = 0.95;
     bool writeRawSamples = false;
     int maximumEmbeddingExpansions = 8;
+    std::string samplerType = "auto";
+    FunctionSpaceSamplerConfig functionSpace;
     int minimumRiskSetForError = 32;
     FirstPassageStateAnalysisConfig stateAnalysis;
     FirstPassageRiceSeriesConfig riceSeries;

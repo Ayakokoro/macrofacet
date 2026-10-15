@@ -1,0 +1,14 @@
+{
+  "seed": 20261013,
+  "output_directory": "outputs/first_hit_se_camera_dataset_v1",
+  "split_unit": "ray",
+  "realizations_per_profile": 512,
+  "reference_steps": [0.015625, 0.0078125],
+  "threads": 4,
+  "sources": [
+    {"scene_id": "shader_ball_sigma005", "split": "train", "render_config": "configs/render_neural_renewal_shader_ball_ply_point_linear_se_h16_sigma_0.05.json", "pixels": [[144,144],[144,256],[144,368],[256,144],[256,256],[256,368],[256,72],[256,440]]},
+    {"scene_id": "shader_ball_sigma005", "split": "validation", "realizations_per_profile": 2048, "render_config": "configs/render_neural_renewal_shader_ball_ply_point_linear_se_h16_sigma_0.05.json", "pixels": [[368,144],[368,256]]},
+    {"scene_id": "shader_ball_sigma005", "split": "test", "realizations_per_profile": 4096, "render_config": "configs/render_neural_renewal_shader_ball_ply_point_linear_se_h16_sigma_0.05.json", "pixels": [[368,368],[32,32]]},
+    {"scene_id": "affine_sign_coverage", "split": "train", "reference_config": "configs/first_hit_se_affine_reference.json"}
+  ]
+}

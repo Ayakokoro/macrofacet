@@ -1,5 +1,7 @@
 # Documentation
 
+- [Fixed GPIS function-space sampler](GPIS_FUNCTION_SPACE.md): renewal+ memory, Tungsten-style linear training reference, optional Hermite comparison, fixed H / batch / step and separate model identities.
+- [SE camera first hit](FIRST_HIT_SE.md): unconditional first-zero RNO / GRU comparison, segmentation checks, gradient reconstruction, and scalar C++ inference.
 - [Renewal reference foundation](RENEWAL_REFERENCE.md): shared ray profiles, Matern-3/2 A/B starts, kernel migration.
 - [Renewal sequence training](../python/README.md): scene-disjoint data collection, GRU joint likelihood, training and evaluation.
 - [Renewal C++ rendering](RENEWAL_CPP.md): model export, distance/normal sampling, batched LibTorch CPU/CUDA path tracing, transmittance, and parity checks.

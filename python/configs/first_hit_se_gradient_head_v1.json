@@ -1,0 +1,22 @@
+{
+  "output_directory": "outputs/first_hit_se_gradient_head_20261013",
+  "model_directory": "outputs/models/first_hit_se_gradient_head_v1",
+  "initialize_from": "outputs/models/first_hit_se_ablation_v3/h16_nll_s20261022/last.pt",
+  "dataset": "outputs/first_hit_se_camera_dataset_v2/dataset.pt",
+  "scene_dataset": "outputs/first_hit_se_render_scene_sigma005_dataset_20261013/dataset.pt",
+  "device": "cuda",
+  "cpu_threads": 1,
+  "components": [8, 16, 32],
+  "seeds": [20261031, 20261032, 20261033],
+  "representative_seed": 20261032,
+  "split_jitter": 0.002,
+  "training": {
+    "epochs": 256,
+    "batch_size": 4096,
+    "learning_rate": 0.0003,
+    "minimum_learning_rate": 0.00003,
+    "weight_decay": 0.00001,
+    "gradient_clip": 1.0,
+    "validation_every": 4
+  }
+}

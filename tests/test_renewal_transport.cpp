@@ -285,6 +285,22 @@ void testRenewalTransport(TestContext& context) {
     for (const auto& kernel : {seIsotropic,seAnisotropic}) {
         const Matrix3 C=kernel.gradientCovarianceAtZero();
         const Vector3 a=C*w/w.dot(C*w);
+        for (double derivative : {-0.4,0.6}) {
+            const Vector3 target=meanG+a*(derivative-w.dot(meanG));
+            const Matrix3 covariance=C-a*(C*w).transpose();
+            Vector3 average=Vector3::Zero();
+            Matrix3 second=Matrix3::Zero();
+            Random firstHitRng(1973);
+            constexpr int count=12000;
+            for (int i=0;i<count;++i) {
+                const auto g=sampleFirstHitSEGradient(kernel,w,derivative,meanG,firstHitRng);
+                context.near(w.dot(g),derivative,2e-15,"first-zero gradient retains either crossing sign");
+                average+=g;
+                second+=(g-target)*(g-target).transpose();
+            }
+            context.near((average/count-target).norm(),0,0.025,"first-zero full gradient mean");
+            context.near((second/count-covariance).norm(),0,0.025,"first-zero full gradient covariance");
+        }
         const Vector3 atBirth=meanG+a*(-0.4-w.dot(meanG))+
             birthG-birthMean-a*w.dot(birthG-birthMean);
         Random zeroRng(384), tinyRng(384), distantRng(384), exteriorRng(384);

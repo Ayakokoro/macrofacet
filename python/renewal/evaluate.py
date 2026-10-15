@@ -13,6 +13,7 @@ from .data import SPLITS, SequenceDataset, collate, load_data, to_device
 from .model import ModelConfig, RenewalNetwork, cumulative
 from .collect import digest, write_json
 from .profiles import with_profile_mode
+from .reference_sampler import reference_sampler, require_same_sampler
 
 
 def load_model(path: Path, device):
@@ -20,6 +21,7 @@ def load_model(path: Path, device):
     if bundle.get("format_version") != FORMAT_VERSION:
         raise ValueError("unsupported network checkpoint")
     validate_kernel(bundle.get("kernel"))
+    bundle["reference_sampler"] = reference_sampler(bundle.get("reference_sampler"))
     model = RenewalNetwork(ModelConfig(**bundle["model_config"])).to(device)
     model.load_state_dict(bundle["model_state"])
     return model, bundle
@@ -114,6 +116,7 @@ def survival_calibration(model, data, split, device, batch_size=128):
 def evaluate(checkpoint: Path, dataset: Path, output: Path, split="test", device="cpu", batch_size=128):
     data = load_data(dataset)
     model, bundle = load_model(checkpoint, device)
+    require_same_sampler(bundle["reference_sampler"], data.get("reference_sampler"), "evaluation")
     if bundle["kernel"] != data["kernel"]:
         raise ValueError("checkpoint and evaluation dataset kernels differ")
     data = with_profile_mode(data, bundle.get("profile_mode", "cubic"))

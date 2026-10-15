@@ -16,6 +16,7 @@ def export_model(checkpoint: Path, output: Path, *, hazard_only: bool = False):
         value = tensor.detach().cpu().float().contiguous()
         weights[name] = {"shape": list(value.shape), "values": value.reshape(-1).tolist()}
     result = {"format": "macrofacet.renewal_hazard" if hazard_only else "macrofacet.renewal", "version": 1, "kernel": bundle["kernel"],
+              "reference_sampler": bundle["reference_sampler"],
               "activation_dtype": "float32", "gru_convention": "pytorch_rzn_reset_after",
               "feature_transform": "asinh_first_four_log_dx_identity",
               "initial_transform": "asinh_mode_b0_known_z0_known_d0",

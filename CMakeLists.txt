@@ -21,10 +21,13 @@ add_library(macrofacet
     src/mathutility/CubicPolynomial.cpp
     src/gpss/RayMeanProfile.cpp
     src/gpss/Matern32Reference.cpp
+    src/gpss/FunctionSpaceRaySampler.cpp
     src/learned/RenewalHazardModel.cpp
+    src/learned/FirstHitSEModel.cpp
     src/learned/RenewalBatchSession.cpp
     src/transport/RenewalRayDistribution.cpp
     src/transport/RenewalMedium.cpp
+    src/transport/FirstHitSEMedium.cpp
     src/macrofacet/GaussianNdf.cpp
     src/macrofacet/GgxHeightfield.cpp
     src/macrofacet/MaterialConfig.cpp
@@ -93,6 +96,8 @@ add_executable(macrofacet_experiments src/experiments/ExperimentMain.cpp)
 target_link_libraries(macrofacet_experiments PRIVATE macrofacet)
 add_executable(macrofacet_verify_renewal_batch EXCLUDE_FROM_ALL tools/verify_renewal_batch.cpp)
 target_link_libraries(macrofacet_verify_renewal_batch PRIVATE macrofacet)
+add_executable(macrofacet_query_first_hit_se EXCLUDE_FROM_ALL tools/query_first_hit_se.cpp)
+target_link_libraries(macrofacet_query_first_hit_se PRIVATE macrofacet)
 
 # ---------------------------------------------------------------------------
 # macrofacet_field: the NanoVDB-backed field library.
@@ -163,6 +168,10 @@ if(MACROFACET_BUILD_FIELDS)
     target_link_libraries(macrofacet_renewal_benchmark PRIVATE macrofacet_field)
     add_executable(macrofacet_inspect_renewal_ray EXCLUDE_FROM_ALL tools/inspect_renewal_ray.cpp)
     target_link_libraries(macrofacet_inspect_renewal_ray PRIVATE macrofacet_field)
+    add_executable(macrofacet_inspect_first_hit_se EXCLUDE_FROM_ALL tools/inspect_first_hit_se.cpp)
+    target_link_libraries(macrofacet_inspect_first_hit_se PRIVATE macrofacet_field)
+    add_executable(macrofacet_compare_first_hit_render EXCLUDE_FROM_ALL tools/compare_first_hit_render.cpp)
+    target_link_libraries(macrofacet_compare_first_hit_render PRIVATE macrofacet_field)
     add_executable(macrofacet_inspect_collision_gradients EXCLUDE_FROM_ALL tools/inspect_collision_gradients.cpp)
     target_link_libraries(macrofacet_inspect_collision_gradients PRIVATE macrofacet_field)
     if(MSVC)
@@ -216,6 +225,8 @@ set(MACROFACET_TEST_SOURCES
     tests/test_renewal_reference.cpp
     tests/test_renewal_transport.cpp
     tests/test_first_passage.cpp
+    tests/test_function_space.cpp
+    tests/test_first_hit_render.cpp
     tests/test_transmittance_config.cpp
     tests/test_rendering_threads.cpp)
 set(MACROFACET_TEST_LIBRARIES macrofacet)
@@ -254,7 +265,7 @@ if(WIN32 AND MACROFACET_ENABLE_TORCH)
         DEPENDS ${MACROFACET_TORCH_DLLS}
         COMMENT "Deploying LibTorch runtime DLLs" VERBATIM)
     add_custom_target(macrofacet_torch_runtime DEPENDS "${MACROFACET_TORCH_RUNTIME_STAMP}")
-    foreach(executable macrofacet_experiments macrofacet_tests macrofacet_fieldgen macrofacet_renewal_benchmark macrofacet_verify_renewal_batch macrofacet_profile_renewal macrofacet_inspect_renewal_ray macrofacet_inspect_collision_gradients)
+    foreach(executable macrofacet_experiments macrofacet_tests macrofacet_fieldgen macrofacet_renewal_benchmark macrofacet_verify_renewal_batch macrofacet_query_first_hit_se macrofacet_profile_renewal macrofacet_inspect_renewal_ray macrofacet_inspect_first_hit_se macrofacet_compare_first_hit_render macrofacet_inspect_collision_gradients)
         if(TARGET ${executable})
             add_dependencies(${executable} macrofacet_torch_runtime)
         endif()
@@ -278,9 +289,10 @@ set_tests_properties(macrofacet_data_analysis_tests PROPERTIES
 # Python neural tests remain optional, independently of the C++ LibTorch backend.
 option(MACROFACET_TEST_NEURAL "Run Renewal+ Python tests (requires torch and numpy)" OFF)
 if(MACROFACET_TEST_NEURAL)
+    add_dependencies(macrofacet_tests macrofacet_query_first_hit_se)
     add_test(NAME macrofacet_renewal_tests
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s python/tests -v)
     set_tests_properties(macrofacet_renewal_tests PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        ENVIRONMENT "MACROFACET_RENEWAL_EXE=$<TARGET_FILE:macrofacet_experiments>")
+        ENVIRONMENT "MACROFACET_RENEWAL_EXE=$<TARGET_FILE:macrofacet_experiments>;MACROFACET_FIRST_HIT_EXE=$<TARGET_FILE:macrofacet_query_first_hit_se>")
 endif()

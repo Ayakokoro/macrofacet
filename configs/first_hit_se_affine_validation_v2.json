@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "seed": 20261013,
+  "first_passage": {
+    "initial_condition": {
+      "type": "unconditioned_first_zero",
+      "profiles": [
+        {
+          "id": "validation_000",
+          "beta_0": 6.608031,
+          "beta_a": -1.28323
+        },
+        {
+          "id": "validation_001",
+          "beta_0": 9.934542,
+          "beta_a": 1.249528
+        },
+        {
+          "id": "validation_002",
+          "beta_0": 8.33658,
+          "beta_a": 1.215063
+        },
+        {
+          "id": "validation_003",
+          "beta_0": 9.838875,
+          "beta_a": 0.873872
+        },
+        {
+          "id": "validation_004",
+          "beta_0": -1.211942,
+          "beta_a": 1.432368
+        },
+        {
+          "id": "validation_005",
+          "beta_0": 6.418078,
+          "beta_a": 1.29974
+        },
+        {
+          "id": "validation_006",
+          "beta_0": 5.207411,
+          "beta_a": -2.099915
+        },
+        {
+          "id": "validation_007",
+          "beta_0": -1.582291,
+          "beta_a": -2.329893
+        }
+      ]
+    },
+    "grid": {
+      "max_time": 8.0,
+      "step_sizes": [
+        0.015625,
+        0.0078125
+      ]
+    },
+    "profile": {
+      "maximum_step": 0.25
+    },
+    "curve": {
+      "bins": 128
+    },
+    "monte_carlo": {
+      "trajectories": 4096,
+      "thread_count": 4,
+      "write_raw_samples": true
+    },
+    "kernels": [
+      {
+        "id": "se",
+        "type": "squared_exponential",
+        "parameterization": "unit_length",
+        "variance": 1.0,
+        "length_scale": 1.0
+      }
+    ]
+  },
+  "output_directory": "outputs/first_hit_se_affine_validation_v2"
+}

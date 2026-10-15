@@ -10,6 +10,7 @@ import subprocess
 import numpy as np
 
 from . import FORMAT_VERSION, KERNEL, validate_kernel
+from .reference_sampler import configure_sampler, require_same_sampler
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -164,17 +165,21 @@ def collect(config_path: Path) -> Path:
                               "first_passage": {
                                   "process": {"mean_field": mean},
                                   "initial_condition": {"type": mode, "rays": rays},
-                                  "grid": {"max_time": horizon, "step_sizes": settings["reference_steps"]},
+                                  "grid": {"max_time": horizon, "step_sizes": settings.get("reference_steps", [1/64])},
                                   "profile": {"maximum_step": settings["profile_maximum_step"]},
                                   "curve": {"bins": 32},
                                   "monte_carlo": {"trajectories": settings["realizations_per_profile"],
                                                   "thread_count": settings["threads"], "write_raw_samples": True},
                                   "sampler": {"type": "collision_state_auto",
-                                              "minimum_step": settings["minimum_step"],
+                                              "minimum_step": settings.get("minimum_step", 1/1024),
                                               "crossing_tolerance": 1e-9, "bridge_sigma_margin": 6,
                                               "max_refinement_depth": 16},
                                   "kernels": [{"id": "matern32" if kernel == KERNEL else "se", **kernel,
                                                "variance": sigma * sigma, "length_scale": ell}]}}
+                    sampler = configure_sampler(source["first_passage"], settings)
+                    if "reference_sampler" in manifest:
+                        require_same_sampler(manifest["reference_sampler"], sampler, "collection sources")
+                    manifest["reference_sampler"] = sampler
                     source_path = run / "input.json"
                     write_json(source_path, source)
                     # A matching input and executable are needed to reuse an existing source.

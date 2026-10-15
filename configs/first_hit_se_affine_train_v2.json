@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "seed": 20261013,
+  "first_passage": {
+    "initial_condition": {
+      "type": "unconditioned_first_zero",
+      "profiles": [
+        {
+          "id": "train_000",
+          "beta_0": 0.0,
+          "beta_a": 0.0
+        },
+        {
+          "id": "train_001",
+          "beta_0": 0.4,
+          "beta_a": 0.0
+        },
+        {
+          "id": "train_002",
+          "beta_0": 1.0,
+          "beta_a": 0.0
+        },
+        {
+          "id": "train_003",
+          "beta_0": 2.0,
+          "beta_a": 0.0
+        },
+        {
+          "id": "train_004",
+          "beta_0": 3.5,
+          "beta_a": 0.0
+        },
+        {
+          "id": "train_005",
+          "beta_0": 5.0,
+          "beta_a": 0.0
+        },
+        {
+          "id": "train_006",
+          "beta_0": 7.0,
+          "beta_a": 0.0
+        },
+        {
+          "id": "train_007",
+          "beta_0": 9.0,
+          "beta_a": 0.0
+        },
+        {
+          "id": "train_008",
+          "beta_0": -1.025838,
+          "beta_a": -0.394181
+        },
+        {
+          "id": "train_009",
+          "beta_0": 6.159344,
+          "beta_a": 1.266044
+        },
+        {
+          "id": "train_010",
+          "beta_0": 2.970386,
+          "beta_a": 1.325859
+        },
+        {
+          "id": "train_011",
+          "beta_0": 9.215297,
+          "beta_a": 0.664814
+        },
+        {
+          "id": "train_012",
+          "beta_0": 4.632593,
+          "beta_a": 0.25616
+        },
+        {
+          "id": "train_013",
+          "beta_0": 2.112113,
+          "beta_a": 1.103357
+        },
+        {
+          "id": "train_014",
+          "beta_0": 7.762561,
+          "beta_a": 0.990176
+        },
+        {
+          "id": "train_015",
+          "beta_0": -1.481018,
+          "beta_a": 0.216993
+        },
+        {
+          "id": "train_016",
+          "beta_0": 7.833546,
+          "beta_a": 0.434786
+        },
+        {
+          "id": "train_017",
+          "beta_0": 5.418867,
+          "beta_a": 0.96785
+        },
+        {
+          "id": "train_018",
+          "beta_0": 3.485198,
+          "beta_a": -0.359666
+        },
+        {
+          "id": "train_019",
+          "beta_0": 6.608663,
+          "beta_a": 1.299179
+        },
+        {
+          "id": "train_020",
+          "beta_0": 0.994201,
+          "beta_a": -1.601549
+        },
+        {
+          "id": "train_021",
+          "beta_0": 3.133238,
+          "beta_a": -0.141525
+        },
+        {
+          "id": "train_022",
+          "beta_0": 7.340905,
+          "beta_a": 0.76775
+        },
+        {
+          "id": "train_023",
+          "beta_0": 7.145362,
+          "beta_a": -0.053129
+        },
+        {
+          "id": "train_024",
+          "beta_0": 8.450592,
+          "beta_a": -0.893882
+        },
+        {
+          "id": "train_025",
+          "beta_0": 7.334032,
+          "beta_a": -1.826612
+        },
+        {
+          "id": "train_026",
+          "beta_0": 0.882916,
+          "beta_a": 0.709142
+        },
+        {
+          "id": "train_027",
+          "beta_0": 0.187254,
+          "beta_a": -0.454458
+        },
+        {
+          "id": "train_028",
+          "beta_0": -0.756507,
+          "beta_a": 1.126433
+        },
+        {
+          "id": "train_029",
+          "beta_0": 4.536083,
+          "beta_a": -2.381999
+        },
+        {
+          "id": "train_030",
+          "beta_0": 1.715621,
+          "beta_a": -0.83595
+        },
+        {
+          "id": "train_031",
+          "beta_0": -1.606675,
+          "beta_a": 0.581106
+        }
+      ]
+    },
+    "grid": {
+      "max_time": 8.0,
+      "step_sizes": [
+        0.015625,
+        0.0078125
+      ]
+    },
+    "profile": {
+      "maximum_step": 0.25
+    },
+    "curve": {
+      "bins": 128
+    },
+    "monte_carlo": {
+      "trajectories": 4096,
+      "thread_count": 4,
+      "write_raw_samples": true
+    },
+    "kernels": [
+      {
+        "id": "se",
+        "type": "squared_exponential",
+        "parameterization": "unit_length",
+        "variance": 1.0,
+        "length_scale": 1.0
+      }
+    ]
+  },
+  "output_directory": "outputs/first_hit_se_affine_train_v2"
+}

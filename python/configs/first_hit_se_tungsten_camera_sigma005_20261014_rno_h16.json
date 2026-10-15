@@ -1,0 +1,45 @@
+{
+  "seed": 20261014,
+  "dataset": "outputs/first_hit_se_tungsten_camera_sigma005_20261014/data/dataset.pt",
+  "output_directory": "outputs/models/first_hit_se_tungsten_camera_sigma005_20261014_rno_h16",
+  "reference_sampler": {
+    "type": "gpis_function_space",
+    "history_points": 1,
+    "batch_size": 8,
+    "step_size": 0.015625,
+    "rank_tolerance": 1e-10,
+    "crossing_rule": "tungsten_linear"
+  },
+  "device": "cuda",
+  "cpu_threads": 1,
+  "profiles_per_batch": 24,
+  "samples_per_profile_per_epoch": 256,
+  "epochs": 320,
+  "minimum_epochs": 128,
+  "patience": 40,
+  "early_stopping_min_delta": 0.0005,
+  "learning_rate": 0.001,
+  "weight_decay": 1e-05,
+  "gradient_clip": 1.0,
+  "subdivision_factors": [
+    1
+  ],
+  "batched_solver": true,
+  "cuda_graph_solver": true,
+  "lr_scheduler": {
+    "factor": 0.5,
+    "patience": 10,
+    "threshold": 0.001,
+    "threshold_mode": "abs",
+    "min_lr": 3e-05
+  },
+  "model": {
+    "architecture": "rno",
+    "hidden": 16,
+    "width": 64,
+    "mixture_width": 128,
+    "components": 8,
+    "sigma_floor": 0.01,
+    "maximum_step": 0.03125
+  }
+}

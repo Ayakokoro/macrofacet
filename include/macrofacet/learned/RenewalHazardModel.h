@@ -5,6 +5,7 @@
 #include <array>
 #include <filesystem>
 #include <memory>
+#include <iosfwd>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,7 @@ public:
         State nextState; // used only after surviving the complete segment
     };
     static RenewalHazardModel load(const std::filesystem::path& bundle);
+    static RenewalHazardModel load(std::istream& bundle);
     State initialize(const RayMeanSegment& first, const RayStartCondition& start) const;
     Step evaluate(const State& enteringState, const RayMeanSegment& segment) const;
     bool hasMixture() const;

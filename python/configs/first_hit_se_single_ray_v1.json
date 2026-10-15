@@ -1,0 +1,32 @@
+{
+  "output_directory": "outputs/first_hit_se_single_ray_20261014",
+  "model_directory": "outputs/models/first_hit_se_single_ray_v1",
+  "render_config": "configs/render_neural_renewal_shader_ball_ply_point_linear_se_h16_sigma_0.05.json",
+  "pixel": [376, 96],
+  "initialize_from": "outputs/models/first_hit_se_joint_h16_v1/joint_s20261032/last.pt",
+  "previous_reference": "outputs/first_hit_se_render_scene_sigma005_dataset_20261013/source_00007/reference/first_passage_samples.csv",
+  "reference_steps": [0.0078125, 0.00390625],
+  "collection_workers": 3,
+  "threads_per_reference": 2,
+  "splits": {
+    "train": {"realizations": 32768, "seed": 88001401},
+    "validation": {"realizations": 8192, "seed": 88001402},
+    "test": {"realizations": 32768, "seed": 88001403}
+  },
+  "distance_bins": 8,
+  "device": "cuda",
+  "cpu_threads": 1,
+  "seeds": [20261041, 20261042, 20261043],
+  "representative_seed": 20261042,
+  "training": {
+    "epochs": 768,
+    "profiles_per_batch": 1,
+    "samples_per_profile": 2048,
+    "learning_rate": 0.0003,
+    "minimum_learning_rate": 0.00003,
+    "weight_decay": 0.00001,
+    "gradient_clip": 1.0,
+    "validation_every": 32,
+    "cuda_graph_solver": true
+  }
+}

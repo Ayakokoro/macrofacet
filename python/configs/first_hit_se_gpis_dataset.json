@@ -1,0 +1,20 @@
+{
+  "seed": 20261014,
+  "output_directory": "outputs/first_hit_se_gpis_linear_h1_b8_dq64",
+  "split_unit": "scene",
+  "realizations_per_profile": 4096,
+  "threads": 4,
+  "reference_sampler": {
+    "type": "gpis_function_space",
+    "history_points": 1,
+    "batch_size": 8,
+    "step_size": 0.015625,
+    "rank_tolerance": 1e-10,
+    "crossing_rule": "tungsten_linear"
+  },
+  "sources": [
+    {"scene_id": "affine_train", "split": "train", "reference_config": "configs/first_hit_se_affine_train_v2.json"},
+    {"scene_id": "affine_validation", "split": "validation", "reference_config": "configs/first_hit_se_affine_validation_v2.json"},
+    {"scene_id": "affine_test", "split": "test", "reference_config": "configs/first_hit_se_affine_test_v2.json"}
+  ]
+}

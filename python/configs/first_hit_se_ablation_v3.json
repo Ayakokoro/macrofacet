@@ -1,0 +1,45 @@
+{
+  "output_directory": "outputs/first_hit_se_ablation_20261013",
+  "model_directory": "outputs/models/first_hit_se_ablation_v3",
+  "seeds": [20261021, 20261022, 20261023],
+  "primary_checkpoint": "last.pt",
+  "scene_dataset": "outputs/first_hit_se_render_scene_sigma005_dataset_20261013/dataset.pt",
+  "baselines": {
+    "rno_v2": "outputs/models/first_hit_se_rno_h16_v2/best.pt",
+    "gru_v2": "outputs/models/first_hit_se_gru_h16_v2/best.pt"
+  },
+  "common": {
+    "dataset": "outputs/first_hit_se_camera_dataset_v2/dataset.pt",
+    "initialize_from": "outputs/models/first_hit_se_rno_h16_v2/best.pt",
+    "device": "cuda",
+    "cpu_threads": 1,
+    "profiles_per_batch": 32,
+    "samples_per_profile_per_epoch": 256,
+    "epochs": 96,
+    "minimum_epochs": 96,
+    "patience": 1000,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.00001,
+    "gradient_clip": 1.0,
+    "subdivision_factors": [1],
+    "batched_solver": true,
+    "cuda_graph_solver": true,
+    "curve_points": 33,
+    "model": {
+      "architecture": "rno",
+      "hidden": 16,
+      "width": 64,
+      "mixture_width": 128,
+      "components": 8,
+      "sigma_floor": 0.01,
+      "maximum_step": 0.03125
+    },
+    "lr_scheduler": {"type": "cosine", "T_max": 96, "eta_min": 0.00003}
+  },
+  "variants": [
+    {"name": "h16_nll", "hidden": 16, "curve_loss_weight": 0.0},
+    {"name": "h16_curve", "hidden": 16, "curve_loss_weight": 10.0},
+    {"name": "h32_nll", "hidden": 32, "curve_loss_weight": 0.0},
+    {"name": "h64_nll", "hidden": 64, "curve_loss_weight": 0.0}
+  ]
+}
