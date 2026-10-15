@@ -21,6 +21,7 @@
 #include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/io/IO.h>
+#include <openvdb/tools/Interpolation.h>
 
 #include <nlohmann/json.hpp>
 
@@ -96,6 +97,39 @@ const BakedSphere& sphereField() {
 // only be non-zero where its own mask is set, so a mask that disagreed with the
 // sdf grid's would show up as a non-zero density over a background sdf (or as a
 // zero density inside the band).
+void testTungstenGridQueries(TestContext& context) {
+    using namespace mf;
+    const auto& baked=sphereField();
+    auto mean=NanoVdbMean::open(baked.path);
+    auto handle=nanovdb::io::readGrid<nanovdb::HostBuffer>(baked.path.string(),"sdf");
+    const auto* grid=handle.grid<float>();
+    struct TreeAdapter {
+        using ValueType=float;
+        const nanovdb::NanoGrid<float>* grid;
+        float getValue(const openvdb::Coord& p) const {
+            return grid->tree().getValue(nanovdb::Coord(p[0],p[1],p[2]));
+        }
+    } tree{grid};
+    const auto origin=grid->indexToWorld(nanovdb::Vec3d(0));
+    const float inverse=1.f/static_cast<float>(grid->voxelSize()[0]);
+    const auto bounds=grid->indexBBox();
+    const auto reference=[&](const Point3& p) {
+        openvdb::Vec3R index;
+        for(int a=0;a<3;++a) index[a]=std::clamp(static_cast<float>(p[a])*inverse-
+            static_cast<float>(origin[a])*inverse,float(bounds.min()[a]+2),float(bounds.max()[a]-2));
+        return double(openvdb::tools::BoxSampler::sample(tree,index));
+    };
+    for(const Point3 p : {Point3(.17,.23,.91),Point3(.2,-.35,-.9),Point3(100,100,100),Point3(-100,-100,-100)}) {
+        const auto actual=mean->evaluateTungsten(p);
+        context.near(actual.value,reference(p),0,"Tungsten mean matches actual OpenVDB float BoxSampler and clamp");
+        for(int axis=0;axis<3;++axis) {
+            Point3 next=p; next[axis]+=.001;
+            context.near(actual.gradient[axis],(reference(next)-reference(p))/.001,0,
+                "Tungsten tabulated derivative matches original forward difference");
+        }
+    }
+}
+
 void testVoxelContract(TestContext& context) {
     const BakedSphere& baked = sphereField();
     const double sigma = baked.settings.sigma;
@@ -1417,6 +1451,7 @@ void testConditionalRayBounds(TestContext& context) {
 } // namespace
 
 void testNanoVdbField(TestContext& context) {
+    testTungstenGridQueries(context);
     testVoxelContract(context);
     testBackgroundValues(context);
     testSignedDistanceAgreement(context);

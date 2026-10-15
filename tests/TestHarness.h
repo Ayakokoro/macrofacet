@@ -44,6 +44,7 @@ void testRenewalReference(TestContext& context);
 void testRenewalTransport(TestContext& context);
 void testFirstPassage(TestContext& context);
 void testFunctionSpace(TestContext& context);
+void testTungstenFunctionSpace(TestContext& context);
 void testFirstHitRender(TestContext& context);
 
 #if defined(MACROFACET_TEST_FIELDS)

@@ -2,6 +2,7 @@
 
 #include "macrofacet/gpss/GPSSField.h"
 #include "macrofacet/gpss/FunctionSpaceRaySampler.h"
+#include "macrofacet/gpss/TungstenFunctionSpaceSampler.h"
 #include "macrofacet/macrofacet/MaterialConfig.h"
 #include "macrofacet/mathutility/NumericPolicy.h"
 #include "macrofacet/transport/FlightState.h"
@@ -23,6 +24,7 @@ struct FirstHitRenderConfig {
     std::string profileMode = "cubic", backend = "scalar";
     double profileMaximumStep = 0.25;
     FunctionSpaceSamplerConfig reference;
+    TungstenFunctionSpaceConfig tungsten;
     std::shared_ptr<const FirstHitSEModel> model;
 };
 
@@ -120,7 +122,10 @@ struct ExperimentConfig {
     std::string transportMode = "classic";
     RenewalRenderConfig renewal;
     FirstHitRenderConfig firstHit;
-    std::string continuationMethod = "neural_renewal"; // neural_renewal or classic_local (CPU scalar)
+    // Independent scalar continuation: neural_renewal, classic_local,
+    // global_conditional, or gpis_function_space_tungsten.
+    std::string continuationMethod = "neural_renewal";
+    TungstenFunctionSpaceConfig continuationTungsten;
 };
 
 ExperimentConfig loadExperimentConfig(const std::filesystem::path& path);

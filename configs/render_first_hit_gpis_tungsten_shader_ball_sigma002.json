@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "seed": 17429,
+  "field": {
+    "mean_type": "nanovdb",
+    "grid_file": "outputs/fields/shader_ball_full_0.02.nvdb",
+    "use_alpha_grid": false,
+    "kernel_type": "squared_exponential"
+  },
+  "material": {
+    "ndf_family": "generalized_gaussian",
+    "type": "conductor",
+    "gp_model": "global_pointwise",
+    "eta_rgb": [
+      0.2,
+      0.9,
+      1.1
+    ],
+    "k_rgb": [
+      3.9,
+      2.5,
+      2.2
+    ],
+    "roughness": 0.5
+  },
+  "transport": {
+    "mode": "hybrid_first_hit",
+    "first_hit": {
+      "method": "gpis_function_space_tungsten",
+      "backend": "scalar",
+      "sampler": {
+        "sample_points": 8,
+        "step_size": 0.01,
+        "correlation_context": "renewal+",
+        "intersect_method": "gp_discrete",
+        "normal_method": "conditioned_gaussian",
+        "skip_space": 0.0
+      }
+    },
+    "continuation": {
+      "method": "gpis_function_space_tungsten",
+      "backend": "scalar",
+      "sampler": {
+        "sample_points": 8,
+        "step_size": 0.01,
+        "correlation_context": "renewal+",
+        "intersect_method": "gp_discrete",
+        "normal_method": "conditioned_gaussian",
+        "skip_space": 0.0
+      }
+    },
+    "roulette_start_depth": 8
+  },
+  "numeric": {
+    "relative_tolerance": 1e-06,
+    "absolute_tolerance": 1e-09,
+    "max_quadrature_subdivisions": 2048,
+    "max_root_iterations": 128,
+    "distance_absolute_tolerance": 1e-10
+  },
+  "render": {
+    "width": 512,
+    "height": 512,
+    "samples_per_pixel": 128,
+    "camera_position": [
+      2.27,
+      -1.09,
+      1.42
+    ],
+    "camera_target": [
+      0.0,
+      0.0,
+      0.35
+    ],
+    "vertical_fov_degrees": 25.0,
+    "environment": "directional_gradient",
+    "thread_count": 0,
+    "safety_depth_cap": 64
+  },
+  "output_directory": "outputs/render_first_hit_gpis_tungsten_shader_ball_sigma002"
+}

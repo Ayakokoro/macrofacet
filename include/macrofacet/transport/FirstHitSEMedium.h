@@ -15,10 +15,13 @@ struct FirstHitSEFlight {
 
 struct FirstHitSESurfaceSample {
     bool enteredDomain = false, hit = false;
+    bool failed = false; // GPIS rejection is not an escape to the environment.
     int initialSign = 1;
     double entryDistance = 0, maximumDistance = 0, distance = 0, q = 0, speed = 0;
     Point3 entry = Point3::Zero(), position = Point3::Zero();
     Vector3 gradient = Vector3::Zero(), normal = Vector3::Zero(); // original field sign
+    double fieldValue = 0.0;
+    Point3 observationPosition = Point3::Zero();
 };
 
 // A null model selects the GPIS reference. Both methods share entry geometry,

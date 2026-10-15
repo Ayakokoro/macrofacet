@@ -124,3 +124,83 @@ python python/first_hit_se_cli.py export-model --checkpoint outputs/models/first
 参考步长 `sampler.step_size`、均值几何分段 `profile.maximum_step` 和 RNO 的积分步长 `model.maximum_step` 也分别控制不同对象，不要求相等。
 
 实现不保证给定网络容量已经足够准确；应在同配置的独立测试集上检查似然、透射率曲线和速度分布。单轮小规模训练用于验证接口，不能作为收敛或渲染质量证明。
+
+## Tungsten-compatible two-stage rendering
+
+`gpis_function_space_tungsten` 是独立的新方法名，可分别放在
+`transport.first_hit.method` 和 `transport.continuation.method` 中。
+`transport.mode` 仍是 `hybrid_first_hit`。两个入口共用 `TungstenFunctionSpaceSampler`，
+各自的 `sampler` 参数可以独立设置：
+
+```json
+{
+  "mode": "hybrid_first_hit",
+  "first_hit": {
+    "method": "gpis_function_space_tungsten",
+    "backend": "scalar",
+    "sampler": {"sample_points": 8, "step_size": 0.01}
+  },
+  "continuation": {
+    "method": "gpis_function_space_tungsten",
+    "backend": "scalar",
+    "sampler": {"sample_points": 8, "step_size": 0.01}
+  }
+}
+```
+
+这里 `step_size` 的单位是**世界坐标长度**，不是旧采样器的归一化 Δq。
+默认值为 0.01；设为 0 表示一批覆盖剩余射线区间。`sample_points` 支持 2–128，默认 8。
+旧方法 `gpis_function_space` 以及训练/数据采集参考的行为保持不变。
+
+支持范围为本地 Tungsten 的 standard SE GP、`correlation_context="renewal+"`、
+`intersect_method="gp_discrete"`、`normal_method="conditioned_gaussian"`、`skip_space=0`。
+这四项可在 `sampler` 中显式写出；不支持的模式、旧的 `history_points` / `rank_tolerance`
+等参数会报错。要求 scalar backend、generalized_gaussian、无 alpha grid。
+不读取 checkpoint，不使用 cubic/point_linear profile；兼容首段的 `profile_mode` 若显式配置，
+应为 `tungsten_direct`。
+
+场景配置：
+
+- [σ=0.05，两阶段 GPIS](../configs/render_first_hit_gpis_tungsten_shader_ball_sigma005.json)
+- [σ=0.02，两阶段 GPIS](../configs/render_first_hit_gpis_tungsten_shader_ball_sigma002.json)
+
+### 采样行为
+
+- 每批先抽一个位置偏移，按原式布置 N 个点。首点为 near+0.1h，末点为 near+Nh；h 受物理步长和剩余区间约束。批次之间不额外搜索未采样的小间隙。
+- 第一批调用原版正值起点采样，保留随机数消耗，但 numCondPts=0，实际批次仍无条件。
+- 每批只联合采样场值。命中使用线性插值，构造交点场值及割线纵向导数，再根据当前批次保留下来的观测条件采样两个横向梯度。无命中时条件采样末端三个梯度分量，最终出域批次也消耗梯度随机数。
+- `renewal+` 将状态压缩为末端场值与完整梯度在新方向上的投影。交接保留原插值场值、double 精度的 GP 观测位置和完整梯度，分别保存 float 精度的实际散射位置。
+- 表面出生的第一批跳过首个符号变化区间；同一射线后续批次不重复跳过。上穿、非有限梯度或梯度模方小于原阈值 1e-7 的命中按失败终止，不作为逃逸，也不翻转场符号。
+- 条件高斯使用物理单位协方差，伪逆阈值为 1e6*DBL_EPSILON*max(abs(eigenvalues))。抽样先尝试 Cholesky，失败才使用截断负特征值的平方根，不添加 jitter。
+- PCG 浮点均匀随机数及成对 Box–Muller 遵循原版。两个兼容阶段共用一个 GPIS 随机流，种子取自 `event_rng.integer()`。仅后续段启用兼容方法时，种子取自 `continuation_rng.integer()`，不扰动旧 first-hit 的独立随机流。
+- NanoVDB 提供独立兼容查询：模拟 identity transform、normalize_size=false、linear VDB 的 float 坐标转换、两体素边界裁剪和 OpenVDB BoxSampler 浮点插值；均值梯度采用固定世界步长 0.001 的前向差分。现有渲染和训练的均值查询不变。
+
+首段成功才交给后续段，接口保留 Escape / Hit / RejectedUpcrossing / InvalidGradient。
+首段也可以选择旧参考或 neural，再接兼容 GPIS；此时复现的是给定交点与梯度之后的条件采样，
+整条路径的分布仍受首段方法影响。`renewal+` 不要求传递首段全部观测；GPIS 的 global 历史模式不在此次范围内。
+
+### 验证与边界
+
+`tools/generate_tungsten_function_space_fixture.py` 从指定的本地 GPIS 仓库只读提取
+`intersectGP`、`makeIntersect`、`sampleGrad`、`applyMemory`、条件高斯和高斯抽样原函数，
+在不链接 macrofacet 的独立程序中运行。辅助程序提供解析 SE 协方差和常量/平面均值，
+禁用范围外的协方差投影、其他求解器和 CSG。
+`tests/data/tungsten_function_space_reference.json` 保存源文件 SHA256、随机输入和参考批次。
+测试重放输入，比较场值、交点、完整梯度、观测位置与随机数消耗；浮点结果按数值容差比较。
+另外覆盖首区间跳过、截短末批、原版 OpenVDB BoxSampler、两阶段与手动多次反弹一致性、
+线程确定性和配置校验。
+
+重新生成参考数据：
+
+```powershell
+python tools/generate_tungsten_function_space_fixture.py --reference D:/projects/sparse-conv-gpis-tungsten --packages build/vcpkg_installed/x64-windows
+```
+
+兼容范围是 GPIS 介质采样。相机、场景边界求交、conductor 材质、环境和轮盘赌仍属于
+macrofacet 渲染器；不宣称相同 seed 下整张图与 Tungsten 逐像素一致。两个场景的均值数据、
+σ、相关长度、物理步长和边界必须一致才能进行有效图像对照。
+
+`hybrid_summary.json` 和 `render_summary.csv` 新增 gpis_flights、gpis_continuation_flights、
+gpis_batches、gpis_points、gpis_rejected_upcrossings、gpis_invalid_gradients。
+可选 first-hit CSV 追加 failed、field_value、observation_x/y/z 和 gpis_seed。
+上穿拒绝计入独立计数，不计为 numerical_failures。

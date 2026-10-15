@@ -100,6 +100,29 @@ CovarianceKernel roughnessKernel(CovarianceKernelType type, double sigma,
         type, sigma, gradientVariance * Matrix3::Identity());
 }
 
+TungstenFunctionSpaceConfig readTungstenSampler(const nlohmann::json& object) {
+    const std::unordered_set<std::string> allowed{"sample_points","step_size","correlation_context",
+        "intersect_method","normal_method","skip_space"};
+    for (const auto& item : object.items())
+        if (!allowed.count(item.key())) throw std::invalid_argument("unsupported Tungsten sampler option: "+item.key());
+    if (object.value("correlation_context","renewal+")!="renewal+" ||
+        object.value("intersect_method","gp_discrete")!="gp_discrete" ||
+        object.value("normal_method","conditioned_gaussian")!="conditioned_gaussian" ||
+        object.value("skip_space",0.)!=0.)
+        throw std::invalid_argument("Tungsten compatibility requires renewal+, gp_discrete, conditioned_gaussian, skip_space=0");
+    TungstenFunctionSpaceConfig result;
+    result.samplePoints=object.value("sample_points",8);
+    result.stepSize=object.value("step_size",0.01);
+    result.validate();
+    return result;
+}
+
+nlohmann::json tungstenSamplerJson(const TungstenFunctionSpaceConfig& config) {
+    return {{"sample_points",config.samplePoints},{"step_size",config.stepSize},
+        {"correlation_context","renewal+"},{"intersect_method","gp_discrete"},
+        {"normal_method","conditioned_gaussian"},{"skip_space",0.0}};
+}
+
 } // namespace
 
 GPSSField buildDefaultField() {
@@ -123,13 +146,25 @@ void requireNanoVdbField(const ExperimentConfig& config) {
 void prepareRenewalModel(ExperimentConfig& config) {
     if (config.transportMode != "neural_renewal" && config.transportMode != "hybrid_first_hit") return;
     if (config.transportMode == "hybrid_first_hit") {
-        if ((config.continuationMethod != "neural_renewal" && config.continuationMethod != "classic_local") ||
+        if ((config.continuationMethod != "neural_renewal" && config.continuationMethod != "classic_local" &&
+             config.continuationMethod != "global_conditional" && config.continuationMethod != kTungstenFunctionSpaceMethod) ||
             config.renewal.backend != "scalar")
-            throw std::invalid_argument("hybrid_first_hit requires scalar neural_renewal or classic_local continuation");
-        if (config.continuationMethod == "classic_local") {
-            if (config.material.gpModel != GpModel::LocalTangent) config.preparedAreaMajorant.reset();
-            config.material.gpModel = GpModel::LocalTangent;
-            return; // Local continuation needs the scene density, not a renewal model.
+            throw std::invalid_argument("unsupported hybrid continuation method or non-scalar backend");
+        if (config.continuationMethod != "neural_renewal") {
+            const bool tungsten = config.continuationMethod == kTungstenFunctionSpaceMethod;
+            const bool conditional = config.continuationMethod == "global_conditional" || tungsten;
+            if (conditional) {
+                if (config.material.ndfFamily != NdfFamily::GeneralizedGaussian || config.material.alphaField)
+                    throw std::invalid_argument("global_conditional requires generalized_gaussian without alpha grid");
+                if (!config.field.kernel.supportsAnalyticConditionalTransport())
+                    throw std::invalid_argument("global_conditional requires a squared_exponential kernel");
+            }
+            if (tungsten) (void)TungstenFunctionSpaceSampler(config.field,config.continuationTungsten);
+            const auto gpModel = conditional ? GpModel::GlobalPointwise : GpModel::LocalTangent;
+            if (config.material.gpModel != gpModel) config.preparedAreaMajorant.reset();
+            config.material.gpModel = gpModel;
+            config.renewal.resolvedBackend = "scalar";
+            return; // Analytic continuation does not load a renewal model.
         }
     }
     if (config.renewal.batchSize < 1 || config.renewal.batchSize > 65536)
@@ -159,6 +194,14 @@ void prepareRenewalModel(ExperimentConfig& config) {
 
 void prepareFirstHitModel(ExperimentConfig& config) {
     if (config.transportMode != "hybrid_first_hit") return;
+    if (config.firstHit.method == kTungstenFunctionSpaceMethod) {
+        if (config.firstHit.backend!="scalar" || config.material.ndfFamily!=NdfFamily::GeneralizedGaussian ||
+            config.material.alphaField) throw std::invalid_argument("Tungsten first-hit requires scalar generalized_gaussian without alpha grid");
+        config.firstHit.model.reset();
+        config.firstHit.profileMode="tungsten_direct";
+        (void)TungstenFunctionSpaceSampler(config.field,config.firstHit.tungsten);
+        return;
+    }
     if (config.firstHit.method != "neural_first_hit_se" && config.firstHit.method != "gpis_function_space")
         throw std::invalid_argument("unknown transport.first_hit.method");
     if (config.firstHit.profileMode != "cubic" || config.firstHit.backend != "scalar")
@@ -350,15 +393,20 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         const auto& first = transport.at("first_hit");
         config.firstHit.method = first.at("method").get<std::string>();
         config.firstHit.modelPath = first.value("model", "");
-        config.firstHit.profileMode = first.value("profile_mode", "cubic");
+        const bool tungstenFirst = config.firstHit.method == kTungstenFunctionSpaceMethod;
+        config.firstHit.profileMode = first.value("profile_mode", tungstenFirst ? "tungsten_direct" : "cubic");
         config.firstHit.profileMaximumStep = first.value("profile_maximum_step", 0.25);
         config.firstHit.backend = first.value("backend", "scalar");
-        if (config.firstHit.method != "neural_first_hit_se" && config.firstHit.method != "gpis_function_space")
+        if (config.firstHit.method != "neural_first_hit_se" && config.firstHit.method != "gpis_function_space" && !tungstenFirst)
             throw std::invalid_argument("unknown transport.first_hit.method");
-        if (config.firstHit.profileMode != "cubic" || config.firstHit.backend != "scalar")
-            throw std::invalid_argument("first-hit rendering requires cubic profiles and backend=scalar");
+        if (config.firstHit.profileMode != (tungstenFirst ? "tungsten_direct" : "cubic") || config.firstHit.backend != "scalar")
+            throw std::invalid_argument("first-hit profile_mode must match its sampler and backend must be scalar");
         requirePositiveFinite(config.firstHit.profileMaximumStep,"transport.first_hit.profile_maximum_step");
-        if (first.contains("sampler")) {
+        if (tungstenFirst) {
+            if (first.contains("model") || first.contains("profile_maximum_step"))
+                throw std::invalid_argument("Tungsten first-hit uses direct field queries, not a model or profile step");
+            config.firstHit.tungsten=readTungstenSampler(first.value("sampler",nlohmann::json::object()));
+        } else if (first.contains("sampler")) {
             const auto& sampler = first.at("sampler");
             auto& r = config.firstHit.reference;
             r.historyPoints = sampler.value("history_points",1);
@@ -371,9 +419,12 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         const auto& continuation = transport.at("continuation");
         config.continuationMethod = continuation.at("method").get<std::string>();
         config.renewal.backend = continuation.value("backend","scalar");
-        if ((config.continuationMethod != "neural_renewal" && config.continuationMethod != "classic_local") ||
+        if ((config.continuationMethod != "neural_renewal" && config.continuationMethod != "classic_local" &&
+             config.continuationMethod != "global_conditional" && config.continuationMethod != kTungstenFunctionSpaceMethod) ||
             config.renewal.backend != "scalar")
-            throw std::invalid_argument("hybrid_first_hit requires scalar neural_renewal or classic_local continuation");
+            throw std::invalid_argument("unsupported hybrid continuation method or non-scalar backend");
+        if (config.continuationMethod == kTungstenFunctionSpaceMethod)
+            config.continuationTungsten=readTungstenSampler(continuation.value("sampler",nlohmann::json::object()));
         renewalJson = config.continuationMethod == "neural_renewal" ? &continuation : nullptr;
     }
     if (renewalJson) {
@@ -647,7 +698,7 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
     result["classic_phase_proposal"] = config.classicPhaseProposal;
     result["transport"]["mode"] = config.transportMode;
     if ((!config.renewal.modelPath.empty() || config.renewal.model) &&
-        !(config.transportMode == "hybrid_first_hit" && config.continuationMethod == "classic_local")) {
+        !(config.transportMode == "hybrid_first_hit" && config.continuationMethod != "neural_renewal")) {
         result["transport"]["renewal"] = {
             {"model", config.renewal.modelPath.string()},
             {"profile_maximum_step", config.renewal.profileMaximumStep},
@@ -670,6 +721,17 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                 {"backend","scalar"},{"resolved_backend","scalar"},
                 {"sampler","dda_null_tracking"},{"gp_model","local_tangent"},
                 {"classic_phase_proposal",config.classicPhaseProposal}};
+        } else if (config.continuationMethod == "global_conditional") {
+            result["transport"]["continuation"] = {
+                {"backend","scalar"},{"resolved_backend","scalar"},
+                {"sampler","segmented_delta_tracking"},{"gp_model","global_pointwise"},
+                {"majorant","analytic_birth_and_conditional_interval_bounds"},
+                {"birth_policy","first_hit_surface"},
+                {"conditioning","last_collision_value_and_full_gradient"}};
+        } else if (config.continuationMethod == kTungstenFunctionSpaceMethod) {
+            result["transport"]["continuation"]={{"backend","scalar"},
+                {"sampler",tungstenSamplerJson(config.continuationTungsten)},{"step_units","world"},
+                {"conditioning","last_value_and_gradient_projected_on_new_direction"}};
         } else result["transport"]["continuation"] = result["transport"].at("renewal");
         result["transport"].erase("renewal");
         result["transport"]["continuation"]["method"] = config.continuationMethod;
@@ -687,9 +749,17 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                 result["transport"]["first_hit"]["distance_sampler"] = "analytic_rational_quadratic_inverse";
             else result["transport"]["first_hit"]["integration_maximum_step"] = config.firstHit.model->maximumStep();
         }
+        if (config.firstHit.method == kTungstenFunctionSpaceMethod) {
+            result["transport"]["first_hit"]={{"method",config.firstHit.method},{"backend","scalar"},
+                {"profile_mode","tungsten_direct"},{"step_units","world"},
+                {"sampler",tungstenSamplerJson(config.firstHit.tungsten)},
+                {"gradient","conditioned_gaussian_with_secant_longitudinal_derivative"}};
+        }
         result["transport"]["side_convention"] = config.continuationMethod == "classic_local"
             ? "first_hit preserves initial_sign; classic_local uses scene density and original field orientation"
             : "side=initial_sign; continuation uses side*mean and side*gradient";
+        if (config.continuationMethod == kTungstenFunctionSpaceMethod || config.firstHit.method == kTungstenFunctionSpaceMethod)
+            result["transport"]["side_convention"]="original field; reject upcrossing; no sign flip at GPIS handoff";
         result["budgets"]["write_first_hit_samples"] = config.render.writeFirstHitSamples;
     }
     result["budgets"]["safety_depth_cap"] = config.render.safetyDepthCap;
@@ -700,7 +770,8 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         {"majorant", "analytic_birth_and_conditional_interval_bounds"},
         {"tracking_segments", 2},
         {"far_interval_thinning", true},
-        {"birth_policy", "sampled_positive_exterior"}};
+        {"birth_policy", config.transportMode == "hybrid_first_hit" && config.continuationMethod == "global_conditional"
+            ? "first_hit_surface" : "sampled_positive_exterior"}};
     if (config.transmittance) {
         const TransmittanceConfig& source = *config.transmittance;
         nlohmann::json experiment;
@@ -742,6 +813,15 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         {"max_quadrature_subdivisions", config.numeric.maxQuadratureSubdivisions}};
     result["rng_stream"] = config.transportMode == "hybrid_first_hit"
         ? "first_hit_split_v1: seed,pixel,sample; camera=0,event=1,gradient=2,continuation=3" : "per_pixel_v1";
+    if (config.transportMode == "hybrid_first_hit" &&
+        (config.firstHit.method == kTungstenFunctionSpaceMethod || config.continuationMethod == kTungstenFunctionSpaceMethod)) {
+        result["rng_stream"]=config.firstHit.method==kTungstenFunctionSpaceMethod
+            ? "tungsten_pcg_v1: seed=event_rng.integer(), shared GPIS distance/gradient/tail stream"
+            : "first_hit_split_v1 with Tungsten tail: seed=continuation_rng.integer()";
+        result["transport"]["tungsten_compatibility"]={{"scope","SE standard GP, renewal+, CPU function space"},
+            {"tabulated_mean","float BoxSampler, two-voxel boundary clamp, forward difference 0.001 world"},
+            {"renderer","macrofacet camera, conductor and roulette; not pixel-identical Tungsten rendering"}};
+    }
     std::ofstream stream(path);
     if (!stream) throw std::runtime_error("cannot write resolved config");
     stream << std::setw(2) << result << '\n';

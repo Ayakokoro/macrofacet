@@ -8,7 +8,7 @@
 
 这是独立的 `first_hit_se` 训练与 C++ 标量推理链路。原 `renewal` GRU、A/B 数据、
 既有 checkpoint 和完整路径追踪器仍可使用。新模型支持相机检查工具，以及下文的
-`hybrid_first_hit` CPU 标量渲染；首次碰撞后交给独立的 neural renewal 策略。
+`hybrid_first_hit` CPU 标量渲染；首次碰撞后可交给 neural renewal、classic local 或 global conditional 策略。
 尚未接入原多次反弹的 GPU wavefront 路径追踪。新模型不能用于表面出发或反弹后的射线。
 
 ## 状态、风险与梯度
@@ -789,7 +789,7 @@ python python/first_hit_se_cli.py camera-study --config python/configs/first_hit
 
 `transport.mode=hybrid_first_hit` 将相机首次段与后续段分开。`first_hit.method` 可选
 `neural_first_hit_se` 或 `gpis_function_space`；`continuation.method` 当前支持
-`neural_renewal` 或 `classic_local`。首次段和续段后端都要求 `scalar`，不接受 `auto` 或 GPU 静默回退。
+`neural_renewal`、`classic_local` 或 `global_conditional`。首次段和续段后端都要求 `scalar`，不接受 `auto` 或 GPU 静默回退。
 首次段使用 cubic 均值剖面，RNO 内部步长从导出模型读取；后续 renewal 的
 `profile_mode` 独立配置，可使用 `point_linear`。
 
@@ -857,6 +857,37 @@ build/Release/macrofacet_experiments.exe render --config configs/render_first_hi
 单位白环境能量、线程确定性、深度计数，以及与独立 classic_local 续段的逐样本权重比较；
 原生 CTest 通过（207,020 个检查，0 失败）。
 
+### Global conditional 续段（2026-10-15）
+
+在 `transport.mode=hybrid_first_hit` 下设置：
+
+```json
+"continuation": {
+  "method": "global_conditional",
+  "backend": "scalar"
+}
+```
+
+首次段仍可选择 GPIS 或 `neural_first_hit_se`（RNO / spline）。续段不加载 renewal 模型，
+使用现有 `ConditionalMedium` 的解析 SE 条件消光率和分段 delta tracking。首碰反射后，
+以该碰撞点、出射方向、`F=0`、未归一化的完整梯度启动表面出生 flight，保留 Fresnel
+权重和已完成碰撞数。不会重新采样外部入口观测，也不会重复抽取首碰法线。
+
+沿用 `side=initialSign`：均值场和完整梯度同时乘以 side，使反射后的方向进入正侧。
+每次后续碰撞再更新出生观测；不保留相机首段的完整 GPIS 历史。
+要求 `squared_exponential`、`generalized_gaussian`、`field.use_alpha_grid=false`；
+`material.gp_model` 在准备阶段选为 `global_pointwise`。条件上界失败会向上传播。
+`hybrid_summary.json` 的 `continuation_flights` 记录实际 conditional 续段数，
+该文件和 `render_summary.csv` 也提供 `conditional_flights`。
+
+可直接运行 [sigma=0.05 配置](../configs/render_first_hit_gpis_global_conditional_shader_ball_sigma005.json)
+或 [sigma=0.02 配置](../configs/render_first_hit_gpis_global_conditional_shader_ball_sigma002.json)。
+二者保持 512×512 / 128 spp 和相同相机，分别引用对应 sigma 的 VDB；小图检查示例：
+
+```powershell
+build/Release/macrofacet_experiments.exe render --config configs/render_first_hit_gpis_global_conditional_shader_ball_sigma005.json --width 32 --height 32 --spp 8 --threads 8 --output outputs/first_hit_gpis_global_conditional_sigma005_smoke
+```
+
 原生测试覆盖：入口距离、RNO 常数风险的解析命中率、GPIS 适配与直接参考样本一致、
 正负穿越、完整梯度投影、负侧均值/梯度与 lazy profile、单位白环境能量、线程确定性、
 续段工作量与首次随机流隔离，以及首次碰撞的深度计数和不支持配置的拒绝。
@@ -914,3 +945,72 @@ build/Release/macrofacet_experiments.exe render --config configs/render_first_hi
 [完整报告](../outputs/first_hit_spline_20261015/summary.html) 保存四组指标、三种策略计时、
 透射率、梯度 CDF 和 Python/C++ 校验。数值校验同时限制 CDF、混合参数和点态 log hazard；
 窄样条区间的点态密度对 float32 矩阵乘的舍入更敏感，具体差异及容差逐项保存。
+
+## 2026-10-15：local、直接消光率、残差消光率的配对实验
+
+`python/first_hit_se/hazard.py` 和 `hazard_study.py` 提供距离分布的三方对照，
+继续使用同一份 sigma=0.05 相机 Tungsten-linear 数据，不重新采集标签。
+这是独立的 Python 实验，checkpoint 没有梯度头，也不属于现有 C++ 模型导出格式。
+
+令 `q=s/ell`、`b=m/sigma`、`k=±1`。连续 SE GP 的 local-conditioning 基线为：
+
+```text
+a_k(q) = phi(k*b'(q)) - k*b'(q)*Phi(-k*b'(q))
+lambda_local,k(q) = phi(b(q))/Phi(k*b(q)) * a_k(q)
+```
+
+基线使用原始 GP 均值导数，不能与归一化均值梯度后的 `local_tangent` 材料混同。
+消光率的单位是每单位 q；若转换回物理距离，应除以 ell。
+这也是连续 GP 的局部近似，和 H1/B8、步长 1/64 的 Tungsten-linear 教师存在差异，
+残差不应全部解释为精确连续 GP 的历史修正。
+
+两个网络均使用 256 点固定输入、两层宽度 64 的 SiLU 编码器、32 维潜变量及
+64 个线性输出，总参数量相同，为 57,632。64 个值线性插值到 1024 个区间：
+
+- Direct：`log(lambda_i) = r_i`。
+- Residual：`log(lambda_i) = log(lambda_local,i) + r_i`。
+- Local：不调用网络，直接使用相同的 `lambda_local,i`。
+
+每个区间的 local 消光率是积分平均值，积分先在原三次剖面边界处分裂，再做 8 点
+Gauss-Legendre 积分，避免跨越 VDB 插值梯度的跳变。仅使用验证集几何检查积分网格：
+相对 2048 格 / 16 点参考，1024 格的最大透射率差约 0.001139；固定网格的
+8 点 / 32 点积分差小于 1e-12。粗网格曾超过预先规定的 0.002 数值容差，细化后才开始训练。
+1024 是非学习的积分/采样网格，不是网络输出维数。
+
+三对种子为 20261015、20261016、20261017。每对网络初始参数、每 epoch 的标签抽样、
+AdamW 设置及固定余弦学习率计划完全一致，并保存初始参数哈希。
+每种训练均运行 500 epochs；每个 epoch 每条训练射线抽取 512 个已有样本。
+训练目标为已知入口符号下的距离 NLL：命中 `H(q)-log(lambda(q))`，逃逸 `H(Q)`。
+没有梯度损失、CDF 辅助损失或仅用于残差模型的正则项。
+checkpoint 仅按验证集边际距离 NLL 选择，测试集不参与选择。
+现有 spline 是此前联合训练的历史参考，不作为严格配对消融的一员。
+
+在 24 条独立测试射线、每条 8192 个样本上，结果如下（神经网络为三次训练均值）：
+
+| 方案 | 距离 NLL | 逐射线最大 T 误差均值 | T RMSE | 每次训练最大 T 误差的均值 |
+| --- | ---: | ---: | ---: | ---: |
+| Local GP | 0.78657 | 0.03742 | 0.02751 | 0.11623 |
+| Direct hazard | 0.83353 | 0.06644 | 0.03224 | 0.25122 |
+| Local + residual | 0.76583 | 0.02023 | 0.00968 | 0.07122 |
+| 现有 spline（历史参考） | 0.85467 | 0.06131 | 0.02574 | 0.14935 |
+
+残差对直接网络的逐射线胜出数量分别为 22/24、23/24、24/24；
+相对纯 local 也有整体改善，但并非每一条射线都更好。
+残差模型的验证最优 epoch 分别为 40、30、60，直接网络为 425、385、340。
+每次完整 500 epoch 训练约 22–23 秒（RTX 4060 Laptop GPU）。
+
+采样使用累计光学厚度前缀和，区间内解析求逆；末端生存概率就是逃逸质量。
+24 条射线 × 3 种方案各 8192 次抽样通过全体检查的 99% DKW 界。
+CPU 计时分别记录准备好输入后的调用，以及从已知三次均值剖面开始构建输入的调用。
+当前 Python 高精度 local 基线构建成本明显，因此残差精度改善不代表速度改善。
+计时不包含 VDB 访问、梯度头及后续路径，不能换算为 C++ 渲染帧时；原始重复计时保留在报告中。
+
+```powershell
+python python/first_hit_se_cli.py hazard-study --config python/configs/first_hit_se_hazard_comparison_sigma005.json
+python -m unittest python/tests/test_first_hit_hazard.py -v
+```
+
+支持 `--phase train/evaluate/benchmark/report`。已完成且配置一致的训练会复用；
+更改训练配置时须使用新的输出目录，以保留已完成实验。
+[完整比较报告](../outputs/first_hit_hazard_comparison_20261015/summary.html) 包含全部射线曲线、
+三种子误差、似然、训练过程、计时、数据哈希、数值积分及抽样校验。

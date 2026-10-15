@@ -22,12 +22,14 @@ add_library(macrofacet
     src/gpss/RayMeanProfile.cpp
     src/gpss/Matern32Reference.cpp
     src/gpss/FunctionSpaceRaySampler.cpp
+    src/gpss/TungstenFunctionSpaceSampler.cpp
     src/learned/RenewalHazardModel.cpp
     src/learned/FirstHitSEModel.cpp
     src/learned/RenewalBatchSession.cpp
     src/transport/RenewalRayDistribution.cpp
     src/transport/RenewalMedium.cpp
     src/transport/FirstHitSEMedium.cpp
+    src/transport/FunctionSpaceGpisMedium.cpp
     src/macrofacet/GaussianNdf.cpp
     src/macrofacet/GgxHeightfield.cpp
     src/macrofacet/MaterialConfig.cpp
@@ -226,6 +228,7 @@ set(MACROFACET_TEST_SOURCES
     tests/test_renewal_transport.cpp
     tests/test_first_passage.cpp
     tests/test_function_space.cpp
+    tests/test_tungsten_function_space.cpp
     tests/test_first_hit_render.cpp
     tests/test_transmittance_config.cpp
     tests/test_rendering_threads.cpp)
@@ -274,6 +277,8 @@ endif()
 
 if(MACROFACET_BUILD_FIELDS)
     target_include_directories(macrofacet_tests PRIVATE src)
+    # Differential check against the actual OpenVDB BoxSampler used by Tungsten.
+    target_link_libraries(macrofacet_tests PRIVATE OpenVDB::openvdb)
     target_compile_definitions(macrofacet_tests PRIVATE MACROFACET_TEST_FIELDS=1)
 endif()
 

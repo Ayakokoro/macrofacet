@@ -86,6 +86,34 @@ public:
     const Bounds3& worldBounds() const { return worldBounds_; }
     const Bounds3& activeNodeBounds() const { return activeNodeBounds_; }
 
+    // Tungsten VdbGrid: normalize_size=false, identity scene transform,
+    // interpolate=linear, no emission/detail grid. Reproduce float matrix
+    // coordinates, the two-voxel clamp, and OpenVDB BoxSampler arithmetic.
+    double tungstenValue(const Point3& world) const {
+        const auto bbox = grid_->indexBBox();
+        const float inverseScale = 1.0f/static_cast<float>(dx_);
+        int base[3]; double uv[3];
+        for (int axis=0; axis<3; ++axis) {
+            const float lower=static_cast<float>(bbox.min()[axis]+2);
+            const float upper=static_cast<float>(bbox.max()[axis]-2);
+            if (lower>upper) throw std::invalid_argument("Tungsten VDB needs at least five active nodes per axis");
+            const float translation=-static_cast<float>(origin_[axis])*inverseScale;
+            const float index=std::clamp(static_cast<float>(world[axis])*inverseScale+translation,lower,upper);
+            if (!std::isfinite(index)) throw std::runtime_error("nonfinite Tungsten VDB coordinate");
+            base[axis]=static_cast<int>(std::floor(index));
+            uv[axis]=double(index)-base[axis];
+        }
+        auto accessor=grid_->getAccessor();
+        float data[2][2][2];
+        for (int i=0;i<2;++i) for (int j=0;j<2;++j) for (int k=0;k<2;++k)
+            data[i][j][k]=accessor.getValue(nanovdb::Coord(base[0]+i,base[1]+j,base[2]+k));
+        const auto mix=[](float a,float b,double t) { return a+static_cast<float>((b-a)*t); };
+        return mix(mix(mix(data[0][0][0],data[0][0][1],uv[2]),
+                       mix(data[0][1][0],data[0][1][1],uv[2]),uv[1]),
+                   mix(mix(data[1][0][0],data[1][0][1],uv[2]),
+                       mix(data[1][1][0],data[1][1][1],uv[2]),uv[1]),uv[0]);
+    }
+
     bool hasCompleteInterpolationCell(const Point3& x) const {
         const auto u = continuousIndex(x);
         const auto bbox = grid_->indexBBox();

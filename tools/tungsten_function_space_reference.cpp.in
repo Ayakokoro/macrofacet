@@ -1,0 +1,204 @@
+// Test harness only. Production macrofacet headers/libraries are NOT included.
+// The original functions below are injected by the fixture generator.
+#include <Eigen/Dense>
+#include <nlohmann/json.hpp>
+#include <array>
+#include <vector>
+#include <memory>
+#include <iostream>
+#include <cfloat>
+#include <cmath>
+#include <algorithm>
+#include <cstdint>
+using Vec3d=Eigen::Vector3d;
+using Vec3f=Eigen::Vector3f;
+using Vec2d=Eigen::Vector2d;
+using CovMatrix=Eigen::MatrixXd;
+using Json=nlohmann::json;
+using std::min; using std::max; using std::clamp;
+constexpr double PI=3.141592653589793238462643383279502884;
+template<class T,class S> T vec_conv(const S& x) { return x.template cast<typename T::Scalar>(); }
+template<class T> T lerp(T a,T b,T t) { return a*(T(1)-t)+b*t; }
+enum class Derivative { None,First };
+enum class GPCorrelationContext { None,Renewal,RenewalPlus,Global };
+struct PathSampleGenerator {
+    std::uint64_t state;
+    std::vector<double> tape;
+    explicit PathSampleGenerator(std::uint64_t seed):state(seed) { next1D(); next1D(); tape.clear(); }
+    float next1D() {
+        std::uint64_t old=state; state=old*6364136223846793005ULL+1;
+        std::uint32_t x=std::uint32_t(((old>>18u)^old)>>27u), r=std::uint32_t(old>>59u);
+        const auto bits=(x>>r)|(x<<((32u-r)&31));
+        float value=float(bits>>9u)/8388608.f; tape.push_back(value); return value;
+    }
+};
+template<class Mat,class Vec> struct TangentFrameD {
+    Vec normal,tangent,bitangent;
+    explicit TangentFrameD(const Vec& n):normal(n) {
+        const double sign=n.z()<0?-1.:1., a=-1./(sign+n.z()), b=n.x()*n.y()*a;
+        tangent=Vec(1.+sign*n.x()*n.x()*a,sign*b,-sign*n.x());
+        bitangent=Vec(b,sign+n.y()*n.y()*a,-n.y());
+    }
+    Vec toGlobal(const Vec& p) const { return tangent*p.x()+bitangent*p.y()+normal*p.z(); }
+};
+struct Constraint { int startIdx,endIdx; float minV,maxV; };
+struct MultivariateNormalDistribution {
+    Eigen::VectorXd mean;
+    Eigen::MatrixXd normTransform;
+    MultivariateNormalDistribution(const Eigen::VectorXd&,const CovMatrix&);
+    Eigen::MatrixXd sample(const Constraint*,int,int,PathSampleGenerator&) const;
+};
+CovMatrix project_to_psd(const CovMatrix&) { throw std::runtime_error("unused project_cov"); }
+class GaussianProcess;
+struct GPRealNodeValues;
+using GPRealNode=GPRealNodeValues;
+struct GPRealNodeValues {
+    Eigen::MatrixXd _values; Eigen::VectorXi _ids;
+    const GaussianProcess* _gp;
+    bool _isIntersect=false;
+    Vec3d _sampledGrad=Vec3d::Zero();
+    GPRealNodeValues(Eigen::MatrixXd values,Eigen::VectorXi ids,const GaussianProcess* gp)
+        :_values(std::move(values)),_ids(std::move(ids)),_gp(gp) {}
+    std::tuple<Eigen::MatrixXd,Eigen::MatrixXi> flatten() const;
+    void makeIntersect(size_t,double,double);
+    void sampleGrad(int,Vec3d,Vec3d,Vec3d*,Derivative*,PathSampleGenerator&,Vec3d&);
+    void applyMemory(GPCorrelationContext,Vec3d);
+};
+struct DummyCov { double getUnscaledVariance(Vec3d) const { return 1.; } };
+class GaussianProcess {
+public:
+    double sigma=.2,ell=.4;
+    bool plane=false;
+    int _id=0;
+    bool _usePseudoInverse=true,_requireCovProjection=false;
+    std::shared_ptr<DummyCov> _cov=std::make_shared<DummyCov>();
+    GaussianProcess* get_gaussian_process() { return this; }
+    double cdf(Vec3d) const { return 1; }
+    double goodStepsize(Vec3d,double,Vec3d) const { return .1; }
+    Eigen::VectorXd mean(const Vec3d* p,const Derivative* d,const Vec3d* ds,Vec3d dir,size_t n) const {
+        Eigen::VectorXd m(n);
+        for(size_t i=0;i<n;++i) m[i]=plane ? (d[i]==Derivative::None ? p[i].z()+.1 : (ds?ds[i]:dir).z()) : 0.;
+        return m;
+    }
+    std::pair<Eigen::VectorXd,Eigen::VectorXi> mean_with_id(const Vec3d* p,const Derivative* d,const Vec3d* ds,Vec3d dir,size_t n) const {
+        return {mean(p,d,ds,dir,n),Eigen::VectorXi::Zero(n)};
+    }
+    double covariance(Vec3d x,Vec3d y,Derivative a,Derivative b,Vec3d da,Vec3d db) const {
+        const Vec3d r=x-y; const double inv=1/(ell*ell);
+        const double k=sigma*sigma*std::exp(-.5*r.squaredNorm()*inv);
+        if(a==Derivative::First && b==Derivative::First) return k*(da.dot(db)*inv-da.dot(r)*db.dot(r)*inv*inv);
+        if(a==Derivative::First) return -k*da.dot(r)*inv;
+        if(b==Derivative::First) return k*db.dot(r)*inv;
+        return k;
+    }
+    CovMatrix cov(const Vec3d* a,const Vec3d* b,const Derivative* da,const Derivative* db,
+        const Vec3d* ad,const Vec3d* bd,Vec3d dir,size_t n,size_t m) const {
+        CovMatrix c(n,m);
+        for(size_t i=0;i<n;++i) for(size_t j=0;j<m;++j)
+            c(i,j)=covariance(a[i],b[j],da[i],db[j],ad?ad[i]:dir,bd?bd[j]:dir);
+        return c;
+    }
+    CovMatrix cov_sym(const Vec3d* p,const Derivative* d,const Vec3d* dirs,Vec3d dir,size_t n) const {
+        CovMatrix c(n,n);
+        for(size_t i=0;i<n;++i) for(size_t j=0;j<=i;++j)
+            c(i,j)=c(j,i)=covariance(p[i],p[j],d[i],d[j],dirs?dirs[i]:dir,dirs?dirs[j]:dir);
+        return c;
+    }
+    std::tuple<Eigen::VectorXd,Eigen::VectorXi,CovMatrix> mean_and_cov(
+        const Vec3d* p,const Derivative* d,const Vec3d* dirs,Vec3d dir,size_t n) const {
+        return {mean(p,d,dirs,dir,n),Eigen::VectorXi::Zero(n),cov_sym(p,d,dirs,dir,n)};
+    }
+    std::tuple<MultivariateNormalDistribution,Eigen::VectorXi> create_mvn_cond(
+        const Vec3d*,const Derivative*,size_t,const Vec3d*,const Vec3d*,const double*,const Derivative*,size_t,const Vec3d*,Vec3d) const;
+    std::shared_ptr<GPRealNode> sample_start_value(Vec3d,PathSampleGenerator&) const;
+    std::shared_ptr<GPRealNode> sample(const Vec3d*,const Derivative*,size_t,const Vec3d*,const Constraint*,size_t,Vec3d,int,PathSampleGenerator&) const;
+    std::shared_ptr<GPRealNode> sample_cond(const Vec3d*,const Derivative*,size_t,const Vec3d*,const Vec3d*,const GPRealNode*,
+        const Derivative*,size_t,const Vec3d*,const Constraint*,size_t,Vec3d,int,PathSampleGenerator&) const;
+};
+struct Ray {
+    Vec3f origin,direction;
+    float near=0,far=2;
+    const Vec3f& pos() const { return origin; }
+    const Vec3f& dir() const { return direction; }
+    float nearT() const { return near; }
+    float farT() const { return far; }
+};
+struct GPContextFunctionSpace {
+    std::vector<Vec3d> points;
+    std::vector<Derivative> derivs;
+    std::shared_ptr<GPRealNodeValues> values;
+};
+struct MediumState {
+    bool firstScatter=true;
+    std::shared_ptr<GPContextFunctionSpace> gpContext;
+    int lastGPId=0;
+};
+struct FunctionSpaceGaussianProcessMedium {
+    std::shared_ptr<GaussianProcess> _gp=std::make_shared<GaussianProcess>();
+    int _samplePoints=8;
+    double _skipSpace=0,_stepSize=.12,_stepSizeCov=0,_surfVolPhaseAmpThresh=0;
+    bool _surfVolPhaseSeparate=false;
+    GPCorrelationContext _ctxt=GPCorrelationContext::RenewalPlus;
+    bool intersectGP(PathSampleGenerator&,const Ray&,MediumState&,double&,bool) const;
+};
+
+// EXTRACTED_FUNCTIONS
+
+template<class Vec> Json vectorJson(const Vec& v) { return Json{v.x(),v.y(),v.z()}; }
+int main() {
+    Json output; output["batches"]=Json::array();
+    output["uniforms"]=Json::array();
+    for(int seed=0;seed<8;++seed) {
+        PathSampleGenerator rng(seed);
+        for(int j=0;j<6;++j) rng.next1D();
+        output["uniforms"].push_back({{"seed",seed},{"values",rng.tape}});
+    }
+    for(int scenario=0;scenario<32;++scenario) {
+        FunctionSpaceGaussianProcessMedium medium;
+        medium._samplePoints=std::array<int,4>{8,12,5,2}[scenario%4];
+        medium._gp->plane=scenario>=16;
+        PathSampleGenerator rng(100+scenario);
+        MediumState state;
+        Ray ray{Vec3f(.13f,-.2f,.8f),Vec3f(0,0,-1),0,2};
+        bool first=true;
+        int bounces=0;
+        for(int batch=0;batch<12;++batch) {
+            Json row{{"plane",medium._gp->plane},{"origin",vectorJson(ray.origin)},
+                {"sample_points",medium._samplePoints},{"step_size",medium._stepSize},
+                {"direction",vectorJson(ray.direction)},{"near",ray.near},{"far",ray.far},
+                {"first_intersection",first},{"previous",nullptr}};
+            if(state.gpContext) {
+                const auto& ctx=*state.gpContext;
+                const auto& v=*ctx.values;
+                row["previous"]={{"position",vectorJson(ctx.points.back())},
+                    {"value",v._values(v._values.size()-(v._isIntersect?2:1),0)},
+                    {"gradient",vectorJson(v._sampledGrad)}};
+            }
+            rng.tape.clear();
+            double t=ray.far;
+            const bool hit=medium.intersectGP(rng,ray,state,t,first);
+            const Vec3d p=ray.origin.cast<double>()+ray.direction.cast<double>().normalized()*t;
+            auto& ctx=*state.gpContext;
+            Vec3d gradient;
+            ctx.values->sampleGrad(0,p,ray.direction.cast<double>(),ctx.points.data(),ctx.derivs.data(),rng,gradient);
+            row["uniforms"]=rng.tape; row["hit"]=hit; row["distance"]=t;
+            row["position"]=vectorJson(p); row["gradient"]=vectorJson(gradient);
+            row["values"]=std::vector<double>(ctx.values->_values.data(),ctx.values->_values.data()+ctx.values->_values.size());
+            row["points"]=Json::array();
+            for(auto point:ctx.points) row["points"].push_back(vectorJson(point));
+            output["batches"].push_back(row);
+            state.firstScatter=false; first=false;
+            if(hit) {
+                if(gradient.dot(ray.direction.cast<double>())>0 || gradient.squaredNorm()<1e-7 || ++bounces>=4) break;
+                const Vec3d n=gradient.normalized(), w=ray.direction.cast<double>();
+                ray.origin+=float(t)*ray.direction;
+                ray.direction=(w-2*w.dot(n)*n).normalized().cast<float>();
+                ray.near=0; ray.far=2; first=true;
+            } else {
+                if(t>=ray.far) break;
+                ray.near=float(t);
+            }
+        }
+    }
+    std::cout<<output.dump();
+}

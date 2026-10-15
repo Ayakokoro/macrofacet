@@ -1,6 +1,7 @@
 #include "TestHarness.h"
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
 #include "macrofacet/macrofacet/ConductorPhase.h"
+#include "macrofacet/transport/ConditionalMedium.h"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
@@ -102,6 +103,8 @@ void testFirstHitRender(TestContext& context) {
     const FunctionSpaceRaySampler sampler({});
     Random refRng(731), directRng(731), gradRng(92);
     const auto ref = reference.sample(flight,refRng,gradRng);
+    context.near((ref.observationPosition-ref.position).norm(),0,0,
+        "legacy first-hit exposes its observation position for independent continuation");
     const auto direct = sampleFunctionSpaceFirstPassage(sampler,flight.mean,FunctionSpaceStart::Unconditioned,0,directRng);
     context.require(ref.hit == direct.hit && ref.initialSign == direct.initialSign && ref.q == direct.distance &&
         ref.speed == direct.speed,"render GPIS adapter preserves reference event samples exactly");
@@ -139,6 +142,19 @@ void testFirstHitRender(TestContext& context) {
     config.render.rouletteStartDepth = 128; config.render.environment = "unit_white";
     config.render.writeFirstHitSamples = true; config.render.threadCount = 1;
     const auto serial = renderAnalyticScene(config);
+    auto tungstenTail=config;
+    tungstenTail.continuationMethod=kTungstenFunctionSpaceMethod;
+    tungstenTail.continuationTungsten={8,.15};
+    tungstenTail.render.safetyDepthCap=12;
+    const auto tungstenMixed=renderAnalyticScene(tungstenTail);
+    context.require(tungstenMixed.statistics.gpisContinuationFlights>0,
+        "neural first-hit feeds the Tungsten continuation without loading a renewal model");
+    for (std::size_t i=0;i<serial.firstHitRecords.size();++i) {
+        context.near((serial.firstHitRecords[i].first.position-tungstenMixed.firstHitRecords[i].first.position).norm(),0,0,
+            "Tungsten continuation preserves neural first-hit positions");
+        context.near((serial.firstHitRecords[i].first.gradient-tungstenMixed.firstHitRecords[i].first.gradient).norm(),0,0,
+            "Tungsten continuation preserves neural first-hit gradient random stream");
+    }
     context.require(serial.statistics.firstHitUpcrossings > 0,"upcrossing paths enter signed renewal continuation");
     context.require(serial.statistics.safetyCapTerminations == 0 && serial.statistics.numericalFailures == 0,
         "hybrid fixture escapes without numerical failures or truncation");
@@ -226,6 +242,134 @@ void testFirstHitRender(TestContext& context) {
     context.require(resolved["transport"]["continuation"]["method"] == "classic_local" &&
         !resolved["transport"].contains("renewal") && !resolved["transport"]["continuation"].contains("model"),
         "resolved local config contains no unused renewal model");
+
+    ExperimentConfig conditional = config;
+    conditional.continuationMethod = "global_conditional";
+    conditional.renewal.model.reset();
+    conditional.renewal.modelPath = "unused_missing_renewal_model.json";
+    conditional.material.gpModel = GpModel::LocalTangent;
+    conditional.preparedAreaMajorant = 1000.0;
+    prepareRenewalModel(conditional);
+    context.require(conditional.material.gpModel == GpModel::GlobalPointwise &&
+        !conditional.preparedAreaMajorant && !conditional.renewal.model,
+        "conditional continuation selects the global GP without loading a renewal model");
+    const auto cappedConditional = renderAnalyticScene(conditional);
+    context.require(cappedConditional.statistics.conditionalFlights == 0 &&
+        cappedConditional.statistics.realCollisions == cappedConditional.statistics.firstHits,
+        "conditional continuation respects the first-collision depth cap");
+    for (std::size_t i = 0; i < capped.pixels.size(); ++i)
+        context.require(cappedConditional.pixels[i] == capped.pixels[i],
+            "conditional continuation does not alter the first reflection");
+    conditional.render.safetyDepthCap = 128;
+    conditional.render.threadCount = 1;
+    const auto conditionalSerial = renderAnalyticScene(conditional);
+    context.require(conditionalSerial.statistics.conditionalFlights > 0 &&
+        conditionalSerial.statistics.realCollisions > conditionalSerial.statistics.firstHits &&
+        conditionalSerial.statistics.tracking.candidates > 0 &&
+        conditionalSerial.statistics.classicFlights == 0 && conditionalSerial.statistics.renewal.flights == 0,
+        "only conditional tracking samples the hybrid continuation");
+    context.require(conditionalSerial.statistics.firstHitUpcrossings > 0 &&
+        conditionalSerial.statistics.numericalFailures == 0 && conditionalSerial.statistics.safetyCapTerminations == 0,
+        "conditional continuation handles both first-hit signs without failure");
+    for (const auto& pixel : conditionalSerial.pixels)
+        context.near((pixel-Spectrum::Ones()).norm(),0,1e-14,
+            "neural/conditional white furnace preserves energy through multiple reflections");
+    for (std::size_t i = 0; i < serial.firstHitRecords.size(); ++i) {
+        const auto& a = serial.firstHitRecords[i]; const auto& b = conditionalSerial.firstHitRecords[i];
+        context.require(a.cameraRay.direction == b.cameraRay.direction && a.first.hit == b.first.hit &&
+            a.first.initialSign == b.first.initialSign && a.first.q == b.first.q && a.first.gradient == b.first.gradient,
+            "conditional continuation preserves the camera and first-hit random streams");
+    }
+    conditional.render.threadCount = 3;
+    const auto conditionalParallel = renderAnalyticScene(conditional);
+    for (std::size_t i = 0; i < conditionalSerial.pixels.size(); ++i)
+        context.require(conditionalSerial.pixels[i] == conditionalParallel.pixels[i],
+            "hybrid conditional pixels are independent of worker scheduling");
+    context.require(conditionalSerial.statistics.conditionalFlights == conditionalParallel.statistics.conditionalFlights &&
+        conditionalSerial.statistics.realCollisions == conditionalParallel.statistics.realCollisions &&
+        conditionalSerial.statistics.tracking.candidates == conditionalParallel.statistics.tracking.candidates,
+        "hybrid conditional statistics merge across workers");
+
+    conditional.firstHit.method = "gpis_function_space";
+    // A nonzero mean makes negating the field (not just the gradient) observable.
+    conditional.field.mean = std::make_shared<ConstantMean>(0.03);
+    const auto gpisConditional = renderAnalyticScene(conditional);
+    context.require(gpisConditional.statistics.firstHitUpcrossings > 0 &&
+        gpisConditional.statistics.firstHitUpcrossings < gpisConditional.statistics.firstHits &&
+        gpisConditional.statistics.conditionalFlights > 0 &&
+        gpisConditional.statistics.realCollisions > gpisConditional.statistics.firstHits &&
+        gpisConditional.statistics.safetyCapTerminations == 0 && gpisConditional.statistics.numericalFailures == 0,
+        "GPIS first hits of both signs feed multiple conditional flights");
+    for (const auto& pixel : gpisConditional.pixels)
+        context.near((pixel-Spectrum::Ones()).norm(),0,1e-14,"GPIS/conditional white furnace preserves energy");
+
+    // With a two-reflection cap, only escape on the first continuation flight
+    // contributes. Compare each path to the standalone conditional sampler;
+    // this detects exterior reinitialization, lost gradient magnitude, wrong
+    // side/mean, duplicate Fresnel and incorrect first-collision roulette.
+    conditional.material.conductor.forceUnitFresnel = false;
+    conditional.render.environment = "directional_gradient";
+    conditional.render.safetyDepthCap = 2;
+    for (int rouletteStart : {128,1}) {
+        conditional.render.rouletteStartDepth = rouletteStart;
+        const auto twoReflections = renderAnalyticScene(conditional);
+        std::uint64_t expectedFlights = 0, tailHits = 0, tailEscapes = 0;
+        for (std::size_t i = 0; i < twoReflections.firstHitRecords.size(); ++i) {
+            const auto& r = twoReflections.firstHitRecords[i];
+            if (!r.first.hit) continue;
+            const auto& original = gpisConditional.firstHitRecords[i].first;
+            context.require(r.first.q == original.q && r.first.gradient == original.gradient,
+                "GPIS first-hit samples are independent of continuation depth and roulette");
+            Random rng(firstHitStreamSeed(conditional.seed,i/conditional.render.samplesPerPixel,
+                i%conditional.render.samplesPerPixel,3));
+            Spectrum weight = conductorFresnel(-r.cameraRay.direction.dot(r.first.normal),conditional.material.conductor);
+            if (rouletteStart == 1) {
+                const double probability = std::clamp(weight.maxCoeff(),0.05,0.95);
+                if (rng.openUniform01() >= probability) {
+                    context.near(r.radiance.norm(),0,0,"first-collision roulette terminates before conditional sampling");
+                    continue;
+                }
+                weight /= probability;
+            }
+            ++expectedFlights;
+            GPSSField signedField = conditional.field;
+            signedField.mean = std::make_shared<ConstantMean>(r.first.initialSign*0.03);
+            const ConditionalMedium tailMedium(signedField);
+            FlightState birth;
+            birth.birthPosition = r.first.position;
+            const Vector3 outgoing = normalizedOrThrow(reflectTravelDirection(r.cameraRay.direction,r.first.normal));
+            birth.direction = normalizedOrThrow(outgoing);
+            birth.birthGradient = r.first.initialSign*r.first.gradient;
+            const auto event = tailMedium.sample(tailMedium.beginFlight(birth),rng);
+            Spectrum expected = Spectrum::Zero();
+            if (!event.collided) {
+                ++tailEscapes;
+                const double up = 0.5*(normalizedOrThrow(birth.direction).z()+1.0);
+                expected = weight.cwiseProduct(Spectrum(0.15+0.85*up,0.2+0.7*up,0.35+0.55*up));
+            } else ++tailHits;
+            context.near((expected-r.radiance).norm(),0,1e-13,
+                "GPIS conditional handoff matches the signed surface-conditioned escape sample");
+        }
+        context.require(expectedFlights == twoReflections.statistics.conditionalFlights && tailHits > 0 && tailEscapes > 0,
+            "first-hit roulette and depth count exactly the conditional flights sampled");
+    }
+    writeResolvedConfig(conditional,path);
+    { std::ifstream f(path); f >> resolved; }
+    std::filesystem::remove(path);
+    context.require(resolved["transport"]["continuation"]["method"] == "global_conditional" &&
+        resolved["transport"]["continuation"]["birth_policy"] == "first_hit_surface" &&
+        resolved["transport"]["continuation"]["sampler"] == "segmented_delta_tracking" &&
+        !resolved["transport"].contains("renewal") && !resolved["transport"]["continuation"].contains("model"),
+        "resolved conditional continuation records surface conditioning without a renewal checkpoint");
+    conditional.renewal.backend = "auto";
+    context.require(rejects([&] { prepareRenewalModel(conditional); }),"hybrid conditional backend cannot silently fall back");
+    conditional.renewal.backend = "scalar";
+    conditional.material.alphaField = std::make_shared<LocalTestDensity>();
+    context.require(rejects([&] { prepareRenewalModel(conditional); }),"conditional continuation rejects an alpha grid");
+    conditional.material.alphaField.reset();
+    conditional.field.kernel = CovarianceKernel::fromCorrelationLengths(CovarianceKernelType::Matern32,0.1,Vector3::Ones());
+    context.require(rejects([&] { prepareRenewalModel(conditional); }),"conditional continuation rejects unsupported kernels");
+
     config.firstHit.method = "gpis_function_space";
     const auto gpis = renderAnalyticScene(config);
     for (std::size_t i = 0; i < serial.firstHitRecords.size(); ++i)

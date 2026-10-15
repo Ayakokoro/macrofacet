@@ -13,6 +13,7 @@ bool sameStatistics(const mf::RenderStatistics& a, const mf::RenderStatistics& b
            a.rouletteTerminations == b.rouletteTerminations &&
            a.safetyCapTerminations == b.safetyCapTerminations &&
            a.numericalFailures == b.numericalFailures &&
+           a.conditionalFlights == b.conditionalFlights &&
            a.accumulatedPathDepth == b.accumulatedPathDepth &&
            a.tracking.candidates == b.tracking.candidates &&
            a.tracking.nullCollisions == b.tracking.nullCollisions &&

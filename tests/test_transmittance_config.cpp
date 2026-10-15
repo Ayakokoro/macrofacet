@@ -85,6 +85,46 @@ void testTransmittanceConfig(TestContext& context) {
                     written.at("transmittance").at("monte_carlo")
                         .at("trials_per_ray").get<int>() == 123,
                     "resolved config preserves the transmittance experiment");
+    auto hybridRoot = root;
+    hybridRoot.erase("transmittance");
+    hybridRoot["transport"] = {
+        {"mode","hybrid_first_hit"},
+        {"first_hit",{{"method","gpis_function_space"},{"backend","scalar"}}},
+        {"continuation",{{"method","global_conditional"},{"backend","scalar"}}}};
+    { std::ofstream stream(input); stream << hybridRoot; }
+    auto hybrid = loadExperimentConfig(input);
+    prepareRenewalModel(hybrid);
+    prepareFirstHitModel(hybrid);
+    context.require(hybrid.continuationMethod == "global_conditional" &&
+        hybrid.material.gpModel == GpModel::GlobalPointwise && !hybrid.renewal.model && !hybrid.firstHit.model,
+        "GPIS plus conditional config loads and prepares without neural checkpoints");
+    hybridRoot["transport"]["first_hit"]={{"method",kTungstenFunctionSpaceMethod},
+        {"sampler",{{"sample_points",8},{"step_size",.01}}}};
+    hybridRoot["transport"]["continuation"]={{"method",kTungstenFunctionSpaceMethod},
+        {"sampler",{{"sample_points",12},{"step_size",.02}}}};
+    { std::ofstream stream(input); stream << hybridRoot; }
+    auto tungsten=loadExperimentConfig(input);
+    prepareRenewalModel(tungsten); prepareFirstHitModel(tungsten);
+    context.require(!tungsten.firstHit.model && !tungsten.renewal.model &&
+        tungsten.firstHit.tungsten.samplePoints==8 && tungsten.continuationTungsten.samplePoints==12,
+        "Tungsten first-hit and continuation have independent configs without checkpoints");
+    context.near(tungsten.firstHit.tungsten.stepSize,.01,0,"Tungsten config retains world step");
+    writeResolvedConfig(tungsten,resolved);
+    { std::ifstream stream(resolved); stream >> written; }
+    context.require(written["transport"]["first_hit"]["step_units"]=="world" &&
+        written["transport"]["continuation"]["sampler"]["sample_points"]==12 &&
+        !written["transport"].contains("renewal"),"resolved Tungsten config identifies units and both samplers");
+    for (const auto& bad : {nlohmann::json{{"history_points",1}},
+                            nlohmann::json{{"correlation_context","global"}},
+                            nlohmann::json{{"skip_space",.01}},
+                            nlohmann::json{{"sample_points",1}}}) {
+        auto invalid=hybridRoot;
+        invalid["transport"]["continuation"]["sampler"]=bad;
+        { std::ofstream stream(input); stream << invalid; }
+        bool rejected=false;
+        try { (void)loadExperimentConfig(input); } catch(const std::invalid_argument&) { rejected=true; }
+        context.require(rejected,"unsupported Tungsten semantics fail explicitly");
+    }
     root["transport"]["renewal"] = {{"model","unused.json"},{"profile_mode","point_linear"}};
     { std::ofstream stream(input); stream << root; }
     const auto pointConfig = loadExperimentConfig(input);

@@ -1,0 +1,29 @@
+{
+  "dataset": "outputs/first_hit_se_tungsten_camera_sigma005_20261014/data/dataset.pt",
+  "output_directory": "outputs/first_hit_hazard_comparison_20261015",
+  "spline_analysis": "outputs/first_hit_spline_20261015/analysis.json",
+  "spline_checkpoint": "outputs/first_hit_spline_20261015/p256_k64/best.pt",
+  "seeds": [20261015, 20261016, 20261017],
+  "device": "cuda",
+  "cpu_threads": 1,
+  "profiles_per_batch": 24,
+  "samples_per_profile_per_epoch": 512,
+  "epochs": 500,
+  "validation_every": 5,
+  "learning_rate": 0.001,
+  "minimum_learning_rate": 0.00002,
+  "weight_decay": 0.00001,
+  "gradient_clip": 1.0,
+  "curve_points": 513,
+  "max_baseline_T_discretization_error": 0.002,
+  "benchmark_repeats": 9,
+  "benchmark_inner_repeats": 5,
+  "model": {
+    "profile_points": 256,
+    "bins": 1024,
+    "controls": 64,
+    "hidden": 32,
+    "width": 64,
+    "quadrature_order": 8
+  }
+}

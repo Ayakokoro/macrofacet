@@ -7,6 +7,7 @@
 #include "macrofacet/transport/ConditionalMedium.h"
 #include "macrofacet/transport/CollisionGradientSampler.h"
 #include "macrofacet/transport/NarrowBandMedium.h"
+#include "macrofacet/transport/FunctionSpaceGpisMedium.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -83,26 +84,26 @@ Spectrum traceRenewalCameraPath(const Ray& input, const ExperimentConfig& config
 
 // Continue an existing path with the same classic/conditional kernel used by
 // camera paths. startDepth counts reflections that have already been applied.
-Spectrum traceClassicFlights(FlightState state, Spectrum throughput, int startDepth,
-    const ExperimentConfig& config, const NarrowBandMedium& medium, Random& rng,
-    RenderStatistics& statistics) {
-    const bool conditional = config.transportMode == "global_conditional";
-    const ConditionalMedium conditionalMedium(config.field);
+Spectrum traceTrackedFlights(FlightState state, Spectrum throughput, int startDepth,
+    const ExperimentConfig& config, const NarrowBandMedium* classicMedium,
+    const ConditionalMedium* conditionalMedium, Random& rng, RenderStatistics& statistics) {
+    const bool conditional = conditionalMedium != nullptr;
     int depth = startDepth;
     for (; depth < config.render.safetyDepthCap; ++depth) {
         try {
             FlightSample flight;
             Vector3 collisionGradient = Vector3::Zero();
             if (conditional) {
-                const ConditionalFlightKernel kernel = conditionalMedium.beginFlight(state);
-                flight = conditionalMedium.sample(kernel, rng, &statistics.tracking);
+                ++statistics.conditionalFlights;
+                const ConditionalFlightKernel kernel = conditionalMedium->beginFlight(state);
+                flight = conditionalMedium->sample(kernel, rng, &statistics.tracking);
                 if (flight.collided)
                     collisionGradient = sampleCollisionGradient(kernel, flight.age,
                                                                  rng, config.numeric);
             } else {
                 ++statistics.classicFlights;
-                const ClassicFlightKernel kernel = medium.beginFlight(state);
-                flight = medium.sample(kernel, rng, config.numeric, &statistics.tracking);
+                const ClassicFlightKernel kernel = classicMedium->beginFlight(state);
+                flight = classicMedium->sample(kernel, rng, config.numeric, &statistics.tracking);
             }
             if (!flight.collided) {
                 ++statistics.escapedPaths;
@@ -150,22 +151,73 @@ Spectrum traceClassicFlights(FlightState state, Spectrum throughput, int startDe
     return Spectrum::Zero();
 }
 
+void accumulateGpis(const GpisFlightSample& sample, RenderStatistics& statistics, bool continuation) {
+    ++statistics.gpisFlights;
+    if (continuation) ++statistics.gpisContinuationFlights;
+    statistics.gpisBatches+=sample.batches; statistics.gpisPoints+=sample.points;
+    if (sample.status==GpisFlightStatus::RejectedUpcrossing) ++statistics.gpisRejectedUpcrossings;
+    if (sample.status==GpisFlightStatus::InvalidGradient) {
+        ++statistics.gpisInvalidGradients; ++statistics.numericalFailures;
+    }
+}
+
+Spectrum traceGpisFlights(Ray ray, TungstenSurfaceState birth, Spectrum throughput, int startDepth,
+    const ExperimentConfig& config, const FunctionSpaceGpisMedium& medium,
+    TungstenRandom& rng, RenderStatistics& statistics) {
+    for (int depth=startDepth;depth<config.render.safetyDepthCap;++depth) {
+        const auto hit=medium.sample(ray,birth,rng);
+        accumulateGpis(hit,statistics,true);
+        if (hit.status!=GpisFlightStatus::Hit) {
+            statistics.accumulatedPathDepth+=depth;
+            if (hit.status!=GpisFlightStatus::Escape) return Spectrum::Zero();
+            ++statistics.escapedPaths;
+            return throughput.cwiseProduct(environmentEmission(ray.direction,config.render.environment));
+        }
+        ++statistics.realCollisions;
+        const Vector3 normal=normalizedOrThrow(hit.surface.gradient);
+        throughput=throughput.cwiseProduct(conductorFresnel(-ray.direction.dot(normal),config.material.conductor));
+        ray={hit.position,normalizedOrThrow(reflectTravelDirection(ray.direction,normal))};
+        birth=hit.surface;
+        if (depth+1>=config.render.rouletteStartDepth) {
+            const double p=std::clamp(throughput.maxCoeff(),0.05,0.95);
+            if (rng.uniform01()>=p) {
+                ++statistics.rouletteTerminations; statistics.accumulatedPathDepth+=depth+1;
+                return Spectrum::Zero();
+            }
+            throughput/=p;
+        }
+    }
+    ++statistics.safetyCapTerminations;
+    statistics.accumulatedPathDepth+=config.render.safetyDepthCap;
+    return Spectrum::Zero();
+}
+
 class HybridFirstHitTransport {
     const ExperimentConfig& config_;
     GPSSField negativeField_;
-    FirstHitSEMedium first_;
+    std::unique_ptr<FirstHitSEMedium> first_;
+    std::unique_ptr<FunctionSpaceGpisMedium> tungstenFirst_, tungstenTail_;
     std::unique_ptr<RenewalMedium> positive_, negative_;
     std::unique_ptr<NarrowBandMedium> local_;
+    std::unique_ptr<ConditionalMedium> conditionalPositive_, conditionalNegative_;
 public:
     explicit HybridFirstHitTransport(const ExperimentConfig& config)
-        : config_(config), negativeField_(firstHitSideField(config.field,-1)),
-          first_(config.field,config.firstHit.model,config.firstHit.profileMaximumStep,config.firstHit.reference) {
+        : config_(config), negativeField_(firstHitSideField(config.field,-1)) {
+        if (config.firstHit.method==kTungstenFunctionSpaceMethod)
+            tungstenFirst_=std::make_unique<FunctionSpaceGpisMedium>(config.field,config.firstHit.tungsten);
+        else first_=std::make_unique<FirstHitSEMedium>(config.field,config.firstHit.model,
+            config.firstHit.profileMaximumStep,config.firstHit.reference);
         if (config.continuationMethod == "classic_local") {
             // This is the scene's existing local transport model. Its baked
             // density and tangent NDF keep the original field orientation;
             // it does not carry the first segment's GP conditioning forward.
             local_ = std::make_unique<NarrowBandMedium>(config.field,config.material,
                 config.mediumDensity,config.densityMajorantGrid,config.preparedAreaMajorant);
+        } else if (config.continuationMethod == "global_conditional") {
+            conditionalPositive_ = std::make_unique<ConditionalMedium>(config.field);
+            conditionalNegative_ = std::make_unique<ConditionalMedium>(negativeField_);
+        } else if (config.continuationMethod==kTungstenFunctionSpaceMethod) {
+            tungstenTail_=std::make_unique<FunctionSpaceGpisMedium>(config.field,config.continuationTungsten);
         } else {
             positive_ = std::make_unique<RenewalMedium>(config.field,*config.renewal.model,
                 config.renewal.profileMaximumStep,config.renewal.profileMode);
@@ -177,37 +229,86 @@ public:
     Spectrum trace(const Ray& input, Random& eventRng, Random& gradientRng, Random& continuationRng,
         RenderStatistics& statistics, FirstHitRenderRecord* record = nullptr) const {
         const Ray ray{input.origin,normalizedOrThrow(input.direction)};
-        const auto flight = first_.beginFlight(ray);
+        std::optional<TungstenRandom> gpisRng;
+        if (tungstenFirst_ || tungstenTail_) {
+            const auto seed=tungstenFirst_ ? eventRng.integer() : continuationRng.integer();
+            gpisRng.emplace(seed);
+            if (record) record->gpisSeed=seed;
+        }
         FirstHitSESurfaceSample hit;
-        if (flight) {
-            ++statistics.firstHitFlights;
-            hit = first_.sample(*flight,eventRng,gradientRng,config_.numeric.distanceAbsoluteTolerance);
-        } else ++statistics.firstHitDomainMisses;
+        if (tungstenFirst_) {
+            const auto sample=tungstenFirst_->sample(ray,std::nullopt,*gpisRng);
+            accumulateGpis(sample,statistics,false);
+            hit.enteredDomain=sample.enteredDomain;
+            hit.hit=sample.status==GpisFlightStatus::Hit;
+            hit.failed=sample.status!=GpisFlightStatus::Hit && sample.status!=GpisFlightStatus::Escape;
+            hit.initialSign=sample.initialSign;
+            hit.entryDistance=sample.entryDistance; hit.maximumDistance=sample.maximumDistance;
+            hit.distance=sample.distance; hit.entry=sample.entry; hit.position=sample.position;
+            hit.gradient=sample.surface.gradient;
+            hit.observationPosition=sample.surface.position; hit.fieldValue=sample.surface.value;
+            const double ell=1/std::sqrt(ray.direction.dot(config_.field.kernel.metric()*ray.direction));
+            hit.q=hit.distance/ell;
+            hit.speed=std::abs(hit.gradient.dot(ray.direction))*ell/config_.field.kernel.sigma();
+            if (hit.hit) hit.normal=normalizedOrThrow(hit.gradient);
+            if (sample.status==GpisFlightStatus::RejectedUpcrossing) ++statistics.firstHitUpcrossings;
+        } else {
+            const auto flight=first_->beginFlight(ray);
+            if (flight) hit=first_->sample(*flight,eventRng,gradientRng,config_.numeric.distanceAbsoluteTolerance);
+            hit.observationPosition=hit.position;
+            if (hit.hit && hit.initialSign<0) ++statistics.firstHitUpcrossings;
+            if (tungstenTail_ && hit.hit && hit.gradient.dot(ray.direction)>0) {
+                hit.hit=false; hit.failed=true;
+                ++statistics.gpisRejectedUpcrossings;
+            } else if (tungstenTail_ && hit.hit && (!hit.gradient.allFinite() ||
+                       hit.gradient.squaredNorm()<static_cast<double>(0.0000001f))) {
+                hit.hit=false; hit.failed=true;
+                ++statistics.gpisInvalidGradients; ++statistics.numericalFailures;
+            }
+        }
+        if (hit.enteredDomain) ++statistics.firstHitFlights;
+        else ++statistics.firstHitDomainMisses;
         if (record) { record->cameraRay = ray; record->first = hit; }
+        if (hit.failed) return Spectrum::Zero();
         if (!hit.hit) {
-            if (flight) ++statistics.firstHitEscapes;
+            if (hit.enteredDomain) ++statistics.firstHitEscapes;
             ++statistics.escapedPaths;
             return environmentEmission(ray.direction,config_.render.environment);
         }
         ++statistics.firstHits; ++statistics.realCollisions;
-        if (hit.initialSign < 0) ++statistics.firstHitUpcrossings;
         RenewalPathState state;
         state.throughput = conductorFresnel(-ray.direction.dot(hit.normal),config_.material.conductor);
         state.ray = {hit.position,normalizedOrThrow(reflectTravelDirection(ray.direction,hit.normal))};
-        state.gradient = hit.initialSign*hit.gradient;
+        // An accepted Tungsten hit has the original field orientation, even
+        // when earlier no-hit batches started on the negative side.
+        const int side=(tungstenFirst_ || tungstenTail_) ? 1 : hit.initialSign;
+        state.gradient = side*hit.gradient;
         // The first event already sampled survival, distance and the collision
         // gradient. Only Fresnel is applied here, with no second phase sample.
         if (state.depth >= config_.render.rouletteStartDepth) {
             const double p = std::clamp(state.throughput.maxCoeff(),0.05,0.95);
-            if (continuationRng.openUniform01() >= p) {
+            if ((gpisRng ? gpisRng->uniform01() : continuationRng.openUniform01()) >= p) {
                 ++statistics.rouletteTerminations; statistics.accumulatedPathDepth += state.depth;
                 return Spectrum::Zero();
             }
             state.throughput /= p;
         }
-        if (local_) return traceClassicFlights(startClassicCollisionFlight(state.ray.origin,state.ray.direction),
-            state.throughput,state.depth,config_,*local_,continuationRng,statistics);
-        return traceRenewalFromSurface(state,config_,hit.initialSign > 0 ? *positive_ : *negative_,
+        if (tungstenTail_) return traceGpisFlights(state.ray,
+            {hit.observationPosition,hit.fieldValue,hit.gradient},state.throughput,state.depth,
+            config_,*tungstenTail_,*gpisRng,statistics);
+        if (local_) return traceTrackedFlights(startClassicCollisionFlight(state.ray.origin,state.ray.direction),
+            state.throughput,state.depth,config_,local_.get(),nullptr,continuationRng,statistics);
+        if (conditionalPositive_) {
+            FlightState birth = startClassicCollisionFlight(state.ray.origin,state.ray.direction);
+            birth.birthValue = 0.0;
+            birth.birthGradient = state.gradient;
+            // Keep the full first-hit gradient and its side. This is a surface
+            // birth, not a new exterior observation or a second phase sample.
+            const auto* medium = side > 0 ? conditionalPositive_.get() : conditionalNegative_.get();
+            return traceTrackedFlights(birth,state.throughput,state.depth,config_,nullptr,medium,
+                continuationRng,statistics);
+        }
+        return traceRenewalFromSurface(state,config_,side > 0 ? *positive_ : *negative_,
             continuationRng,statistics);
     }
 };
@@ -265,7 +366,8 @@ Spectrum traceCameraPath(const Ray& initialRay,
     FlightState state = conditional
         ? conditionalMedium.startExternal(entry, initialDirection, rng)
         : medium.startExternal(entry, initialDirection);
-    return traceClassicFlights(state,Spectrum::Ones(),0,config,medium,rng,statistics);
+    return traceTrackedFlights(state,Spectrum::Ones(),0,config,&medium,
+        conditional ? &conditionalMedium : nullptr,rng,statistics);
 }
 
 RenderedImage renderAnalyticScene(const ExperimentConfig& config,

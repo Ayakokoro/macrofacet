@@ -24,6 +24,9 @@ struct RenderStatistics {
     std::uint64_t firstHitFlights = 0, firstHits = 0, firstHitEscapes = 0;
     std::uint64_t firstHitDomainMisses = 0, firstHitUpcrossings = 0;
     std::uint64_t classicFlights = 0;
+    std::uint64_t conditionalFlights = 0;
+    std::uint64_t gpisFlights = 0, gpisContinuationFlights = 0, gpisBatches = 0, gpisPoints = 0;
+    std::uint64_t gpisRejectedUpcrossings = 0, gpisInvalidGradients = 0;
     DdaTrackingDiagnostics tracking;
     RenewalTrackingDiagnostics renewal;
 };
@@ -58,6 +61,13 @@ inline void mergeInto(RenderStatistics& destination, const RenderStatistics& sou
     destination.firstHitDomainMisses += source.firstHitDomainMisses;
     destination.firstHitUpcrossings += source.firstHitUpcrossings;
     destination.classicFlights += source.classicFlights;
+    destination.conditionalFlights += source.conditionalFlights;
+    destination.gpisFlights += source.gpisFlights;
+    destination.gpisContinuationFlights += source.gpisContinuationFlights;
+    destination.gpisBatches += source.gpisBatches;
+    destination.gpisPoints += source.gpisPoints;
+    destination.gpisRejectedUpcrossings += source.gpisRejectedUpcrossings;
+    destination.gpisInvalidGradients += source.gpisInvalidGradients;
     destination.realCollisions += source.realCollisions;
     destination.escapedPaths += source.escapedPaths;
     destination.rouletteTerminations += source.rouletteTerminations;
@@ -92,6 +102,7 @@ struct FirstHitRenderRecord {
     Ray cameraRay;
     FirstHitSESurfaceSample first;
     Spectrum radiance = Spectrum::Zero();
+    std::uint64_t gpisSeed = 0;
 };
 
 struct RenewalPathState {

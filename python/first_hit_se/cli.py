@@ -73,6 +73,9 @@ def main():
     sub.add_argument('--phase', choices=('all', 'collect', 'train', 'report'), default='all')
     sub = commands.add_parser('spline-study')
     sub.add_argument('--phase', choices=('all', 'evaluate', 'benchmark', 'report'), default='all')
+    sub = commands.add_parser('hazard-study')
+    sub.add_argument('--config', type=Path, required=True)
+    sub.add_argument('--phase', choices=('all', 'train', 'evaluate', 'benchmark', 'report'), default='all')
     args = parser.parse_args()
     if args.command == "collect": result = collect(args.config)
     elif args.command == "prepare": result = prepare(args.manifest, args.output)
@@ -126,5 +129,8 @@ def main():
     elif args.command == 'spline-study':
         from .spline_study import run
         result = run(args.phase)
+    elif args.command == 'hazard-study':
+        from .hazard_study import run
+        result = run(args.config, args.phase)
     else: result = compare(args.checkpoint, args.dataset, args.output, args.split, args.device, args.points, args.subdivisions, args.limit)
     print(json.dumps(result, indent=2, allow_nan=False))

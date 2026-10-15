@@ -89,6 +89,17 @@ MeanJet NanoVdbMean::evaluate(const Point3& x) const {
     return jet;
 }
 
+MeanJet NanoVdbMean::evaluateTungsten(const Point3& x) const {
+    MeanJet jet;
+    jet.value=impl_->view.tungstenValue(x);
+    constexpr double step=0.001; // TabulatedMean::dmean_da, WORLD units
+    for (int axis=0;axis<3;++axis) {
+        Point3 offset=x; offset[axis]+=step;
+        jet.gradient[axis]=(impl_->view.tungstenValue(offset)-jet.value)/step;
+    }
+    return jet;
+}
+
 BoundsSummary NanoVdbMean::bounds(const Bounds3& domain) const {
     (void)domain;  // the grid's global extremes bound every sub-domain
     BoundsSummary summary;

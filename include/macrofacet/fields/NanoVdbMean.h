@@ -37,6 +37,7 @@ public:
     // it -- see MeanField::intrinsicSigma.
     std::optional<double> intrinsicSigma() const override;
     MeanJet evaluate(const Point3& x) const override;
+    MeanJet evaluateTungsten(const Point3& x) const override;
     MeanJet evaluateInCell(const Point3& x, const Point3& interior) const override;
     MeanRayPoint queryRayPoint(const Point3& origin, const Vector3& direction,
                               double begin, double maximumEnd) const override;

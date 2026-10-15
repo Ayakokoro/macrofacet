@@ -118,6 +118,7 @@ FirstHitSESurfaceSample FirstHitSEMedium::sample(const FirstHitSEFlight& flight,
     result.maximumDistance = flight.mean.maximumX()*flight.ell;
     result.q = draw.q; result.distance = draw.q*flight.ell; result.speed = draw.speed;
     result.position = flight.ray.origin+result.distance*flight.ray.direction;
+    result.observationPosition = result.position;
     if (!draw.hit) return result;
     const auto& segments = flight.mean.segments();
     auto it = std::lower_bound(segments.begin(),segments.end(),draw.q,

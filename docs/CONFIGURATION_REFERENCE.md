@@ -96,8 +96,27 @@ build\Release\macrofacet_experiments.exe render --config configs\macrofacet_ci.j
 ```
 
 `transport.mode` accepts `classic` (default, follows `material.gp_model`),
-`classic_local`, `classic_global`, `global_conditional`, and `all`. The last
+`classic_local`, `classic_global`, `global_conditional`, `neural_renewal`,
+`hybrid_first_hit`, and `all`. The last
 choice renders three comparable modes. The CLI also accepts `--mode`.
+
+`hybrid_first_hit` separates the camera first hit from later flights.
+`transport.first_hit.method` accepts `gpis_function_space`, `neural_first_hit_se`,
+or `gpis_function_space_tungsten`;
+`transport.continuation.method` accepts `classic_local`, `neural_renewal`,
+`global_conditional`, or `gpis_function_space_tungsten`. Both stages require `backend="scalar"`. Conditional
+continuation needs no neural checkpoint and starts at the first collision with
+`F=0` and its full gradient, transforming both mean and gradient by `initialSign`.
+It retains only the latest collision observation, not the full camera GP history.
+The same SE kernel and Gaussian/no-alpha-grid constraints apply. See
+[hybrid rendering](FIRST_HIT_SE.md) and the
+[GPIS/conditional example](../configs/render_first_hit_gpis_global_conditional_shader_ball_sigma005.json).
+
+The Tungsten-compatible method has independent `sampler.sample_points` (default 8)
+and `sampler.step_size` (default 0.01, **world units**) in either stage. It supports
+SE + renewal+ + conditioned Gaussian gradients and rejects upcrossings. See
+[compatibility behavior and validation](GPIS_FUNCTION_SPACE.md#tungsten-compatible-two-stage-rendering)
+and the [two-stage GPIS example](../configs/render_first_hit_gpis_tungsten_shader_ball_sigma005.json).
 
 `global_conditional` constructs two delta-tracking majorants per flight:
 an analytic bound near birth and a conditional-moment interval bound for the

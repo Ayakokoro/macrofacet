@@ -51,6 +51,9 @@ public:
     // derived from the resolved value either way.
     virtual std::optional<double> intrinsicSigma() const { return std::nullopt; }
     virtual MeanJet evaluate(const Point3& x) const = 0;
+    // Compatibility query for Tungsten function-space rendering. Analytic
+    // means keep their analytic derivatives; tabulated means override this.
+    virtual MeanJet evaluateTungsten(const Point3& x) const { return evaluate(x); }
     // Evaluate the interpolant selected by an interior point of the ray segment.
     // At a grid face this preserves that segment's one-sided gradient.
     virtual MeanJet evaluateInCell(const Point3& x, const Point3&) const { return evaluate(x); }

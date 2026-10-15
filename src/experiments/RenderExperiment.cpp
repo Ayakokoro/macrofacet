@@ -85,12 +85,20 @@ void writeFirstHitDiagnostics(const mf::ExperimentConfig& config, const mf::Rend
         {"first_hits",s.firstHits},{"first_hit_escapes",s.firstHitEscapes},
         {"domain_misses",s.firstHitDomainMisses},{"upcrossings",s.firstHitUpcrossings},
         {"real_collisions",s.realCollisions},
-        {"continuation_flights",config.continuationMethod == "classic_local" ? s.classicFlights : s.renewal.flights},
+        {"continuation_flights",config.continuationMethod == "classic_local" ? s.classicFlights :
+            config.continuationMethod == "global_conditional" ? s.conditionalFlights :
+            config.continuationMethod == mf::kTungstenFunctionSpaceMethod ? s.gpisContinuationFlights : s.renewal.flights},
+        {"conditional_flights",s.conditionalFlights},
+        {"gpis_flights",s.gpisFlights},{"gpis_continuation_flights",s.gpisContinuationFlights},
+        {"gpis_batches",s.gpisBatches},{"gpis_points",s.gpisPoints},
+        {"gpis_rejected_upcrossings",s.gpisRejectedUpcrossings},{"gpis_invalid_gradients",s.gpisInvalidGradients},
         {"escaped_paths",s.escapedPaths},{"roulette_terminations",s.rouletteTerminations},
         {"safety_cap_terminations",s.safetyCapTerminations},{"numerical_failures",s.numericalFailures},
         {"mean_path_depth",s.paths ? s.accumulatedPathDepth/s.paths : 0},
         {"distance_convention","distance from activeDomain entry"},
         {"rng_stream","first_hit_split_v1"}};
+    if (config.firstHit.method==mf::kTungstenFunctionSpaceMethod || config.continuationMethod==mf::kTungstenFunctionSpaceMethod)
+        summary["rng_stream"]="tungsten_pcg_v1";
     std::ofstream output(config.outputDirectory/"hybrid_summary.json");
     if (!output) throw std::runtime_error("cannot write hybrid summary");
     output << std::setw(2) << summary << '\n';
@@ -100,7 +108,7 @@ void writeFirstHitDiagnostics(const mf::ExperimentConfig& config, const mf::Rend
     csv << std::setprecision(17)
         << "pixel_x,pixel_y,sample,entered,hit,initial_sign,entry_distance,maximum_distance,q,distance,speed,"
            "ray_dx,ray_dy,ray_dz,entry_x,entry_y,entry_z,x,y,z,gx,gy,gz,nx,ny,nz,radiance_r,radiance_g,radiance_b,"
-           "camera_seed,event_seed,gradient_seed,continuation_seed\n";
+           "camera_seed,event_seed,gradient_seed,continuation_seed,failed,field_value,observation_x,observation_y,observation_z,gpis_seed\n";
     const auto vector = [&](const mf::Vector3& v) { csv << ',' << v.x() << ',' << v.y() << ',' << v.z(); };
     for (std::size_t i = 0; i < image.firstHitRecords.size(); ++i) {
         const auto pixel = i/config.render.samplesPerPixel, sample = i%config.render.samplesPerPixel;
@@ -112,6 +120,9 @@ void writeFirstHitDiagnostics(const mf::ExperimentConfig& config, const mf::Rend
         vector(h.gradient); vector(h.normal); vector(r.radiance);
         for (int stream = 0; stream < 4; ++stream)
             csv << ',' << mf::firstHitStreamSeed(config.seed,pixel,sample,stream);
+        csv << ',' << h.failed << ',' << h.fieldValue;
+        vector(h.observationPosition);
+        csv << ',' << r.gpisSeed;
         csv << '\n';
     }
 }
@@ -129,7 +140,7 @@ void runRenderExperiments(const ExperimentConfig& config) {
                "dda_candidates,null_collisions,bound_intervals,near_candidates,far_candidates,rounded_candidate_steps,adaptive_majorant_flights,"
                "tracking_segments,max_segment_null_collisions,max_segment_majorant,max_candidate_majorant,"
                "max_evaluated_extinction,max_segment_majorant_optical_depth,max_conditional_interval_majorant,"
-               "neural_flights,neural_segments,neural_mixture_queries,neural_backend,"
+               "conditional_flights,gpis_flights,gpis_continuation_flights,gpis_batches,gpis_points,gpis_rejected_upcrossings,gpis_invalid_gradients,neural_flights,neural_segments,neural_mixture_queries,neural_backend,"
                "neural_initialization_batches,neural_segment_batches,neural_mixture_batches,neural_maximum_batch_size,"
                "neural_cpu_workers,neural_parallel_advance_batches,neural_serial_advance_batches,neural_submissions,neural_readbacks,neural_combined_submissions,neural_ray_pool_size,neural_max_initialization_batch,neural_max_mixture_batch,neural_max_initialization_wait,neural_max_mixture_wait,neural_max_in_flight_batches,neural_blocking_collects,neural_cpu_batches_with_gpu_pending\n";
     {
@@ -144,11 +155,12 @@ void runRenderExperiments(const ExperimentConfig& config) {
             if (mode == "classic_local" || (mode == "hybrid_first_hit" && config.continuationMethod == "classic_local"))
                 renderConfig.material.gpModel = GpModel::LocalTangent;
             if (mode == "classic_global" || mode == "global_conditional" || mode == "neural_renewal" ||
-                (mode == "hybrid_first_hit" && config.continuationMethod == "neural_renewal"))
+                (mode == "hybrid_first_hit" && (config.continuationMethod == "neural_renewal" ||
+                    config.continuationMethod == "global_conditional" || config.continuationMethod == kTungstenFunctionSpaceMethod)))
                 renderConfig.material.gpModel = GpModel::GlobalPointwise;
             if (renderConfig.material.gpModel != config.material.gpModel)
                 renderConfig.preparedAreaMajorant.reset();
-            if (mode == "global_conditional" &&
+            if ((mode == "global_conditional" || (mode == "hybrid_first_hit" && config.continuationMethod == "global_conditional")) &&
                 (renderConfig.material.ndfFamily != NdfFamily::GeneralizedGaussian ||
                  renderConfig.material.alphaField))
                 throw std::invalid_argument(
@@ -191,6 +203,10 @@ void runRenderExperiments(const ExperimentConfig& config) {
                     << image.statistics.tracking.maximumEvaluatedHazard << ','
                     << image.statistics.tracking.maximumSegmentOpticalDepth << ','
                     << image.statistics.tracking.maximumConditionalIntervalMajorant << ','
+                    << image.statistics.conditionalFlights << ','
+                    << image.statistics.gpisFlights << ',' << image.statistics.gpisContinuationFlights << ','
+                    << image.statistics.gpisBatches << ',' << image.statistics.gpisPoints << ','
+                    << image.statistics.gpisRejectedUpcrossings << ',' << image.statistics.gpisInvalidGradients << ','
                     << image.statistics.renewal.flights << ',' << image.statistics.renewal.segments << ','
                     << image.statistics.renewal.mixtureQueries << ',' << image.statistics.renewal.backend << ','
                     << image.statistics.renewal.initializationBatches << ',' << image.statistics.renewal.segmentBatches << ','
