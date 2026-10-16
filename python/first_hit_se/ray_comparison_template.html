@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>残差 GRU 与 local · 逐光线诊断</title>
+<style>
+:root{color-scheme:light;--ink:#1c2a3d;--muted:#566679;--line:#dce2e9;--blue:#2464d5;--orange:#d66d18;--green:#158877}
+*{box-sizing:border-box}body{margin:0;background:#f4f6fa;color:var(--ink);font:15px/1.65 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1340px;margin:auto;padding:32px 26px 60px}h1{font-size:30px;line-height:1.3;margin:8px 0 14px}h2{font-size:20px;margin:28px 0 12px}h3{font-size:15px;margin:0 0 6px}p{margin:10px 0}a{color:var(--blue)}.muted{color:var(--muted)}.eyebrow{letter-spacing:.08em;color:var(--muted);font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{background:white;border:1px solid var(--line);border-radius:10px;padding:18px;min-width:0}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:22px 0}.stat strong{font-size:23px;display:block;line-height:1.4}.stat span{color:var(--muted);font-size:13px}.toolbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:14px 18px;background:#fff;border:1px solid var(--line);border-radius:10px}.toolbar label{font-size:13px;color:var(--muted)}input,select,button{font:inherit;border:1px solid #c5d0df;border-radius:5px;padding:6px 8px;background:#fff;color:var(--ink)}button{cursor:pointer}button:hover{background:#edf3ff}input[type=number]{width:82px}select{max-width:290px}.chips{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.chip{font-size:13px;border-radius:20px;padding:4px 11px}.info{font-size:13px;color:var(--muted);overflow-wrap:anywhere}.readout{font:12px/1.5 ui-monospace,Consolas,monospace;min-height:20px;color:#506079}svg{width:100%;height:auto;display:block}svg text{font-family:system-ui,"Microsoft YaHei",sans-serif;fill:#5b6879;font-size:11px}.legend{display:flex;gap:18px;font-size:13px;margin:12px 0}.legend i{display:inline-block;width:20px;border-top:3px solid;margin-right:5px;vertical-align:middle}.scroll{overflow:auto;max-height:430px;border:1px solid var(--line);border-radius:8px;background:#fff}table{border-collapse:collapse;min-width:1040px;width:100%;font-size:13px}th,td{text-align:right;border-bottom:1px solid #e7ecf1;padding:7px 11px;white-space:nowrap}th{background:#eef2f7;position:sticky;top:0;font-weight:600}td:nth-child(2),th:nth-child(2){text-align:left}tbody tr{cursor:pointer}tbody tr:hover,tbody tr.selected{background:#eaf2ff}.negative{color:var(--green)}.positive{color:#b84b14}details{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0}summary{cursor:pointer;font-weight:600}.rayhead{display:grid;grid-template-columns:1fr 320px;gap:20px;align-items:start}.numbers{display:flex;gap:24px;flex-wrap:wrap;margin:14px 0}.numbers b{display:block;font-size:20px}.numbers span{font-size:13px;color:var(--muted)}.empty{padding:55px 10px;text-align:center;color:var(--muted)}code{font-size:.92em;background:#eef2f6;padding:1px 4px;border-radius:3px}.small{font-size:13px}.focus{border-color:var(--blue);color:var(--blue)}@media(max-width:850px){main{padding:20px 12px}.grid,.rayhead{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}.rayhead .card{max-width:420px}.toolbar{gap:8px}h1{font-size:25px}}
+</style></head><body><main>
+<div class="eyebrow">SIGMA 0.02 · DEPLOYED GRU · 280 TEST RAYS</div>
+<h1>残差修正在哪些光线上有效？</h1>
+<p>把<strong>透射率</strong>与<strong>碰撞条件下的梯度分布</strong>分别比较。蓝色为当前部署的 GRU，橙色为它所修正的解析 local，黑色为 GPIS 经验参考。</p>
+<p class="muted small">当前模型：seed 20261015 · GRU + mixture 梯度头 · 内部 Δq = 1/8。光线编号是零起始测试索引；相机像素来自数据采集时的坐标。</p>
+<div class="stats" id="stats"></div>
+<details><summary>如何理解 local、参考值与“梯度”</summary>
+<p>这里的 local 保留原始均值导数，并计算正、负入口分支，是残差网络直接修正的解析基线。渲染 classic_local 会将均值梯度单位化，并读取烘焙 density；理想单位梯度 SDF 的正侧情形可以对应，当前实现不保证完全相同。</p>
+<p>解析梯度基线是 <code>p(W)=W·φ(W−μ)/(φ(μ)+μΦ(μ)), μ=−k·b′(q), W&gt;0</code>，不是名为 mixture_local 的无历史神经网络。</p>
+<p>W 是纵向首碰割线速度。每条光线有 8,192 次有限历史 GPIS 参考实现；标签采用 H=1、B=8、Δq=1/64 的 Tungsten-linear 采样。参考不是连续 GP 的精确真值，图表也不构成三维法线质量的完整验证。</p>
+</details>
+<h2>全体光线：点击散点选择</h2>
+<div class="grid"><div class="card"><h3>透射率：每条光线的最大绝对误差</h3><div id="scatterT"></div><p class="small muted">横轴 local，纵轴 GRU；对角线下方表示改善。包括全部 280 条光线。</p></div><div class="card"><h3>条件梯度：逐光线 PIT KS</h3><div id="scatterG"></div><p class="small muted">默认只看至少 1,024 次命中的光线。指标越小，条件分布校准越好。</p></div></div>
+<div class="chips" id="examples"></div>
+<h2 id="detailTitle">查看光线</h2>
+<div class="toolbar"><label>光线编号 <input id="ray" type="number" min="0" max="279" value="245"></label><button id="previous">上一条</button><button id="next">下一条</button><label>梯度位置区间 <select id="condition"><option value="0">全部参考命中</option><option value="1">较早 25% 命中位置</option><option value="2">25–50% 命中位置</option><option value="3">50–75% 命中位置</option><option value="4">较晚 25% 命中位置</option></select></label><label>梯度形状 <select id="distribution"><option value="cdf">CDF</option><option value="pdf">分箱 PDF</option></select></label><button id="focus">聚焦选中碰撞区间</button><button id="reset">显示整段</button></div>
+<div class="rayhead"><div><div id="identity" class="info"></div><div id="numbers" class="numbers"></div><p id="conditionNote" class="small muted"></p><div class="legend"><span><i style="border-color:#182536"></i>GPIS 参考</span><span><i style="border-color:#d66d18"></i>解析 local</span><span><i style="border-color:#2464d5"></i>当前 GRU</span></div></div><div class="card"><h3 id="cameraTitle"></h3><div id="cameraMap"></div><p class="small muted">采集时的像素坐标，点击同一相机的点切换。</p></div></div>
+<div class="grid" id="charts">
+<div class="card"><h3>输入均值剖面 m / σ</h3><div id="profile"></div><div id="profileReadout" class="readout"></div></div>
+<div class="card"><h3>透射率 T(s)</h3><div id="transmittance"></div><div id="transmittanceReadout" class="readout"></div><p class="small muted">灰带：参考 T 的逐点 95% Wilson 区间；末端 T 是逃逸概率。</p></div>
+<div class="card"><h3>透射率误差：预测 − 参考</h3><div id="errorT"></div><div id="errorTReadout" class="readout"></div></div>
+<div class="card"><h3>残差修正 log(λ_GRU / λ_local)</h3><div id="residual"></div><div id="residualReadout" class="readout"></div><p class="small muted">正值提高 hazard，负值降低 hazard；两种入口符号分开显示。</p></div>
+<div class="card"><h3 id="gradientTitle">固定参考碰撞位置的梯度 CDF</h3><div id="gradient"></div><div id="gradientReadout" class="readout"></div></div>
+<div class="card"><h3>条件 PIT：F预测(W参考) 的经验 CDF</h3><div id="pit"></div><div id="pitReadout" class="readout"></div><p class="small muted">理想情况为对角线。灰色边界为有限样本尺度参考，不是多重比较显著性检验。</p></div>
+</div>
+<h2>全部光线排名</h2>
+<div class="toolbar"><label>排序 <select id="sort"><option value="T_regression">透射率：相对 local 退化最多</option><option value="T_improvement">透射率：改善最多</option><option value="T_worst">透射率：当前误差最大</option><option value="T_best">透射率：当前误差最小</option><option value="G_regression">梯度：相对 local 退化最多</option><option value="G_improvement">梯度：改善最多</option><option value="G_worst">梯度：当前误差最大</option><option value="G_best">梯度：当前误差最小</option><option value="index">光线编号</option></select></label><label>相机 <select id="cameraFilter"></select></label><label><input id="sampleFilter" type="checkbox" checked> 只看命中 ≥ 1,024</label><span id="rowCount" class="small muted"></span></div>
+<div class="scroll"><table><thead><tr><th>光线</th><th>相机 / 像素</th><th>命中数</th><th>T local</th><th>T GRU</th><th>Δ T误差</th><th>PIT local</th><th>PIT GRU</th><th>Δ PIT</th></tr></thead><tbody id="tableBody"></tbody></table></div>
+<details open><summary>两部分谁更重要？</summary><p id="decomposition"></p><p>不能直接比较 T 最大误差与 PIT KS 的数值大小。判断一条光线时，分别看两者与 local 的差值；判断完整采样还需要联合概率与渲染验证。参考误差、模型偏差和 Monte Carlo 图像噪声也应分别理解。</p></details>
+<p class="small"><a href="summary.md">文字报告</a> · <a href="per_ray.csv">全部指标 CSV</a> · <a href="summary.json">指标 JSON</a> · <a href="overview.png">总体图 PNG</a> / <a href="overview.svg">SVG</a> · <a href="representative_rays.png">代表光线 PNG</a> / <a href="representative_rays.svg">SVG</a> · <a href="gradient_examples.png">梯度案例 PNG</a></p>
+</main><script id="report-data" type="application/json">__REPORT_DATA__</script><script>
+'use strict';
+const DATA=JSON.parse(document.getElementById('report-data').textContent), R=DATA.report, rows=R.rows, curves=DATA.curves, S=R.summary;
+const C={reference:'#182536',local:'#d66d18',gru:'#2464d5',green:'#158877',muted:'#9ba7b5'};
+const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=(n,d=5)=>n==null?'—':Number(n).toFixed(d), signed=n=>(n>0?'+':'')+fmt(n), extent=a=>[Math.min(...a),Math.max(...a)];
+let selected=245, focusRange=null;
+function svgStart(w,h){return `<svg viewBox="0 0 ${w} ${h}" role="img">`;}
+function path(x,y,X,Y){return x.map((v,i)=>(i?'L':'M')+X(v).toFixed(2)+','+Y(y[i]).toFixed(2)).join(' ');}
+function lineChart(id,series,options={}){
+ const w=600,h=276,m={l:58,r:18,t:18,b:42}, allx=series.flatMap(s=>s.x), ally=series.flatMap(s=>s.y);
+ if(!allx.length){$(id).innerHTML='<div class="empty">该区间没有参考命中</div>';return;}
+ let xr=options.xrange||extent(allx), yr=options.yrange||extent(ally);
+ if(!options.yrange){const pad=Math.max((yr[1]-yr[0])*.08,1e-5);yr=[yr[0]-pad,yr[1]+pad];}
+ if(xr[1]<=xr[0])xr=[xr[0],xr[0]+1]; if(yr[1]<=yr[0])yr=[yr[0]-.01,yr[0]+.01];
+ const X=x=>m.l+(x-xr[0])/(xr[1]-xr[0])*(w-m.l-m.r), Y=y=>h-m.b-(y-yr[0])/(yr[1]-yr[0])*(h-m.t-m.b);
+ let html=svgStart(w,h)+`<defs><clipPath id="clip-${id}"><rect x="${m.l}" y="${m.t}" width="${w-m.l-m.r}" height="${h-m.t-m.b}"/></clipPath></defs>`;
+ for(let i=0;i<=4;i++){const x=xr[0]+i/4*(xr[1]-xr[0]),y=yr[0]+i/4*(yr[1]-yr[0]);html+=`<path d="M${m.l},${Y(y)}H${w-m.r}" stroke="#e8edf3"/><text x="${m.l-8}" y="${Y(y)+4}" text-anchor="end">${fmt(y,Math.abs(y)<.1?3:2)}</text><text x="${X(x)}" y="${h-m.b+20}" text-anchor="middle">${fmt(x,2)}</text>`;}
+ html+=`<g clip-path="url(#clip-${id})">`;
+ if(options.band){let a=options.band;const polygon=a.x.map((x,i)=>`${X(x)},${Y(a.upper[i])}`).concat(a.x.map((x,i)=>`${X(x)},${Y(a.lower[i])}`).reverse()).join(' ');html+=`<polygon points="${polygon}" fill="#d9dfe8" opacity=".65"/>`;}
+ if(options.zero&&yr[0]<0&&yr[1]>0)html+=`<path d="M${m.l},${Y(0)}H${w-m.r}" stroke="#8b97a5" stroke-dasharray="4 4"/>`;
+ for(const s of series)html+=`<path d="${path(s.x,s.y,X,Y)}" fill="none" stroke="${s.color}" stroke-width="${s.width||2}" ${s.dash?'stroke-dasharray="5 4"':''}/>`;
+ html+=`</g><text x="${w/2}" y="${h-4}" text-anchor="middle">${esc(options.xlabel||'距介质入口的距离 s')}</text></svg>`;$(id).innerHTML=html;
+ $(id).querySelector('svg').onmousemove=e=>{const rect=e.currentTarget.getBoundingClientRect();const value=xr[0]+((e.clientX-rect.left)/rect.width*w-m.l)/(w-m.l-m.r)*(xr[1]-xr[0]);if(value<xr[0]||value>xr[1])return;const parts=series.filter(s=>!s.hideReadout).map(s=>{let nearest=0;for(let i=1;i<s.x.length;i++)if(Math.abs(s.x[i]-value)<Math.abs(s.x[nearest]-value))nearest=i;return `${s.name}: ${fmt(s.y[nearest],4)}`;});$(id+'Readout').textContent=`x=${fmt(value,4)} · ${parts.join(' / ')}`;};
+}
+function scatter(id,gradient){
+ const w=600,h=310,m={l:58,r:25,t:20,b:45}, data=gradient?rows.filter(r=>r.hits>=1024):rows;
+ const x=r=>gradient?r.gradient_local.pit_ks:r.T_local,y=r=>gradient?r.gradient_gru.pit_ks:r.T_gru;
+ const limit=Math.max(...data.map(x),...data.map(y))*1.08,X=v=>m.l+v/limit*(w-m.l-m.r),Y=v=>h-m.b-v/limit*(h-m.t-m.b);
+ let html=svgStart(w,h);for(let j=0;j<=4;j++){let v=limit*j/4;html+=`<path d="M${m.l},${Y(v)}H${w-m.r}" stroke="#e7ecf3"/><text x="${m.l-8}" y="${Y(v)+4}" text-anchor="end">${fmt(v,3)}</text><text x="${X(v)}" y="${h-m.b+20}" text-anchor="middle">${fmt(v,3)}</text>`;}
+ html+=`<path d="M${X(0)},${Y(0)}L${X(limit)},${Y(limit)}" stroke="#95a2b1" stroke-dasharray="5 4"/>`;
+ for(const r of [...data].sort((a,b)=>(a.ray===selected)-(b.ray===selected))){html+=`<circle data-ray="${r.ray}" cx="${X(x(r))}" cy="${Y(y(r))}" r="${r.ray===selected?6:3.5}" fill="${r.ray===selected?C.gru:y(r)<=x(r)?C.green:C.local}" opacity="${r.ray===selected?1:.75}" stroke="white" stroke-width=".7" style="cursor:pointer"><title>光线 ${r.ray} · ${esc(r.camera)} ${esc(r.pixel)} · local ${fmt(x(r))} / GRU ${fmt(y(r))}</title></circle>`;}
+ html+=`<text x="${w/2}" y="${h-4}" text-anchor="middle">解析 local 误差</text><text transform="translate(14 ${h/2}) rotate(-90)" text-anchor="middle">当前 GRU 误差</text></svg>`;$(id).innerHTML=html;$(id).querySelectorAll('[data-ray]').forEach(p=>p.onclick=()=>selectRay(Number(p.dataset.ray)));
+}
+function cameraMap(r){
+ const w=290,h=210,l=30,t=12,pw=240,ph=165,X=x=>l+x/r.resolution[0]*pw,Y=y=>t+y/r.resolution[1]*ph;
+ let html=svgStart(w,h)+`<rect x="${l}" y="${t}" width="${pw}" height="${ph}" fill="#f4f6f9" stroke="#dce2e9"/>`;
+ for(const a of rows.filter(a=>a.camera===r.camera).sort((a,b)=>(a.ray===selected)-(b.ray===selected))){html+=`<circle data-ray="${a.ray}" cx="${X(a.pixel[0])}" cy="${Y(a.pixel[1])}" r="${a.ray===selected?5:3}" fill="${a.ray===selected?C.gru:'#8b9daf'}" style="cursor:pointer"><title>${a.ray}: ${a.pixel}</title></circle>`;}
+ html+=`<text x="${l}" y="${h-12}">x=0</text><text x="${l+pw}" y="${h-12}" text-anchor="end">${r.resolution[0]-1}</text><text x="${l-5}" y="${t+6}" text-anchor="end">0</text><text x="${l-5}" y="${t+ph}" text-anchor="end">${r.resolution[1]-1}</text></svg>`;
+ $('cameraTitle').textContent=r.camera;$('cameraMap').innerHTML=html;$('cameraMap').querySelectorAll('[data-ray]').forEach(p=>p.onclick=()=>selectRay(Number(p.dataset.ray)));
+}
+function wilson(p,n){const z=1.95996398454,d=1+z*z/n,c=(p+z*z/(2*n))/d,a=z*Math.sqrt(p*(1-p)/n+z*z/(4*n*n))/d;return [c-a,c+a];}
+function selectedCondition(){return curves[selected].conditions[Number($('condition').value)];}
+function drawRay(){
+ const r=rows[selected],c=curves[selected],x=c.q.map(q=>q*r.ell),range=focusRange&&focusRange.map(q=>q*r.ell),opts={xrange:range};
+ $('detailTitle').textContent=`光线 ${selected}`;$('ray').value=selected;
+ $('identity').innerHTML=`<p>${esc(r.id)}<br>相机 <strong>${esc(r.camera)}</strong> · 像素 [${r.pixel}] / ${r.resolution.join('×')} · ${r.group}<br>参考命中 ${r.hits.toLocaleString()} / ${r.samples.toLocaleString()} · 负侧入口 ${r.negative_starts} · 路段长度 ${fmt(r.horizon_q*r.ell,4)}</p>`;
+ $('numbers').innerHTML=`<div><span>最大 T 误差：local → GRU</span><b>${fmt(r.T_local,4)} → ${fmt(r.T_gru,4)}</b></div><div><span>梯度 PIT KS：local → GRU</span><b>${fmt(r.gradient_local?.pit_ks,4)} → ${fmt(r.gradient_gru?.pit_ks,4)}</b></div><div><span>逃逸概率：参考 / local / GRU</span><b>${fmt(r.reference_escape,3)} / ${fmt(r.local_escape,3)} / ${fmt(r.gru_escape,3)}</b></div>`;
+ lineChart('profile',[{name:'m/σ',x,y:c.b,color:C.reference}],{...opts,zero:true});
+ const band=c.reference_T.map(v=>wilson(v,r.samples));
+ lineChart('transmittance',['reference','local','gru'].map(k=>({name:k,x,y:c[k+'_T'],color:C[k]})),{...opts,yrange:[0,1],band:{x,lower:band.map(a=>a[0]),upper:band.map(a=>a[1])}});
+ lineChart('errorT',['local','gru'].map(k=>({name:k,x,y:c[k+'_T'].map((v,i)=>v-c.reference_T[i]),color:C[k]})),{...opts,zero:true});
+ const dx=c.delta_q.map(q=>q*r.ell),step=r.ell*R.model_config.step;
+ const stepped=k=>{let xx=[],yy=[];dx.forEach((v,i)=>{xx.push(v,Math.min(v+step,r.horizon_q*r.ell));yy.push(c[k][i],c[k][i]);});return {x:xx,y:yy};};
+ lineChart('residual',[{name:'k=+1',...stepped('delta_positive'),color:C.gru},{name:'k=−1',...stepped('delta_negative'),color:C.local,dash:true}],{...opts,zero:true});
+ const condition=selectedCondition();
+ if(!condition?.hits){$('conditionNote').textContent='该区间没有参考命中，无法评估条件梯度分布。';for(const id of ['gradient','pit']){$(id).innerHTML='<div class="empty">无条件梯度标签</div>';$(id+'Readout').textContent='';}}
+ else{
+  const cg=condition,g=c.speed_grid,pdf=$('distribution').value==='pdf';
+  $('conditionNote').textContent=`当前梯度区间：q ∈ [${fmt(cg.q_range[0],3)}, ${fmt(cg.q_range[1],3)}]；${cg.hits} 次参考命中，负侧占比 ${fmt(cg.negative_fraction*100,2)}%。在这些相同的位置／符号上平均条件预测；不代表一个精确点的真值。PIT KS：local ${fmt(cg.local_pit_ks,4)}，GRU ${fmt(cg.gru_pit_ks,4)}。`;
+  const series=['reference','local','gru'].map(k=>{const y=cg[k+'_cdf'];return pdf?{name:k,x:g.slice(1).map((v,i)=>(v+g[i])/2),y:y.slice(1).map((v,i)=>(v-y[i])/(g[i+1]-g[i])),color:C[k]}:{name:k,x:g,y,color:C[k]};});
+  $('gradientTitle').textContent=pdf?'固定参考碰撞位置的梯度分箱密度':'固定参考碰撞位置的梯度 CDF';
+  lineChart('gradient',series,{xlabel:'纵向速度 W',...(pdf?{}:{yrange:[0,1]})});
+  const u=c.pit_grid,e=1.36/Math.sqrt(cg.hits);
+  lineChart('pit',[{name:'均匀分布',x:u,y:u,color:C.muted,dash:true},...['local','gru'].map(k=>({name:k,x:u,y:cg[k+'_pit_cdf'],color:C[k]}))],{xlabel:'u = F预测(W参考)',yrange:[0,1],band:{x:u,lower:u.map(v=>Math.max(0,v-e)),upper:u.map(v=>Math.min(1,v+e))}});
+ }
+ cameraMap(r);scatter('scatterT',false);scatter('scatterG',true);drawTable();
+}
+function sortKey(r,kind){const gl=r.gradient_local?.pit_ks,gg=r.gradient_gru?.pit_ks;return ({T_regression:r.T_gru-r.T_local,T_improvement:r.T_local-r.T_gru,T_worst:r.T_gru,T_best:-r.T_gru,G_regression:gg==null?-Infinity:gg-gl,G_improvement:gg==null?-Infinity:gl-gg,G_worst:gg??-Infinity,G_best:gg==null?-Infinity:-gg,index:-r.ray})[kind];}
+function drawTable(){const kind=$('sort').value,cam=$('cameraFilter').value;const visible=rows.filter(r=>(!$('sampleFilter').checked||r.hits>=1024)&&(!cam||r.camera===cam)).sort((a,b)=>sortKey(b,kind)-sortKey(a,kind));$('rowCount').textContent=`${visible.length} / ${rows.length} 条`;$('tableBody').innerHTML=visible.map(r=>{const td=r.T_gru-r.T_local,gd=r.hits?r.gradient_gru.pit_ks-r.gradient_local.pit_ks:null;return `<tr data-ray="${r.ray}" class="${r.ray===selected?'selected':''}"><td>${r.ray}</td><td>${esc(r.camera)} / [${r.pixel}]</td><td>${r.hits}</td><td>${fmt(r.T_local)}</td><td>${fmt(r.T_gru)}</td><td class="${td<=0?'negative':'positive'}">${signed(td)}</td><td>${fmt(r.gradient_local?.pit_ks)}</td><td>${fmt(r.gradient_gru?.pit_ks)}</td><td class="${gd<=0?'negative':'positive'}">${gd==null?'—':signed(gd)}</td></tr>`;}).join('');$('tableBody').querySelectorAll('tr').forEach(tr=>tr.onclick=()=>selectRay(Number(tr.dataset.ray)));}
+function selectRay(i){if(!Number.isInteger(i)||i<0||i>=rows.length)return;selected=i;focusRange=null;history.replaceState(null,'','#ray='+i);drawRay();}
+$('stats').innerHTML=[['平均最大 T 误差',`${fmt(S.local.mean_ray_max_T_error,4)} → ${fmt(S.gru.mean_ray_max_T_error,4)}`,'解析 local → 当前 GRU'],['平均梯度 PIT KS',`${fmt(S.local.mean_ray_gradient_pit_ks_1024,4)} → ${fmt(S.gru.mean_ray_gradient_pit_ks_1024,4)}`,`${S.gradient_rays_with_1024_hits} 条命中充足的光线`],['透射率改善 / 退化',`${S.T_improved_count} / ${S.T_regressed_count}`,'微小差异不等于统计显著'],['参考实现',S.reference_trials.toLocaleString(),`${S.reference_hits.toLocaleString()} 次命中`]].map(a=>`<div class="card stat"><span>${a[0]}</span><strong>${a[1]}</strong><span>${a[2]}</span></div>`).join('');
+$('examples').innerHTML=[[77,'T 明显改善'],[62,'T 仍困难'],[245,'T 退化 / 梯度改善'],[129,'T 改善 / 梯度退化'],[261,'梯度仍困难'],[232,'梯度拟合较好']].map(([i,label])=>`<button class="chip" data-ray="${i}">${i} · ${label}</button>`).join('');$('examples').querySelectorAll('button').forEach(b=>b.onclick=()=>selectRay(Number(b.dataset.ray)));
+$('cameraFilter').innerHTML='<option value="">全部相机</option>'+[...new Set(rows.map(r=>r.camera))].sort().map(c=>`<option>${esc(c)}</option>`).join('');
+const dg=S.local.joint_distance_nll_per_trial-S.gru.joint_distance_nll_per_trial,gg=S.local.joint_gradient_nll_per_trial-S.gru.joint_gradient_nll_per_trial;
+$('decomposition').textContent=`与解析 local 相比，同一联合似然中，距离／入口符号／逃逸部分改善 ${fmt(dg,6)} nat/参考实现，命中后的条件梯度部分改善 ${fmt(gg,6)} nat/参考实现。两者都有贡献；这不是渲染像素误差的归因。`;
+$('ray').onchange=()=>selectRay(Number($('ray').value));$('previous').onclick=()=>selectRay(Math.max(0,selected-1));$('next').onclick=()=>selectRay(Math.min(rows.length-1,selected+1));
+for(const id of ['condition','distribution'])$(id).onchange=drawRay;for(const id of ['sort','cameraFilter','sampleFilter'])$(id).onchange=drawTable;
+$('focus').onclick=()=>{const c=selectedCondition();if(c?.hits){let lo=c.q_range[0],hi=c.q_range[1],pad=Math.max((hi-lo)*.15,rows[selected].horizon_q*.005);focusRange=[Math.max(0,lo-pad),Math.min(rows[selected].horizon_q,hi+pad)];drawRay();}};$('reset').onclick=()=>{focusRange=null;drawRay();};
+const hash=Number(new URLSearchParams(location.hash.slice(1)).get('ray'));selectRay(location.hash&&Number.isInteger(hash)?hash:245);document.body.dataset.ready='true';
+</script></body></html>

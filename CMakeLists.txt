@@ -25,6 +25,7 @@ add_library(macrofacet
     src/gpss/TungstenFunctionSpaceSampler.cpp
     src/learned/RenewalHazardModel.cpp
     src/learned/FirstHitSEModel.cpp
+    src/learned/CausalFirstHitModel.cpp
     src/learned/RenewalBatchSession.cpp
     src/transport/RenewalRayDistribution.cpp
     src/transport/RenewalMedium.cpp
@@ -74,6 +75,7 @@ if(MACROFACET_ENABLE_TORCH)
     find_package(Torch CONFIG REQUIRED)
     # Isolate LibTorch's headers and C++20 requirement from the C++17 renderer.
     add_library(macrofacet_torch STATIC src/learned/RenewalTorchBackend.cpp)
+    target_sources(macrofacet_torch PRIVATE src/learned/CausalFirstHitTorchBackend.cpp)
     target_compile_features(macrofacet_torch PRIVATE cxx_std_20)
     target_link_libraries(macrofacet_torch PRIVATE ${TORCH_LIBRARIES})
     if(TARGET torch_cuda)
@@ -185,6 +187,29 @@ if(MACROFACET_BUILD_FIELDS)
         # The production executable has no profiling scopes or CUDA barriers.
         find_package(CUDAToolkit QUIET)
         if(CUDAToolkit_FOUND)
+            set(CAUSAL_PROFILE_DIR "${CMAKE_CURRENT_BINARY_DIR}/causal_profile")
+            add_custom_command(
+                OUTPUT "${CAUSAL_PROFILE_DIR}/CausalFirstHitModelProfile.cpp"
+                       "${CAUSAL_PROFILE_DIR}/CausalFirstHitTorchProfile.cpp"
+                       "${CAUSAL_PROFILE_DIR}/CausalRenderProfile.cpp"
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/profiling/generate_causal_profile.py"
+                        "${CMAKE_CURRENT_SOURCE_DIR}" "${CAUSAL_PROFILE_DIR}"
+                DEPENDS tools/profiling/generate_causal_profile.py
+                        src/learned/CausalFirstHitModel.cpp src/learned/CausalFirstHitTorchBackend.cpp
+                        src/integrator/MacrofacetPathTracer.cpp
+                VERBATIM)
+            add_executable(macrofacet_profile_causal_first_hit EXCLUDE_FROM_ALL
+                tools/profiling/profile_causal_first_hit.cpp
+                "${CAUSAL_PROFILE_DIR}/CausalFirstHitModelProfile.cpp"
+                "${CAUSAL_PROFILE_DIR}/CausalFirstHitTorchProfile.cpp"
+                "${CAUSAL_PROFILE_DIR}/CausalRenderProfile.cpp")
+            target_include_directories(macrofacet_profile_causal_first_hit PRIVATE tools/profiling src/learned)
+            target_compile_features(macrofacet_profile_causal_first_hit PRIVATE cxx_std_20)
+            target_compile_definitions(macrofacet_profile_causal_first_hit PRIVATE MACROFACET_HAS_TORCH=1)
+            target_link_libraries(macrofacet_profile_causal_first_hit PRIVATE macrofacet_field ${TORCH_LIBRARIES} CUDA::cudart)
+            if(MSVC)
+                target_compile_options(macrofacet_profile_causal_first_hit PRIVATE /EHsc /utf-8 /bigobj)
+            endif()
             set(RENEWAL_PROFILE_DIR "${CMAKE_CURRENT_BINARY_DIR}/renewal_profile")
             add_custom_command(
                 OUTPUT "${RENEWAL_PROFILE_DIR}/RenewalWavefrontProfile.cpp"
@@ -230,6 +255,7 @@ set(MACROFACET_TEST_SOURCES
     tests/test_function_space.cpp
     tests/test_tungsten_function_space.cpp
     tests/test_first_hit_render.cpp
+    tests/test_causal_first_hit.cpp
     tests/test_transmittance_config.cpp
     tests/test_rendering_threads.cpp)
 set(MACROFACET_TEST_LIBRARIES macrofacet)
@@ -268,7 +294,7 @@ if(WIN32 AND MACROFACET_ENABLE_TORCH)
         DEPENDS ${MACROFACET_TORCH_DLLS}
         COMMENT "Deploying LibTorch runtime DLLs" VERBATIM)
     add_custom_target(macrofacet_torch_runtime DEPENDS "${MACROFACET_TORCH_RUNTIME_STAMP}")
-    foreach(executable macrofacet_experiments macrofacet_tests macrofacet_fieldgen macrofacet_renewal_benchmark macrofacet_verify_renewal_batch macrofacet_query_first_hit_se macrofacet_profile_renewal macrofacet_inspect_renewal_ray macrofacet_inspect_first_hit_se macrofacet_compare_first_hit_render macrofacet_inspect_collision_gradients)
+    foreach(executable macrofacet_experiments macrofacet_tests macrofacet_fieldgen macrofacet_renewal_benchmark macrofacet_verify_renewal_batch macrofacet_query_first_hit_se macrofacet_profile_renewal macrofacet_profile_causal_first_hit macrofacet_inspect_renewal_ray macrofacet_inspect_first_hit_se macrofacet_compare_first_hit_render macrofacet_inspect_collision_gradients)
         if(TARGET ${executable})
             add_dependencies(${executable} macrofacet_torch_runtime)
         endif()

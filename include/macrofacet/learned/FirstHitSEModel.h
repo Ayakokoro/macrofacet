@@ -4,6 +4,7 @@
 #include <memory>
 
 namespace mf {
+class CausalFirstHitModel;
 
 struct FirstHitSEPrediction {
     double q=0, logTransmittance=0, logDensity=0;
@@ -16,7 +17,7 @@ struct FirstHitSESample {
     int initialSign=1;
 };
 
-// Immutable scalar inference for RNO, GRU and fixed-profile spline models.
+// Immutable scalar inference for RNO, GRU, causal residual and spline models.
 // All integrate out the unobserved entry sign, with branch order {+1,-1}.
 class FirstHitSEModel {
 public:
@@ -27,6 +28,7 @@ public:
         double maximumStep=0, double normalizedTolerance=1e-7) const;
     const std::string& architecture() const;
     double maximumStep() const;
+    std::shared_ptr<const CausalFirstHitModel> causal() const;
 private:
     struct Impl;
     std::shared_ptr<const Impl> impl_;

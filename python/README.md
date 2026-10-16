@@ -2,6 +2,41 @@
 
 新增的无条件 SE 相机 first-hit 连续状态模型和保留 GRU 的对比流程见 [SE first hit](../docs/FIRST_HIT_SE.md)。它从介质入口计距，允许负侧出发的首次上穿，使用独立的数据、训练入口和导出格式。
 
+sigma=0.02 多视角整段 MLP 的 [残差正则与透射率监督实验](../docs/FIRST_HIT_RESIDUAL_SUPERVISION_SIGMA002.md)：
+
+```powershell
+python -B python/first_hit_se_cli.py residual-supervision --config python/configs/first_hit_se_residual_supervision_sigma002.json
+```
+
+该命令复用已有多视角数据和 residual 基线，按验证集选取正则与曲线监督权重，再执行配对种子复核及固定测试评估。可用 `--phase train`、`evaluate`、`report` 分阶段运行。控制器将权重写入每组训练配置的 `distance_objective.residual_l2_weight` 和 `distance_objective.transmittance_weight`；默认均为零，正的残差正则权重要求 residual 模型。新增项只参与训练，checkpoint 和推理接口沿用原格式。
+
+[轻量逐段残差 GRU 实验](../docs/FIRST_HIT_CAUSAL_RESIDUAL_SIGMA002.md)进一步比较历史状态、无历史及容量匹配对照，检查困难剖面、前缀一致性和推进步长敏感性：
+
+```powershell
+python -B python/first_hit_se_cli.py causal-residual --config python/configs/first_hit_se_causal_residual_sigma002.json
+python -B python/first_hit_se_cli.py causal-gradient --config python/configs/first_hit_se_causal_gradient_sigma002.json
+```
+
+默认运行主实验与容量对照的完整流程。新网络以固定 q 步长推进状态，使用独立 checkpoint 格式；原 MLP checkpoint 作为只读对照复用。
+
+[梯度头步长精度测试](../docs/FIRST_HIT_CAUSAL_GRADIENT_STEP_SIGMA002.md)冻结现有主干和梯度头，在同一批参考碰撞点上测试五种内部步长，并分别改变历史状态与步内位置以定位误差来源：
+
+```powershell
+python -B python/first_hit_se_cli.py causal-gradient-step --config python/configs/first_hit_se_causal_gradient_step_sigma002.json
+```
+
+可用 `--phase evaluate/report` 分阶段运行；不会重新训练模型。结果位于 `outputs/first_hit_causal_gradient_sigma002_20261016/step_accuracy/summary.html`。
+
+[残差 GRU 联合采样与渲染](../docs/FIRST_HIT_CAUSAL_RENDER_SIGMA002.md)提供独立部署导出、Python/C++/CUDA 对照和实际 sigma=0.02 首碰批量渲染；内部步长固定为训练值，后续碰撞使用现有条件模型。
+
+```powershell
+$env:PYTHONPATH = 'python'
+python -B -m first_hit_se.causal_sampling_check
+python -B -m first_hit_se.causal_render_check
+```
+
+运行前按上述说明导出配对的 `gru_nll` 主干与 `mixture_gru` 梯度头，并编译 C++ 查询和渲染程序。结果为 `outputs/first_hit_causal_render_sigma002_20261016/summary.html`；该实现不修改原训练协议。
+
 指定 σ=0.05 shader-ball 场景的 **Tungsten 线性采样、仅相机首次碰撞**流程：
 
 ```powershell

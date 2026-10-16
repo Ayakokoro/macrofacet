@@ -33,6 +33,8 @@ public:
     std::optional<FirstHitSEFlight> beginFlight(const Ray& cameraRay) const;
     FirstHitSESurfaceSample sample(const FirstHitSEFlight& flight, Random& eventRng,
         Random& gradientRng, double physicalTolerance = 1e-10) const;
+    FirstHitSESurfaceSample reconstruct(const FirstHitSEFlight& flight,
+        const FirstHitSESample& draw, Random& gradientRng) const;
 private:
     const GPSSField& field_;
     std::shared_ptr<const FirstHitSEModel> model_;

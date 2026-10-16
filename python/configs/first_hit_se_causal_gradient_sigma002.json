@@ -1,0 +1,34 @@
+{
+  "dataset": "outputs/first_hit_multiview_sigma002_20261015/dataset.pt",
+  "dataset_sha256": "2fead63699474ebcde1d47169e49954994bdab270c75788a31f403f3d1e844ef",
+  "backbone_directory": "outputs/first_hit_causal_residual_sigma002_20261015",
+  "baseline_directory": "outputs/first_hit_multiview_sigma002_20261015",
+  "output_directory": "outputs/first_hit_causal_gradient_sigma002_20261016",
+  "seeds": [20261015, 20261016, 20261017],
+  "device": "cuda",
+  "cpu_threads": 1,
+  "epochs": 150,
+  "profiles_per_batch": 24,
+  "samples_per_profile": 512,
+  "validation_every": 5,
+  "learning_rate": 0.001,
+  "minimum_learning_rate": 0.00002,
+  "weight_decay": 0.00001,
+  "gradient_clip": 1.0,
+  "head": {"hidden": 16, "width": 64, "size": 8},
+  "variants": [
+    {"name": "mixture_local", "kind": "mixture", "history": false},
+    {"name": "mixture_gru", "kind": "mixture", "history": true},
+    {"name": "cdf_gru", "kind": "cdf", "history": true}
+  ],
+  "selection": "minimum_validation_conditional_speed_nll",
+  "diagnostics": {
+    "seed": 20261015,
+    "fixed_rays": [266, 84, 175, 15],
+    "minimum_ray_hits": 64,
+    "prefix_fractions": [0.5, 0.75],
+    "cdf_tolerance": 0.00001,
+    "speed_grid_points": 257,
+    "conditional_samples_per_ray": 8192
+  }
+}

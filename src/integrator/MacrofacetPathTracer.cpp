@@ -1,5 +1,7 @@
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
 #include "macrofacet/integrator/RenewalWavefront.h"
+#include "macrofacet/integrator/RenewalCpuExecutor.h"
+#include "macrofacet/learned/CausalFirstHitModel.h"
 #include "macrofacet/macrofacet/ConductorPhase.h"
 #include "macrofacet/transport/FlightKernel.h"
 #include "macrofacet/transport/ConditionalFlightKernel.h"
@@ -227,7 +229,8 @@ public:
     }
 
     Spectrum trace(const Ray& input, Random& eventRng, Random& gradientRng, Random& continuationRng,
-        RenderStatistics& statistics, FirstHitRenderRecord* record = nullptr) const {
+        RenderStatistics& statistics, FirstHitRenderRecord* record = nullptr,
+        const FirstHitSESurfaceSample* preparedFirst = nullptr) const {
         const Ray ray{input.origin,normalizedOrThrow(input.direction)};
         std::optional<TungstenRandom> gpisRng;
         if (tungstenFirst_ || tungstenTail_) {
@@ -253,8 +256,11 @@ public:
             if (hit.hit) hit.normal=normalizedOrThrow(hit.gradient);
             if (sample.status==GpisFlightStatus::RejectedUpcrossing) ++statistics.firstHitUpcrossings;
         } else {
-            const auto flight=first_->beginFlight(ray);
-            if (flight) hit=first_->sample(*flight,eventRng,gradientRng,config_.numeric.distanceAbsoluteTolerance);
+            if (preparedFirst) hit=*preparedFirst;
+            else {
+                const auto flight=first_->beginFlight(ray);
+                if (flight) hit=first_->sample(*flight,eventRng,gradientRng,config_.numeric.distanceAbsoluteTolerance);
+            }
             hit.observationPosition=hit.position;
             if (hit.hit && hit.initialSign<0) ++statistics.firstHitUpcrossings;
             if (tungstenTail_ && hit.hit && hit.gradient.dot(ray.direction)>0) {
@@ -312,6 +318,81 @@ public:
             continuationRng,statistics);
     }
 };
+
+// First-zero GPU inference has its own state contract. Reuse the CPU executor
+// and the hybrid continuation, but keep its device states separate from the
+// surface-born renewal GRU. Batches bound memory independently of image size.
+RenderedImage renderCausalFirstHit(const ExperimentConfig& config,const HybridFirstHitTransport& hybrid,
+    std::atomic<std::uint64_t>* completed) {
+    RenderedImage result; result.width=config.render.width; result.height=config.render.height;
+    result.pixels.assign(static_cast<std::size_t>(result.width)*result.height,Spectrum::Zero());
+    const std::size_t spp=config.render.samplesPerPixel,totalSamples=result.pixels.size()*spp;
+    if (config.render.writeFirstHitSamples) {
+        if (totalSamples>1000000) throw std::invalid_argument("first-hit CSV diagnostics are limited to 1,000,000 camera samples");
+        result.firstHitRecords.resize(totalSamples);
+    }
+    const Vector3 forward=normalizedOrThrow(config.render.cameraTarget-config.render.cameraPosition);
+    Vector3 right,up; orthonormalComplement(forward,right,up);
+    const double aspect=static_cast<double>(result.width)/result.height,scale=std::tan(config.render.verticalFovDegrees*kPi/360.);
+    FirstHitSEMedium medium(config.field,config.firstHit.model,config.firstHit.profileMaximumStep,config.firstHit.reference);
+    CausalFirstHitSession session(*config.firstHit.model->causal(),config.firstHit.backend,config.render.threadCount);
+    RenewalCpuExecutor executor(config.render.threadCount,config.firstHit.batchSize);
+    for (std::size_t begin=0;begin<totalSamples;begin+=config.firstHit.batchSize) {
+        const std::size_t count=std::min<std::size_t>(config.firstHit.batchSize,totalSamples-begin);
+        std::vector<Ray> rays(count);
+        std::vector<std::optional<FirstHitSEFlight>> flights(count);
+        std::vector<CausalFirstHitUniforms> allUniforms(count);
+        executor.forRanges(count,[&](std::size_t a,std::size_t b) {
+            for (std::size_t i=a;i<b;++i) {
+                const auto pixel=(begin+i)/spp,sample=(begin+i)%spp;
+                const auto x=pixel%result.width,y=pixel/result.width;
+                Random camera(firstHitStreamSeed(config.seed,pixel,sample,0)),event(firstHitStreamSeed(config.seed,pixel,sample,1));
+                const double px=(2*((x+camera.openUniform01())/result.width)-1)*aspect*scale;
+                const double py=(1-2*((y+camera.openUniform01())/result.height))*scale;
+                rays[i]={config.render.cameraPosition,normalizedOrThrow(forward+px*right+py*up)};
+                flights[i]=medium.beginFlight(rays[i]); allUniforms[i]=causalFirstHitUniforms(event);
+            }
+        });
+        std::vector<const RayMeanProfile*> profiles; std::vector<CausalFirstHitUniforms> uniforms;
+        std::vector<std::size_t> slots;
+        double tolerance=std::numeric_limits<double>::infinity();
+        for (std::size_t i=0;i<count;++i) if (flights[i]) {
+            profiles.push_back(&flights[i]->mean); uniforms.push_back(allUniforms[i]); slots.push_back(i);
+            tolerance=std::min(tolerance,config.numeric.distanceAbsoluteTolerance/flights[i]->ell);
+        }
+        std::vector<FirstHitSESample> draws(count);
+        if (!profiles.empty()) {
+            const auto sampled=session.sample(profiles,uniforms,tolerance);
+            for (std::size_t i=0;i<slots.size();++i) draws[slots[i]]=sampled[i];
+        }
+        std::vector<Spectrum> radiance(count);
+        std::vector<RenderStatistics> statistics(count);
+        executor.forRanges(count,[&](std::size_t a,std::size_t b) {
+            for (std::size_t i=a;i<b;++i) {
+                const auto pixel=(begin+i)/spp,sample=(begin+i)%spp;
+                Random event(firstHitStreamSeed(config.seed,pixel,sample,1)),gradient(firstHitStreamSeed(config.seed,pixel,sample,2)),
+                    continuation(firstHitStreamSeed(config.seed,pixel,sample,3));
+                auto* record=result.firstHitRecords.empty() ? nullptr : &result.firstHitRecords[begin+i];
+                FirstHitSESurfaceSample first;
+                try {
+                    if (flights[i]) first=medium.reconstruct(*flights[i],draws[i],gradient);
+                    ++statistics[i].paths;
+                    radiance[i]=hybrid.trace(rays[i],event,gradient,continuation,statistics[i],record,&first);
+                } catch (const std::exception& error) {
+                    throw std::runtime_error("causal first-hit pixel="+std::to_string(pixel)+", sample="+
+                        std::to_string(sample)+": "+error.what());
+                }
+                if (record) record->radiance=radiance[i];
+            }
+        });
+        for (std::size_t i=0;i<count;++i) {
+            result.pixels[(begin+i)/spp]+=radiance[i]; mergeInto(result.statistics,statistics[i]);
+        }
+        if (completed) completed->fetch_add(count,std::memory_order_relaxed);
+    }
+    for (auto& pixel:result.pixels) pixel/=static_cast<double>(spp);
+    return result;
+}
 
 } // namespace
 
@@ -381,6 +462,8 @@ RenderedImage renderAnalyticScene(const ExperimentConfig& config,
     if (config.transportMode == "hybrid_first_hit") {
         prepareRenewalModel(prepared); prepareFirstHitModel(prepared);
         hybrid = std::make_unique<HybridFirstHitTransport>(prepared);
+        if (prepared.firstHit.backend!="scalar")
+            return renderCausalFirstHit(prepared,*hybrid,completedCameraRays);
     } else if (config.transportMode == "neural_renewal") {
         prepareRenewalModel(prepared);
         if (prepared.renewal.resolvedBackend != "scalar")

@@ -1,4 +1,5 @@
 #include "macrofacet/learned/FirstHitSEModel.h"
+#include "macrofacet/learned/CausalFirstHitModel.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <iostream>
@@ -37,6 +38,19 @@ int main(int argc,char** argv) {
         const int trials=argc==5 ? std::stoi(argv[4]) : 0;
         if (trials<0) throw std::invalid_argument("negative trial count");
         Random rng(request.value("seed",std::uint64_t(20261013)));
+        if (request.contains("uniforms")) {
+            if (!model.causal()) throw std::invalid_argument("explicit batched uniforms require a causal model");
+            const auto uniforms=request.at("uniforms").get<std::vector<CausalFirstHitUniforms>>();
+            CausalFirstHitSession session(*model.causal(),request.value("backend","scalar"));
+            const std::size_t batch=request.value("batch_size",std::size_t(1024));
+            if (batch<1 || batch>65536) throw std::invalid_argument("invalid query batch size");
+            for (std::size_t i=0;i<uniforms.size();i+=batch) {
+                const auto end=std::min(i+batch,uniforms.size());
+                const auto sampled=session.sample(std::vector<const RayMeanProfile*>(end-i,&profile),
+                    std::vector<CausalFirstHitUniforms>(uniforms.begin()+i,uniforms.begin()+end),request.value("tolerance",1e-9));
+                for (const auto& s:sampled) result["samples"].push_back({{"hit",s.hit},{"q",s.q},{"initial_sign",s.initialSign},{"speed",s.speed}});
+            }
+        }
         for (int i=0;i<trials;++i) {
             const auto s=model.sample(profile,rng,request.value("maximum_step",0.));
             result["samples"].push_back({{"hit",s.hit},{"q",s.q},{"initial_sign",s.initialSign},{"speed",s.speed}});

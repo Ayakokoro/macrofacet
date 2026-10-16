@@ -104,7 +104,13 @@ choice renders three comparable modes. The CLI also accepts `--mode`.
 `transport.first_hit.method` accepts `gpis_function_space`, `neural_first_hit_se`,
 or `gpis_function_space_tungsten`;
 `transport.continuation.method` accepts `classic_local`, `neural_renewal`,
-`global_conditional`, or `gpis_function_space_tungsten`. Both stages require `backend="scalar"`. Conditional
+`global_conditional`, or `gpis_function_space_tungsten`. Continuation requires `backend="scalar"`.
+First hit additionally accepts `torch_cpu` and `torch_cuda` for a
+`macrofacet.causal_first_hit` residual GRU bundle, using `batch_size` in [1,65536]
+(default 1024). Other first-hit models and reference samplers require `scalar`.
+The causal model's recurrent step is fixed by its checkpoint; `profile_maximum_step`
+does not change that grid. See [causal first-hit rendering](FIRST_HIT_CAUSAL_RENDER_SIGMA002.md).
+Conditional
 continuation needs no neural checkpoint and starts at the first collision with
 `F=0` and its full gradient, transforming both mean and gradient by `initialSign`.
 It retains only the latest collision observation, not the full camera GP history.

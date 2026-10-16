@@ -1,0 +1,62 @@
+{
+  "dataset": "outputs/first_hit_multiview_sigma002_20261015/dataset.pt",
+  "dataset_sha256": "2fead63699474ebcde1d47169e49954994bdab270c75788a31f403f3d1e844ef",
+  "baseline_directory": "outputs/first_hit_multiview_sigma002_20261015",
+  "supervision_directory": "outputs/first_hit_residual_supervision_sigma002_20261015",
+  "output_directory": "outputs/first_hit_causal_residual_sigma002_20261015/capacity_control",
+  "device": "cuda",
+  "cpu_threads": 1,
+  "seeds": [
+    20261015,
+    20261016,
+    20261017
+  ],
+  "epochs": 500,
+  "profiles_per_batch": 24,
+  "samples_per_profile_per_epoch": 512,
+  "learning_rate": 0.001,
+  "minimum_learning_rate": 2e-05,
+  "weight_decay": 1e-05,
+  "gradient_clip": 1.0,
+  "validation_every": 5,
+  "curve_points": 513,
+  "model": {
+    "hidden": 16,
+    "embedding": 16,
+    "width": 128,
+    "step": 0.125,
+    "integration_step": 0.015625,
+    "quadrature_order": 8
+  },
+  "variants": [
+    {
+      "name": "local_matched_T",
+      "history": false,
+      "residual_l2_weight": 0.01,
+      "transmittance_weight": 100.0
+    }
+  ],
+  "selection": "minimum_validation_marginal_distance_nll",
+  "diagnostics": {
+    "seed": 20261015,
+    "prefix_fractions": [
+      0.5,
+      0.75
+    ],
+    "future_fraction": 0.5,
+    "subdivisions": 4,
+    "steps": [
+      0.0625,
+      0.125,
+      0.25
+    ],
+    "fixed_failure_rays": [
+      266,
+      84,
+      175,
+      15
+    ],
+    "causal_tolerance": 1e-05,
+    "quadrature_tolerance": 1e-05
+  }
+}

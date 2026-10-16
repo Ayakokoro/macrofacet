@@ -1,5 +1,6 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/learned/RenewalBatchSession.h"
+#include "macrofacet/learned/CausalFirstHitModel.h"
 #include "macrofacet/fields/MeanFactory.h"
 #include "macrofacet/gpss/ShaderBallMean.h"
 #include "macrofacet/transport/RenewalMedium.h"
@@ -204,8 +205,8 @@ void prepareFirstHitModel(ExperimentConfig& config) {
     }
     if (config.firstHit.method != "neural_first_hit_se" && config.firstHit.method != "gpis_function_space")
         throw std::invalid_argument("unknown transport.first_hit.method");
-    if (config.firstHit.profileMode != "cubic" || config.firstHit.backend != "scalar")
-        throw std::invalid_argument("first-hit rendering requires cubic profiles and backend=scalar");
+    if (config.firstHit.profileMode != "cubic")
+        throw std::invalid_argument("first-hit rendering requires cubic profiles");
     if (config.material.ndfFamily != NdfFamily::GeneralizedGaussian || config.material.alphaField)
         throw std::invalid_argument("first-hit rendering requires generalized_gaussian without alpha grid");
     if (config.firstHit.method == "neural_first_hit_se" && !config.firstHit.model) {
@@ -213,6 +214,13 @@ void prepareFirstHitModel(ExperimentConfig& config) {
         config.firstHit.model = std::make_shared<const FirstHitSEModel>(FirstHitSEModel::load(config.firstHit.modelPath));
     }
     if (config.firstHit.method == "gpis_function_space") config.firstHit.model.reset();
+    if (config.firstHit.batchSize<1 || config.firstHit.batchSize>65536)
+        throw std::invalid_argument("first-hit batch_size must be in [1,65536]");
+    if (config.firstHit.backend!="scalar") {
+        if (!config.firstHit.model || !config.firstHit.model->causal())
+            throw std::invalid_argument("batched first-hit rendering requires a causal residual GRU model");
+        CausalFirstHitSession::validateBackend(config.firstHit.backend);
+    }
     (void)FirstHitSEMedium(config.field,config.firstHit.model,
         config.firstHit.profileMaximumStep,config.firstHit.reference);
 }
@@ -397,10 +405,16 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         config.firstHit.profileMode = first.value("profile_mode", tungstenFirst ? "tungsten_direct" : "cubic");
         config.firstHit.profileMaximumStep = first.value("profile_maximum_step", 0.25);
         config.firstHit.backend = first.value("backend", "scalar");
+        config.firstHit.batchSize = first.value("batch_size",1024);
         if (config.firstHit.method != "neural_first_hit_se" && config.firstHit.method != "gpis_function_space" && !tungstenFirst)
             throw std::invalid_argument("unknown transport.first_hit.method");
-        if (config.firstHit.profileMode != (tungstenFirst ? "tungsten_direct" : "cubic") || config.firstHit.backend != "scalar")
-            throw std::invalid_argument("first-hit profile_mode must match its sampler and backend must be scalar");
+        if (config.firstHit.profileMode != (tungstenFirst ? "tungsten_direct" : "cubic"))
+            throw std::invalid_argument("first-hit profile_mode must match its sampler");
+        if (config.firstHit.backend!="scalar" && (config.firstHit.method!="neural_first_hit_se" ||
+            (config.firstHit.backend!="torch_cpu" && config.firstHit.backend!="torch_cuda")))
+            throw std::invalid_argument("unsupported first-hit backend");
+        if (config.firstHit.batchSize<1 || config.firstHit.batchSize>65536)
+            throw std::invalid_argument("first-hit batch_size must be in [1,65536]");
         requirePositiveFinite(config.firstHit.profileMaximumStep,"transport.first_hit.profile_maximum_step");
         if (tungstenFirst) {
             if (first.contains("model") || first.contains("profile_maximum_step"))
@@ -739,13 +753,17 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         result["transport"]["first_hit"] = {
             {"method",config.firstHit.method},{"model",config.firstHit.modelPath.string()},
             {"profile_mode",config.firstHit.profileMode},{"profile_maximum_step",config.firstHit.profileMaximumStep},
-            {"backend",config.firstHit.backend},{"distance_convention","distance from activeDomain entry"},
+            {"backend",config.firstHit.backend},{"batch_size",config.firstHit.batchSize},
+            {"distance_convention","distance from activeDomain entry"},
             {"event","unconditioned_first_zero"},{"gradient","signed secant plus conditional SE transverse Gaussian"},
             {"sampler",{{"history_points",r.historyPoints},{"batch_size",r.batchSize},{"step_size",r.step},
                 {"rank_tolerance",r.rankTolerance},{"crossing_rule",r.crossingRule}}}};
         if (config.firstHit.model) {
             result["transport"]["first_hit"]["architecture"] = config.firstHit.model->architecture();
-            if (config.firstHit.model->architecture() == "spline")
+            if (config.firstHit.model->causal()) {
+                result["transport"]["first_hit"]["recurrent_step_q"] = config.firstHit.model->maximumStep();
+                result["transport"]["first_hit"]["distance_sampler"] = "local_hazard_quadrature_inverse_fixed_gru_grid";
+            } else if (config.firstHit.model->architecture() == "spline")
                 result["transport"]["first_hit"]["distance_sampler"] = "analytic_rational_quadratic_inverse";
             else result["transport"]["first_hit"]["integration_maximum_step"] = config.firstHit.model->maximumStep();
         }

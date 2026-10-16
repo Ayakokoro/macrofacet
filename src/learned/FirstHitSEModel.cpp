@@ -1,4 +1,5 @@
 #include "macrofacet/learned/FirstHitSEModel.h"
+#include "macrofacet/learned/CausalFirstHitModel.h"
 #include "macrofacet/transport/RenewalRayDistribution.h"
 #include "macrofacet/mathutility/Gaussian1D.h"
 #include <nlohmann/json.hpp>
@@ -117,6 +118,7 @@ SplineValue rationalQuadratic(const SplineState& s,double value,bool inverse=fal
 }
 
 struct FirstHitSEModel::Impl {
+    std::shared_ptr<const CausalFirstHitModel> causal;
     std::string architecture;
     int hidden=0,components=0;
     double step=0,floor=0;
@@ -234,6 +236,12 @@ FirstHitSEModel FirstHitSEModel::load(const std::filesystem::path& path) {
     std::ifstream stream(path);
     if (!stream) throw std::runtime_error("cannot open first-hit model "+path.string());
     Json root; stream >> root;
+    if (root.at("format")=="macrofacet.causal_first_hit") {
+        auto impl=std::make_shared<Impl>();
+        impl->causal=std::make_shared<CausalFirstHitModel>(CausalFirstHitModel::load(path));
+        impl->architecture="causal_residual_gru"; impl->step=impl->causal->step();
+        return FirstHitSEModel(std::move(impl));
+    }
     if (root.at("format")!="macrofacet.first_hit_se" || root.at("version")!=1 ||
         root.at("event")!="unconditioned_first_zero" || root.at("profile_mode")!="cubic" ||
         root.at("kernel")!=Json{{"type","squared_exponential"},{"parameterization","unit_length"},{"beta",1.0}} ||
@@ -292,9 +300,15 @@ FirstHitSEModel FirstHitSEModel::load(const std::filesystem::path& path) {
 
 const std::string& FirstHitSEModel::architecture() const { return impl_->architecture; }
 double FirstHitSEModel::maximumStep() const { return impl_->step; }
+std::shared_ptr<const CausalFirstHitModel> FirstHitSEModel::causal() const { return impl_->causal; }
 
 std::vector<FirstHitSEPrediction> FirstHitSEModel::query(const RayMeanProfile& profile,
     const std::vector<double>& queries,double maximumStep) const {
+    if (impl_->causal) {
+        if (maximumStep!=0 && maximumStep!=impl_->step)
+            throw std::invalid_argument("causal GRU recurrent step is fixed by training");
+        return impl_->causal->query(profile,queries);
+    }
     validate(profile);
     const double step=maximumStep==0 ? impl_->step : maximumStep;
     if (!(step>0) || !std::isfinite(step)) throw std::invalid_argument("invalid first-hit query step");
@@ -370,6 +384,11 @@ std::vector<FirstHitSEPrediction> FirstHitSEModel::query(const RayMeanProfile& p
 
 FirstHitSESample FirstHitSEModel::sample(const RayMeanProfile& profile,Random& rng,
     double maximumStep,double tolerance) const {
+    if (impl_->causal) {
+        if (maximumStep!=0 && maximumStep!=impl_->step)
+            throw std::invalid_argument("causal GRU recurrent step is fixed by training");
+        return impl_->causal->sample(profile,causalFirstHitUniforms(rng),tolerance);
+    }
     validate(profile);
     const double step=maximumStep==0 ? impl_->step : maximumStep;
     if (!(step>0 && tolerance>0) || !std::isfinite(step) || !std::isfinite(tolerance))

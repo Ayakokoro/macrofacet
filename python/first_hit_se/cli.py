@@ -10,7 +10,7 @@ from .audit import audit
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Unconditioned stationary-SE first-zero RNO / GRU comparison")
+    parser = argparse.ArgumentParser(description="Stationary-SE first-hit data, neural models, and controlled comparisons")
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("collect", "train", "spline-train"):
         sub = commands.add_parser(name)
@@ -76,6 +76,31 @@ def main():
     sub = commands.add_parser('hazard-study')
     sub.add_argument('--config', type=Path, required=True)
     sub.add_argument('--phase', choices=('all', 'train', 'evaluate', 'benchmark', 'report'), default='all')
+    sub = commands.add_parser('distance-study')
+    sub.add_argument('--config', type=Path, required=True)
+    sub.add_argument('--phase', choices=('all', 'collect', 'audit', 'train', 'evaluate', 'probe',
+                                        'benchmark', 'report'), default='all')
+    sub = commands.add_parser('camera-holdout')
+    sub.add_argument('--config', type=Path, required=True)
+    sub.add_argument('--phase', choices=('all', 'select', 'collect', 'evaluate', 'report'), default='all')
+    sub = commands.add_parser('multiview-data')
+    sub.add_argument('--config', type=Path, required=True)
+    sub.add_argument('--phase', choices=('all', 'select', 'collect'), default='all')
+    sub = commands.add_parser('multiview-study')
+    sub.add_argument('--config', type=Path, required=True)
+    sub.add_argument('--phase', choices=('all', 'distance', 'evaluate', 'gradient', 'sampling', 'report'), default='all')
+    sub = commands.add_parser('residual-supervision')
+    sub.add_argument('--config', type=Path, required=True)
+    sub.add_argument('--phase', choices=('all', 'train', 'evaluate', 'report'), default='all')
+    sub = commands.add_parser('causal-residual')
+    sub.add_argument('--config', type=Path, required=True)
+    sub.add_argument('--phase', choices=('all', 'train', 'evaluate', 'diagnose', 'report'), default='all')
+    sub = commands.add_parser('causal-gradient')
+    sub.add_argument('--config', type=Path, required=True)
+    sub.add_argument('--phase', choices=('all', 'train', 'evaluate', 'diagnose', 'report'), default='all')
+    sub = commands.add_parser('causal-gradient-step')
+    sub.add_argument('--config', type=Path, required=True)
+    sub.add_argument('--phase', choices=('all', 'evaluate', 'report'), default='all')
     args = parser.parse_args()
     if args.command == "collect": result = collect(args.config)
     elif args.command == "prepare": result = prepare(args.manifest, args.output)
@@ -131,6 +156,34 @@ def main():
         result = run(args.phase)
     elif args.command == 'hazard-study':
         from .hazard_study import run
+        result = run(args.config, args.phase)
+    elif args.command == 'distance-study':
+        from .distance_study import run
+        result = run(args.config, args.phase)
+    elif args.command == 'camera-holdout':
+        from .camera_holdout import run
+        result = run(args.config, args.phase)
+    elif args.command == 'multiview-data':
+        from .multiview_data import run
+        result = run(args.config, args.phase)
+    elif args.command == 'multiview-study':
+        from .multiview_study import run
+        result = run(args.config, args.phase)
+    elif args.command == 'residual-supervision':
+        from .residual_supervision import run
+        result = run(args.config, args.phase)
+    elif args.command == 'causal-residual':
+        if args.phase == 'all':
+            from .causal_workflow import run_all
+            result = run_all(args.config)
+        else:
+            from .causal_study import run
+            result = run(args.config, args.phase)
+    elif args.command == 'causal-gradient':
+        from .causal_gradient_study import run
+        result = run(args.config, args.phase)
+    elif args.command == 'causal-gradient-step':
+        from .causal_gradient_step import run
         result = run(args.config, args.phase)
     else: result = compare(args.checkpoint, args.dataset, args.output, args.split, args.device, args.points, args.subdivisions, args.limit)
     print(json.dumps(result, indent=2, allow_nan=False))

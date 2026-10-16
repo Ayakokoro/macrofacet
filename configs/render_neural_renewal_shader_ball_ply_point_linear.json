@@ -51,7 +51,7 @@
   "render": {
     "width": 512,
     "height": 512,
-    "samples_per_pixel": 128,
+    "samples_per_pixel": 256,
     "camera_position": [
       2.27,
       -1.09,

@@ -1,0 +1,37 @@
+{
+  "original_study": "python/configs/first_hit_se_distance_design_sigma002.json",
+  "fixed_dataset": "outputs/first_hit_camera_holdout_sigma002_20261015/combined_dataset.pt",
+  "fixed_holdout_directory": "outputs/first_hit_camera_holdout_sigma002_20261015",
+  "output_directory": "outputs/first_hit_multiview_sigma002_20261015",
+  "seed": 20261215,
+  "device": "cuda",
+  "seeds": [20261015, 20261016, 20261017],
+  "epochs": 500,
+  "gradient_epochs": 150,
+  "gradient_samples_per_profile": 512,
+  "gradient_bins": 8,
+  "gradient_components": 8,
+  "gradient_width": 64,
+  "selection": {
+    "candidate_grid": 12,
+    "coverage_grid": 6,
+    "diverse_per_camera": 28,
+    "descriptor_points": 129,
+    "descriptor_weights": [1.0, 0.5, 1.0],
+    "realizations_per_profile": 2048,
+    "collection_workers": 8,
+    "threads": 1,
+    "cameras": [
+      {"id": "train_030", "azimuth_offset_degrees": 30.0, "split": "train"},
+      {"id": "train_090", "azimuth_offset_degrees": 90.0, "split": "train"},
+      {"id": "train_150", "azimuth_offset_degrees": 150.0, "split": "train"},
+      {"id": "train_210", "azimuth_offset_degrees": 210.0, "split": "train"},
+      {"id": "train_270", "azimuth_offset_degrees": 270.0, "split": "train"},
+      {"id": "train_330", "azimuth_offset_degrees": 330.0, "split": "train"},
+      {"id": "train_low", "azimuth_offset_degrees": 45.0, "elevation_degrees": 10.0, "split": "train"},
+      {"id": "train_high", "azimuth_offset_degrees": 225.0, "elevation_degrees": 50.0, "split": "train"},
+      {"id": "validation_a", "azimuth_offset_degrees": 75.0, "elevation_degrees": 35.0, "split": "validation"},
+      {"id": "validation_b", "azimuth_offset_degrees": 255.0, "elevation_degrees": 10.0, "split": "validation"}
+    ]
+  }
+}

@@ -23,6 +23,7 @@ struct FirstHitRenderConfig {
     std::filesystem::path modelPath;
     std::string profileMode = "cubic", backend = "scalar";
     double profileMaximumStep = 0.25;
+    int batchSize = 1024; // causal first-hit inference only; bounded camera batches
     FunctionSpaceSamplerConfig reference;
     TungstenFunctionSpaceConfig tungsten;
     std::shared_ptr<const FirstHitSEModel> model;

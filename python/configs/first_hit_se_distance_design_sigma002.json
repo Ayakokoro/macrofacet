@@ -1,0 +1,61 @@
+{
+  "collection_config": "python/configs/first_hit_se_distance_design_sigma002_dataset.json",
+  "dataset": "outputs/first_hit_distance_design_sigma002_20261015/data/dataset.pt",
+  "output_directory": "outputs/first_hit_distance_design_sigma002_20261015",
+  "render_config": "configs/render_neural_renewal_shader_ball_ply_point_linear_se_h16.json",
+  "seeds": [
+    20261015,
+    20261016,
+    20261017
+  ],
+  "device": "cuda",
+  "cpu_threads": 1,
+  "profiles_per_batch": 24,
+  "samples_per_profile_per_epoch": 512,
+  "epochs": 500,
+  "validation_every": 5,
+  "learning_rate": 0.001,
+  "minimum_learning_rate": 2e-05,
+  "weight_decay": 1e-05,
+  "gradient_clip": 1.0,
+  "curve_points": 513,
+  "max_baseline_T_discretization_error": 0.002,
+  "benchmark_repeats": 7,
+  "benchmark_inner_repeats": 3,
+  "model": {
+    "profile_points": 256,
+    "bins": 1024,
+    "controls": 64,
+    "hidden": 32,
+    "width": 64,
+    "quadrature_order": 8
+  },
+  "spline_bins": 64,
+  "reference_audit": {
+    "rays": 3,
+    "trajectories": 8192,
+    "fine_step": 0.0078125,
+    "history_points": 8
+  },
+  "gradient_probe": {
+    "epochs": 150,
+    "samples_per_profile": 1024,
+    "components": 8,
+    "width": 64,
+    "learning_rate": 0.001,
+    "validation_every": 5,
+    "minimum_learning_rate": 2e-05,
+    "regimes": [
+      "frozen",
+      "finetune"
+    ]
+  },
+  "consistency": {
+    "subdivisions": 4,
+    "prefix_fractions": [
+      0.5,
+      0.75
+    ],
+    "suffix_test_fraction": 0.5
+  }
+}

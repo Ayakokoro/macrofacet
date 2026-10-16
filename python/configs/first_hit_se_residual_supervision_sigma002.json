@@ -1,0 +1,17 @@
+{
+  "base_directory": "outputs/first_hit_multiview_sigma002_20261015",
+  "output_directory": "outputs/first_hit_residual_supervision_sigma002_20261015",
+  "dataset_sha256": "2fead63699474ebcde1d47169e49954994bdab270c75788a31f403f3d1e844ef",
+  "device": "cuda",
+  "seeds": [20261015, 20261016, 20261017],
+  "epochs": 500,
+  "residual_l2_candidates": [0.001, 0.01, 0.1],
+  "transmittance_candidates": [10.0, 100.0],
+  "selection": {
+    "pilot_seed": 20261015,
+    "tail_fraction": 0.1,
+    "maximum_validation_nll_increase": 0.005,
+    "checkpoint_rule": "minimum_validation_distance_nll",
+    "weight_rule": "minimum_validation_worst_decile_mean_subject_to_nll_guard"
+  }
+}

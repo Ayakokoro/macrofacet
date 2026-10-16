@@ -1,0 +1,24 @@
+{
+  "base_study": "python/configs/first_hit_se_distance_design_sigma002.json",
+  "output_directory": "outputs/first_hit_camera_holdout_sigma002_20261015",
+  "seed": 20261115,
+  "candidate_grid": 16,
+  "coverage_grid": 4,
+  "diverse_per_camera": 16,
+  "descriptor_points": 129,
+  "descriptor_weights": [1.0, 0.5, 1.0],
+  "realizations_per_profile": 8192,
+  "collection_workers": 4,
+  "threads": 2,
+  "device": "cuda",
+  "cameras": [
+    {"id": "original", "azimuth_offset_degrees": 0.0},
+    {"id": "azimuth_060", "azimuth_offset_degrees": 60.0},
+    {"id": "azimuth_120", "azimuth_offset_degrees": 120.0},
+    {"id": "azimuth_180", "azimuth_offset_degrees": 180.0},
+    {"id": "azimuth_240", "azimuth_offset_degrees": 240.0},
+    {"id": "azimuth_300", "azimuth_offset_degrees": 300.0},
+    {"id": "elevation_05", "azimuth_offset_degrees": 0.0, "elevation_degrees": 5.0},
+    {"id": "elevation_60", "azimuth_offset_degrees": 0.0, "elevation_degrees": 60.0}
+  ]
+}

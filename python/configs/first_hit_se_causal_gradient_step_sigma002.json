@@ -1,0 +1,15 @@
+{
+  "gradient_config": "python/configs/first_hit_se_causal_gradient_sigma002.json",
+  "output_directory": "outputs/first_hit_causal_gradient_sigma002_20261016/step_accuracy",
+  "training_step": 0.125,
+  "steps": [0.0625, 0.09375, 0.125, 0.1875, 0.25],
+  "minimum_ray_hits": 64,
+  "baseline_tolerance": 0.00000001,
+  "ablation_seed": 20261015,
+  "ablation_steps": [0.0625, 0.25],
+  "example_seed": 20261015,
+  "example_steps": [0.0625, 0.125, 0.25],
+  "example_rays": [266, 84, 175, 15, 261, 180],
+  "example_methods": ["mixture_gru", "cdf_gru"],
+  "speed_grid_points": 129
+}

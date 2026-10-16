@@ -80,7 +80,8 @@ void writeFirstHitDiagnostics(const mf::ExperimentConfig& config, const mf::Rend
     double seconds) {
     const auto& s = image.statistics;
     nlohmann::json summary{{"first_hit_method",config.firstHit.method},
-        {"continuation_method",config.continuationMethod},{"backend","scalar"},
+        {"continuation_method",config.continuationMethod},{"backend",config.firstHit.backend},
+        {"first_hit_batch_size",config.firstHit.batchSize},{"continuation_backend","scalar"},
         {"seconds",seconds},{"paths",s.paths},{"first_hit_flights",s.firstHitFlights},
         {"first_hits",s.firstHits},{"first_hit_escapes",s.firstHitEscapes},
         {"domain_misses",s.firstHitDomainMisses},{"upcrossings",s.firstHitUpcrossings},

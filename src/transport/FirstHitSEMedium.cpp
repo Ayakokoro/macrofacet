@@ -112,6 +112,14 @@ FirstHitSESurfaceSample FirstHitSEMedium::sample(const FirstHitSEFlight& flight,
             FunctionSpaceStart::Unconditioned,0,eventRng);
         draw = {reference.hit,reference.distance,reference.speed,reference.initialSign};
     }
+    return reconstruct(flight,draw,gradientRng);
+}
+
+FirstHitSESurfaceSample FirstHitSEMedium::reconstruct(const FirstHitSEFlight& flight,
+    const FirstHitSESample& draw, Random& gradientRng) const {
+    if (!(draw.q>=0 && draw.q<=flight.mean.maximumX()) || (draw.initialSign!=1 && draw.initialSign!=-1) ||
+        (draw.hit && (!(draw.speed>0) || !std::isfinite(draw.speed))))
+        throw std::invalid_argument("invalid first-hit reconstruction sample");
     FirstHitSESurfaceSample result;
     result.enteredDomain = true; result.hit = draw.hit; result.initialSign = draw.initialSign;
     result.entryDistance = flight.entryDistance; result.entry = flight.ray.origin;
