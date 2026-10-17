@@ -39,6 +39,9 @@ public:
     ConditionalFlightKernel(const GPSSField& field, const FlightState& state);
     HazardEvaluation evaluate(double age) const override;
     HitStatistics hitStatistics(double age) const override;
+    // Joint endpoint sample conditioned on birth and F(age)>0. Used by the
+    // global conditional renewal+ approximation; this is not a survival-conditioned GP.
+    FlightState samplePositiveEndpoint(double age, Random& rng) const;
     ConditionalScalarStatistics scalarStatistics(double age) const;
     ConditionalBirthMajorant birthMajorant(double end) const;
     double birthAdjacentMajorant(double begin, double end,
@@ -46,6 +49,7 @@ public:
     ConditionalMajorants twoSegmentMajorants(double end) const;
     double intervalMajorant(double begin, double end) const;
 private:
+    Gaussian<3> gradientGivenValueDeviation(double age, double deviation) const;
     MeanJet birthMean_;
     Vector3 deltaGradient_, precisionDirection_;
     double deltaValue_, deltaSlope_, inverseLength2_, sigma2_;

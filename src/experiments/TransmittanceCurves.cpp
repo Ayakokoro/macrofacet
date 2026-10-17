@@ -2,6 +2,7 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
 #include "macrofacet/mathutility/Gaussian1D.h"
 #include "macrofacet/transport/ConditionalMedium.h"
+#include "macrofacet/transport/GlobalConditionalRenewalPlusMedium.h"
 #include "macrofacet/transport/NarrowBandMedium.h"
 #include <algorithm>
 #include <array>
@@ -357,6 +358,8 @@ void runTransmittanceCurves(const ExperimentConfig& config, int legacyRayCount,
     requireNanoVdbField(config);
     std::filesystem::create_directories(config.outputDirectory);
     if (!config.transmittance) {
+        if (config.transportMode == "global_conditional_renewal_plus")
+            throw std::invalid_argument("global_conditional_renewal_plus curves require an explicit transmittance block with modes and rays");
         runLegacyCurves(config, legacyRayCount, binsOverride);
         return;
     }
@@ -369,12 +372,14 @@ void runTransmittanceCurves(const ExperimentConfig& config, int legacyRayCount,
         "classic_global") != settings.modes.end();
     const bool needsConditional = std::find(settings.modes.begin(), settings.modes.end(),
         "global_conditional") != settings.modes.end();
+    const bool needsConditionalRenewal = std::find(settings.modes.begin(), settings.modes.end(),
+        "global_conditional_renewal_plus") != settings.modes.end();
 
     MaterialConfig localMaterial = config.material;
     localMaterial.gpModel = GpModel::LocalTangent;
     MaterialConfig globalMaterial = config.material;
     globalMaterial.gpModel = GpModel::GlobalPointwise;
-    if (needsConditional && (globalMaterial.ndfFamily != NdfFamily::GeneralizedGaussian ||
+    if ((needsConditional || needsConditionalRenewal) && (globalMaterial.ndfFamily != NdfFamily::GeneralizedGaussian ||
                              globalMaterial.alphaField)) {
         throw std::invalid_argument(
             "global_conditional transmittance requires generalized_gaussian and "
@@ -383,6 +388,10 @@ void runTransmittanceCurves(const ExperimentConfig& config, int legacyRayCount,
 
     std::unique_ptr<NarrowBandMedium> localMedium;
     std::unique_ptr<NarrowBandMedium> globalMedium;
+    std::unique_ptr<GlobalConditionalRenewalPlusMedium> conditionalRenewalMedium;
+    if (needsConditionalRenewal)
+        conditionalRenewalMedium = std::make_unique<GlobalConditionalRenewalPlusMedium>(
+            config.field,config.conditionalRenewalDistance);
     if (needsLocal) {
         localMedium = std::make_unique<NarrowBandMedium>(
             config.field, localMaterial, config.mediumDensity, config.densityMajorantGrid,
@@ -423,21 +432,26 @@ void runTransmittanceCurves(const ExperimentConfig& config, int legacyRayCount,
                     try {
                         Random rng(trialSeed(config.seed, ray.id, mode, trial));
                         FlightSample sample;
-                        if (mode == "global_conditional") {
+                        if (mode == "global_conditional" || mode == "global_conditional_renewal_plus") {
                             FlightState state;
                             if (birth.policy == "fixed_observation") {
                                 state = startExternalFlight(rayResult.geometry.entry, ray.direction);
                                 state.birthValue = birth.value;
                                 state.birthGradient = birth.gradient;
                             } else {
-                                state = conditionalMedium.startExternal(
-                                    rayResult.geometry.entry, ray.direction, rng);
+                                state = mode == "global_conditional_renewal_plus"
+                                    ? conditionalRenewalMedium->startExternal(rayResult.geometry.entry,ray.direction,rng)
+                                    : conditionalMedium.startExternal(rayResult.geometry.entry, ray.direction, rng);
                             }
-                            const ConditionalFlightKernel flight =
-                                conditionalMedium.beginFlight(state);
-                            sample = conditionalMedium.sample(
-                                flight, rng, &modeResult.diagnostics,
-                                rayResult.geometry.activeLength);
+                            if (mode == "global_conditional_renewal_plus") {
+                                const auto hit = conditionalRenewalMedium->sample(state,rng,
+                                    &modeResult.diagnostics,rayResult.geometry.activeLength,nullptr,config.numeric);
+                                sample = {hit.collided,hit.age};
+                            } else {
+                                const ConditionalFlightKernel flight = conditionalMedium.beginFlight(state);
+                                sample = conditionalMedium.sample(flight,rng,&modeResult.diagnostics,
+                                    rayResult.geometry.activeLength);
+                            }
                         } else {
                             const NarrowBandMedium& medium = mode == "classic_local"
                                 ? *localMedium : *globalMedium;

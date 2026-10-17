@@ -121,10 +121,11 @@ struct ExperimentConfig {
     std::string classicPhaseProposal = "uniform";
     // classic obeys material.gp_model; comparison modes select it explicitly.
     std::string transportMode = "classic";
+    double conditionalRenewalDistance = 0.01; // World distance between value/full-gradient renewals; global field stays fixed.
     RenewalRenderConfig renewal;
     FirstHitRenderConfig firstHit;
     // Independent scalar continuation: neural_renewal, classic_local,
-    // global_conditional, or gpis_function_space_tungsten.
+    // global_conditional_renewal_plus, global_conditional, or gpis_function_space_tungsten.
     std::string continuationMethod = "neural_renewal";
     TungstenFunctionSpaceConfig continuationTungsten;
 };

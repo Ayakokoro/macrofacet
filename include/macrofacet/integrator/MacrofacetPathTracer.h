@@ -25,6 +25,7 @@ struct RenderStatistics {
     std::uint64_t firstHitDomainMisses = 0, firstHitUpcrossings = 0;
     std::uint64_t classicFlights = 0;
     std::uint64_t conditionalFlights = 0;
+    std::uint64_t conditionalRenewalSegments = 0;
     std::uint64_t gpisFlights = 0, gpisContinuationFlights = 0, gpisBatches = 0, gpisPoints = 0;
     std::uint64_t gpisRejectedUpcrossings = 0, gpisInvalidGradients = 0;
     DdaTrackingDiagnostics tracking;
@@ -62,6 +63,7 @@ inline void mergeInto(RenderStatistics& destination, const RenderStatistics& sou
     destination.firstHitUpcrossings += source.firstHitUpcrossings;
     destination.classicFlights += source.classicFlights;
     destination.conditionalFlights += source.conditionalFlights;
+    destination.conditionalRenewalSegments += source.conditionalRenewalSegments;
     destination.gpisFlights += source.gpisFlights;
     destination.gpisContinuationFlights += source.gpisContinuationFlights;
     destination.gpisBatches += source.gpisBatches;

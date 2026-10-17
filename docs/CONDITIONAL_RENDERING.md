@@ -1,4 +1,60 @@
-# Global conditional rendering
+# Conditional rendering
+
+## Global conditional renewal plus
+
+`global_conditional_renewal_plus` uses exactly the same world-space mean field
+and stationary SE kernel as `global_conditional`. It renews the conditioning
+observation after a fixed world distance, without constructing a tangent plane
+or rebuilding a material covariance. Set
+`transport.global_conditional_renewal_plus.renewal_distance` for a standalone
+render, or `transport.continuation.renewal_distance` with continuation method
+`global_conditional_renewal_plus` after a first hit. The default is `0.01`.
+The continuation value overrides the shared setting. `local_conditional` and
+its configuration block are removed; they are not compatibility aliases.
+
+Each segment starts with a sampled value `f` and full, unnormalized world
+gradient `g`. Conditioning uses the residuals `f-m(x)` and `g-grad(m)(x)`.
+Queries throughout the segment evaluate the original global mean and gradient
+at their actual world positions. Distance sampling reuses `ConditionalMedium`
+and its certified birth/interval majorants; collision gradients use the same
+conditioned, negative-flux-weighted Gaussian as `global_conditional`. A real
+collision starts a new flight with `F=0` and that full gradient. Null candidates
+and majorant subdivisions do not renew the conditioning.
+
+When a renewal interval ends without a collision, sample the endpoint from
+`p(F_end,G_end | current birth, F_end>0)`. Carry this jointly sampled value and
+full world gradient to the next segment and reset the conditional age to zero.
+The global mean and kernel remain unchanged. This endpoint-positive closure
+does not retain older observations or condition on the whole continuous
+survival event. It is a renewal+ memory approximation, not the GPIS
+function-space sampler or an exact SE first-passage sampler. The renewal
+distance is a model parameter, not a delta tracking candidate step, and smaller
+values need not approach the full GP model.
+
+The last segment is clipped to the active domain or requested transmittance
+distance. Reported collision distances accumulate from the original flight
+birth. An escape from the last segment does not sample an unused endpoint.
+With identical initial observations and random streams, a renewal distance
+covering the entire flight reproduces `global_conditional`, including collision
+gradients. This provides a direct regression check on curved means and
+anisotropic kernels.
+
+Supported: squared-exponential kernels and generalized Gaussian NDFs with
+`field.use_alpha_grid=false`, matching the global conditional model. Extinction
+is evaluated throughout the active domain independently of the classic baked
+density mask.
+
+`configs/render_global_conditional_renewal_plus_shader_ball_sigma002.json`
+supports `render` and explicit-ray `curves`; its curves compare the two global
+conditional modes using the same field. For an image comparison, render this
+config once as provided and once with `--mode global_conditional`, using
+different `--output` directories. The example retains renewal distance `1`
+from the previous configuration. `resolved_config.json` records the global
+field, distance units, and endpoint policy. Render statistics report
+`global_conditional_renewal_plus_segments` separately from physical
+`conditional_flights` and internal majorant `tracking_segments`.
+
+## Global conditional transport
 
 当前完整标量公式、性能证据和上界改进方案见
 [消光公式与上界改进分析](CONDITIONAL_MAJORANT_ANALYSIS.md)。

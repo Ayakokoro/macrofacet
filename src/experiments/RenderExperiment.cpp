@@ -87,9 +87,10 @@ void writeFirstHitDiagnostics(const mf::ExperimentConfig& config, const mf::Rend
         {"domain_misses",s.firstHitDomainMisses},{"upcrossings",s.firstHitUpcrossings},
         {"real_collisions",s.realCollisions},
         {"continuation_flights",config.continuationMethod == "classic_local" ? s.classicFlights :
-            config.continuationMethod == "global_conditional" ? s.conditionalFlights :
+            (config.continuationMethod == "global_conditional" || config.continuationMethod == "global_conditional_renewal_plus") ? s.conditionalFlights :
             config.continuationMethod == mf::kTungstenFunctionSpaceMethod ? s.gpisContinuationFlights : s.renewal.flights},
         {"conditional_flights",s.conditionalFlights},
+        {"global_conditional_renewal_plus_segments",s.conditionalRenewalSegments},
         {"gpis_flights",s.gpisFlights},{"gpis_continuation_flights",s.gpisContinuationFlights},
         {"gpis_batches",s.gpisBatches},{"gpis_points",s.gpisPoints},
         {"gpis_rejected_upcrossings",s.gpisRejectedUpcrossings},{"gpis_invalid_gradients",s.gpisInvalidGradients},
@@ -141,7 +142,7 @@ void runRenderExperiments(const ExperimentConfig& config) {
                "dda_candidates,null_collisions,bound_intervals,near_candidates,far_candidates,rounded_candidate_steps,adaptive_majorant_flights,"
                "tracking_segments,max_segment_null_collisions,max_segment_majorant,max_candidate_majorant,"
                "max_evaluated_extinction,max_segment_majorant_optical_depth,max_conditional_interval_majorant,"
-               "conditional_flights,gpis_flights,gpis_continuation_flights,gpis_batches,gpis_points,gpis_rejected_upcrossings,gpis_invalid_gradients,neural_flights,neural_segments,neural_mixture_queries,neural_backend,"
+               "conditional_flights,global_conditional_renewal_plus_segments,gpis_flights,gpis_continuation_flights,gpis_batches,gpis_points,gpis_rejected_upcrossings,gpis_invalid_gradients,neural_flights,neural_segments,neural_mixture_queries,neural_backend,"
                "neural_initialization_batches,neural_segment_batches,neural_mixture_batches,neural_maximum_batch_size,"
                "neural_cpu_workers,neural_parallel_advance_batches,neural_serial_advance_batches,neural_submissions,neural_readbacks,neural_combined_submissions,neural_ray_pool_size,neural_max_initialization_batch,neural_max_mixture_batch,neural_max_initialization_wait,neural_max_mixture_wait,neural_max_in_flight_batches,neural_blocking_collects,neural_cpu_batches_with_gpu_pending\n";
     {
@@ -153,15 +154,21 @@ void runRenderExperiments(const ExperimentConfig& config) {
         for (const std::string& mode : modes) for (const std::string& environment : environments) {
             ExperimentConfig renderConfig = config;
             renderConfig.transportMode = mode;
-            if (mode == "classic_local" || (mode == "hybrid_first_hit" && config.continuationMethod == "classic_local"))
+            if (mode == "classic_local" ||
+                (mode == "hybrid_first_hit" && config.continuationMethod == "classic_local"))
                 renderConfig.material.gpModel = GpModel::LocalTangent;
-            if (mode == "classic_global" || mode == "global_conditional" || mode == "neural_renewal" ||
+            if (mode == "classic_global" || mode == "global_conditional" ||
+                mode == "global_conditional_renewal_plus" || mode == "neural_renewal" ||
                 (mode == "hybrid_first_hit" && (config.continuationMethod == "neural_renewal" ||
-                    config.continuationMethod == "global_conditional" || config.continuationMethod == kTungstenFunctionSpaceMethod)))
+                    config.continuationMethod == "global_conditional" ||
+                    config.continuationMethod == "global_conditional_renewal_plus" ||
+                    config.continuationMethod == kTungstenFunctionSpaceMethod)))
                 renderConfig.material.gpModel = GpModel::GlobalPointwise;
             if (renderConfig.material.gpModel != config.material.gpModel)
                 renderConfig.preparedAreaMajorant.reset();
-            if ((mode == "global_conditional" || (mode == "hybrid_first_hit" && config.continuationMethod == "global_conditional")) &&
+            if ((mode == "global_conditional" || mode == "global_conditional_renewal_plus" ||
+                (mode == "hybrid_first_hit" && (config.continuationMethod == "global_conditional" ||
+                                               config.continuationMethod == "global_conditional_renewal_plus"))) &&
                 (renderConfig.material.ndfFamily != NdfFamily::GeneralizedGaussian ||
                  renderConfig.material.alphaField))
                 throw std::invalid_argument(
@@ -205,6 +212,7 @@ void runRenderExperiments(const ExperimentConfig& config) {
                     << image.statistics.tracking.maximumSegmentOpticalDepth << ','
                     << image.statistics.tracking.maximumConditionalIntervalMajorant << ','
                     << image.statistics.conditionalFlights << ','
+                    << image.statistics.conditionalRenewalSegments << ','
                     << image.statistics.gpisFlights << ',' << image.statistics.gpisContinuationFlights << ','
                     << image.statistics.gpisBatches << ',' << image.statistics.gpisPoints << ','
                     << image.statistics.gpisRejectedUpcrossings << ',' << image.statistics.gpisInvalidGradients << ','

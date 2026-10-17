@@ -243,6 +243,31 @@ void testFirstHitRender(TestContext& context) {
         !resolved["transport"].contains("renewal") && !resolved["transport"]["continuation"].contains("model"),
         "resolved local config contains no unused renewal model");
 
+    ExperimentConfig conditionalRenewal = config;
+    conditionalRenewal.continuationMethod="global_conditional_renewal_plus";
+    conditionalRenewal.conditionalRenewalDistance=0.05;
+    conditionalRenewal.renewal.model.reset();
+    conditionalRenewal.renewal.modelPath="unused_missing_renewal_model.json";
+    conditionalRenewal.render.safetyDepthCap=128;
+    conditionalRenewal.render.rouletteStartDepth=1000;
+    conditionalRenewal.render.threadCount=1;
+    prepareRenewalModel(conditionalRenewal);
+    const auto conditionalRenewalImage=renderAnalyticScene(conditionalRenewal);
+    context.require(conditionalRenewalImage.statistics.conditionalFlights>0 &&
+        conditionalRenewalImage.statistics.conditionalRenewalSegments>0 &&
+        conditionalRenewalImage.statistics.renewal.flights==0 &&
+        conditionalRenewalImage.statistics.numericalFailures==0 &&
+        conditionalRenewalImage.statistics.safetyCapTerminations==0,
+        "hybrid global conditional renewal+ continues from the first surface without neural checkpoints");
+    for (std::size_t i=0;i<serial.firstHitRecords.size();++i) {
+        const auto& a=serial.firstHitRecords[i]; const auto& b=conditionalRenewalImage.firstHitRecords[i];
+        context.require(a.first.hit==b.first.hit && a.first.initialSign==b.first.initialSign &&
+            a.first.gradient==b.first.gradient && a.first.q==b.first.q,
+            "global conditional renewal+ handoff preserves both signs and the original first-hit observations");
+    }
+    for (const auto& pixel : conditionalRenewalImage.pixels)
+        context.near((pixel-Spectrum::Ones()).norm(),0,1e-14,"hybrid global conditional renewal+ white furnace has no extra phase weight");
+
     ExperimentConfig conditional = config;
     conditional.continuationMethod = "global_conditional";
     conditional.renewal.model.reset();

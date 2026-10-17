@@ -12,6 +12,8 @@ int main() {
     catch (const std::exception& e) { context.require(false, std::string("baseline threw: ") + e.what()); }
     try { testFlightKernels(context); }
     catch (const std::exception& e) { context.require(false, std::string("flight kernels threw: ") + e.what()); }
+    try { testGlobalConditionalRenewalPlus(context); }
+    catch (const std::exception& e) { context.require(false, std::string("global conditional renewal+ threw: ") + e.what()); }
     try { testSampling(context); }
     catch (const std::exception& e) { context.require(false, std::string("sampling threw: ") + e.what()); }
     try { testRenderingThreads(context); }

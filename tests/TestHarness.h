@@ -34,6 +34,7 @@ void testGaussianMath(TestContext& context);
 void testGpssStatistics(TestContext& context);
 void testMacrofacetBaseline(TestContext& context);
 void testFlightKernels(TestContext& context);
+void testGlobalConditionalRenewalPlus(TestContext& context);
 void testSampling(TestContext& context);
 void testRenderingThreads(TestContext& context);
 void testTransmittanceConfig(TestContext& context);

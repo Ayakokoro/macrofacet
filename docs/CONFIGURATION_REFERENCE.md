@@ -1,6 +1,23 @@
 # Configuration reference
 
-The renderer supports Classic local/global DDA null tracking and global conditional GP delta tracking. Commands are `render`, `curves`, `bake-field`, the independent 1D `first-passage` experiment, and neural `renewal-query`. Old `fixed_flight`, `modes`, `reference`, `render.flight_table_cells`, and legacy Conditional29 transport settings are rejected.
+The renderer supports Classic local/global DDA null tracking, global conditional GP delta tracking, and fixed-distance `global_conditional_renewal_plus` transport. Commands are `render`, `curves`, `bake-field`, the independent 1D `first-passage` experiment, and neural `renewal-query`. Old `fixed_flight`, `modes`, `reference`, `render.flight_table_cells`, and legacy Conditional29 transport settings are rejected.
+
+For fixed-distance renewal of global conditioning, use
+`transport.mode="global_conditional_renewal_plus"` and
+`transport.global_conditional_renewal_plus.renewal_distance=0.01` (finite,
+positive world distance). A hybrid first-hit renderer can instead use
+`transport.continuation={"method":"global_conditional_renewal_plus","backend":"scalar","renewal_distance":0.01}`.
+The continuation distance overrides the shared setting. The global mean and
+kernel are identical to `global_conditional`; no tangent plane or local
+covariance is rebuilt. Every renewal conditions on the preceding segment's
+jointly sampled positive endpoint value and full, unnormalized world gradient.
+This is an endpoint-positive approximation to survival-conditioned renewal.
+It requires generalized Gaussian NDFs, an SE kernel, and no alpha grid.
+The removed `local_conditional` mode and block are rejected, as is `step_size`
+inside the new mode's settings. See
+[the model and sampling contract](CONDITIONAL_RENDERING.md#global-conditional-renewal-plus).
+Explicit `transmittance.modes` accepts `global_conditional_renewal_plus`; legacy curves and
+the `all` render preset keep their original three-mode comparison.
 
 `renewal-query --config <A/B-first-passage-config> --model <hazard-bundle.json>`
 evaluates a trained Matern-3/2 or SE model and samples its cumulative law. The
@@ -96,7 +113,7 @@ build\Release\macrofacet_experiments.exe render --config configs\macrofacet_ci.j
 ```
 
 `transport.mode` accepts `classic` (default, follows `material.gp_model`),
-`classic_local`, `classic_global`, `global_conditional`, `neural_renewal`,
+`classic_local`, `classic_global`, `global_conditional`, `global_conditional_renewal_plus`, `neural_renewal`,
 `hybrid_first_hit`, and `all`. The last
 choice renders three comparable modes. The CLI also accepts `--mode`.
 
@@ -104,13 +121,13 @@ choice renders three comparable modes. The CLI also accepts `--mode`.
 `transport.first_hit.method` accepts `gpis_function_space`, `neural_first_hit_se`,
 or `gpis_function_space_tungsten`;
 `transport.continuation.method` accepts `classic_local`, `neural_renewal`,
-`global_conditional`, or `gpis_function_space_tungsten`. Continuation requires `backend="scalar"`.
+`global_conditional`, `global_conditional_renewal_plus`, or `gpis_function_space_tungsten`. Continuation requires `backend="scalar"`.
 First hit additionally accepts `torch_cpu` and `torch_cuda` for a
 `macrofacet.causal_first_hit` residual GRU bundle, using `batch_size` in [1,65536]
 (default 1024). Other first-hit models and reference samplers require `scalar`.
 The causal model's recurrent step is fixed by its checkpoint; `profile_maximum_step`
 does not change that grid. See [causal first-hit rendering](FIRST_HIT_CAUSAL_RENDER_SIGMA002.md).
-Conditional
+Global conditional
 continuation needs no neural checkpoint and starts at the first collision with
 `F=0` and its full gradient, transforming both mean and gradient by `initialSign`.
 It retains only the latest collision observation, not the full camera GP history.

@@ -43,6 +43,7 @@ add_library(macrofacet
     src/transport/ClassicNullTracking.cpp
     src/transport/ConditionalFlightKernel.cpp
     src/transport/ConditionalMedium.cpp
+    src/transport/GlobalConditionalRenewalPlusMedium.cpp
     src/transport/ConditionalNullTracking.cpp
     src/transport/DensityMajorantGrid.cpp
     src/transport/NarrowBandMedium.cpp
@@ -245,6 +246,7 @@ set(MACROFACET_TEST_SOURCES
     tests/test_gpss_statistics.cpp
     tests/test_macrofacet_baseline.cpp
     tests/test_flight_kernels.cpp
+    tests/test_global_conditional_renewal_plus.cpp
     tests/test_sampling.cpp
     tests/test_cutaway_mean.cpp
     tests/test_shader_ball_mean.cpp

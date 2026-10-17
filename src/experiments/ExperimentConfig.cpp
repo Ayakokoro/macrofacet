@@ -5,6 +5,7 @@
 #include "macrofacet/gpss/ShaderBallMean.h"
 #include "macrofacet/transport/RenewalMedium.h"
 #include "macrofacet/transport/FirstHitSEMedium.h"
+#include "macrofacet/transport/GlobalConditionalRenewalPlusMedium.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
@@ -70,7 +71,7 @@ ConditionalBirthConfig parseConditionalBirth(const nlohmann::json& value,
 
 bool isTransmittanceMode(const std::string& mode) {
     return mode == "classic_local" || mode == "classic_global" ||
-           mode == "global_conditional";
+           mode == "global_conditional" || mode == "global_conditional_renewal_plus";
 }
 
 nlohmann::json conditionalBirthJson(const ConditionalBirthConfig& birth) {
@@ -145,15 +146,25 @@ void requireNanoVdbField(const ExperimentConfig& config) {
 }
 
 void prepareRenewalModel(ExperimentConfig& config) {
+    if (config.transportMode == "global_conditional_renewal_plus") {
+        if (config.material.ndfFamily != NdfFamily::GeneralizedGaussian || config.material.alphaField)
+            throw std::invalid_argument("global_conditional_renewal_plus requires generalized_gaussian without alpha grid");
+        (void)GlobalConditionalRenewalPlusMedium(config.field,config.conditionalRenewalDistance);
+        if (config.material.gpModel != GpModel::GlobalPointwise) config.preparedAreaMajorant.reset();
+        config.material.gpModel = GpModel::GlobalPointwise;
+        return;
+    }
     if (config.transportMode != "neural_renewal" && config.transportMode != "hybrid_first_hit") return;
     if (config.transportMode == "hybrid_first_hit") {
         if ((config.continuationMethod != "neural_renewal" && config.continuationMethod != "classic_local" &&
-             config.continuationMethod != "global_conditional" && config.continuationMethod != kTungstenFunctionSpaceMethod) ||
+             config.continuationMethod != "global_conditional" && config.continuationMethod != "global_conditional_renewal_plus" &&
+             config.continuationMethod != kTungstenFunctionSpaceMethod) ||
             config.renewal.backend != "scalar")
             throw std::invalid_argument("unsupported hybrid continuation method or non-scalar backend");
         if (config.continuationMethod != "neural_renewal") {
             const bool tungsten = config.continuationMethod == kTungstenFunctionSpaceMethod;
-            const bool conditional = config.continuationMethod == "global_conditional" || tungsten;
+            const bool conditional = config.continuationMethod == "global_conditional" ||
+                config.continuationMethod == "global_conditional_renewal_plus" || tungsten;
             if (conditional) {
                 if (config.material.ndfFamily != NdfFamily::GeneralizedGaussian || config.material.alphaField)
                     throw std::invalid_argument("global_conditional requires generalized_gaussian without alpha grid");
@@ -161,6 +172,8 @@ void prepareRenewalModel(ExperimentConfig& config) {
                     throw std::invalid_argument("global_conditional requires a squared_exponential kernel");
             }
             if (tungsten) (void)TungstenFunctionSpaceSampler(config.field,config.continuationTungsten);
+            if (config.continuationMethod == "global_conditional_renewal_plus")
+                (void)GlobalConditionalRenewalPlusMedium(config.field,config.conditionalRenewalDistance);
             const auto gpModel = conditional ? GpModel::GlobalPointwise : GpModel::LocalTangent;
             if (config.material.gpModel != gpModel) config.preparedAreaMajorant.reset();
             config.material.gpModel = gpModel;
@@ -392,9 +405,19 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     config.transportMode = transport.value("mode", "classic");
     if (config.transportMode != "classic" && config.transportMode != "classic_local" &&
         config.transportMode != "classic_global" &&
-        config.transportMode != "global_conditional" && config.transportMode != "neural_renewal" &&
+        config.transportMode != "global_conditional" && config.transportMode != "global_conditional_renewal_plus" &&
+        config.transportMode != "neural_renewal" &&
         config.transportMode != "hybrid_first_hit" && config.transportMode != "all")
         throw std::invalid_argument("unknown transport.mode: " + config.transportMode);
+    if (transport.contains("local_conditional"))
+        throw std::invalid_argument("transport.local_conditional was removed; use transport.global_conditional_renewal_plus.renewal_distance");
+    if (transport.contains("global_conditional_renewal_plus")) {
+        const auto& renewal = transport.at("global_conditional_renewal_plus");
+        if (renewal.contains("step_size"))
+            throw std::invalid_argument("global_conditional_renewal_plus uses renewal_distance, not step_size");
+        config.conditionalRenewalDistance = renewal.value("renewal_distance",0.01);
+    }
+    requirePositiveFinite(config.conditionalRenewalDistance,"transport.global_conditional_renewal_plus.renewal_distance");
     const nlohmann::json* renewalJson = transport.contains("renewal") ? &transport.at("renewal") : nullptr;
     if (config.transportMode == "hybrid_first_hit") {
         if (renewalJson) throw std::invalid_argument("hybrid_first_hit uses transport.continuation, not transport.renewal");
@@ -434,9 +457,16 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         config.continuationMethod = continuation.at("method").get<std::string>();
         config.renewal.backend = continuation.value("backend","scalar");
         if ((config.continuationMethod != "neural_renewal" && config.continuationMethod != "classic_local" &&
-             config.continuationMethod != "global_conditional" && config.continuationMethod != kTungstenFunctionSpaceMethod) ||
+             config.continuationMethod != "global_conditional" && config.continuationMethod != "global_conditional_renewal_plus" &&
+             config.continuationMethod != kTungstenFunctionSpaceMethod) ||
             config.renewal.backend != "scalar")
             throw std::invalid_argument("unsupported hybrid continuation method or non-scalar backend");
+        if (config.continuationMethod == "global_conditional_renewal_plus") {
+            if (continuation.contains("step_size"))
+                throw std::invalid_argument("global_conditional_renewal_plus continuation uses renewal_distance, not step_size");
+            config.conditionalRenewalDistance = continuation.value("renewal_distance",config.conditionalRenewalDistance);
+            requirePositiveFinite(config.conditionalRenewalDistance,"transport.continuation.renewal_distance");
+        }
         if (config.continuationMethod == kTungstenFunctionSpaceMethod)
             config.continuationTungsten=readTungstenSampler(continuation.value("sampler",nlohmann::json::object()));
         renewalJson = config.continuationMethod == "neural_renewal" ? &continuation : nullptr;
@@ -711,6 +741,14 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                           {"render_threads", config.render.threadCount}};
     result["classic_phase_proposal"] = config.classicPhaseProposal;
     result["transport"]["mode"] = config.transportMode;
+    result["transport"]["global_conditional_renewal_plus"] = {
+        {"renewal_distance",config.conditionalRenewalDistance},{"distance_units","world"},
+        {"sampler","segmented_delta_tracking"},{"gp_model","global_pointwise"},
+        {"conditioning","current_segment_value_and_full_gradient"},
+        {"boundary_policy","sample_previous_segment_positive_endpoint"},
+        {"mean_policy","global_field"},{"kernel_policy","shared_global_kernel"},
+        {"coordinate_system","world"},
+        {"majorant","analytic_birth_and_conditional_interval_bounds"}};
     if ((!config.renewal.modelPath.empty() || config.renewal.model) &&
         !(config.transportMode == "hybrid_first_hit" && config.continuationMethod != "neural_renewal")) {
         result["transport"]["renewal"] = {
@@ -735,6 +773,11 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                 {"backend","scalar"},{"resolved_backend","scalar"},
                 {"sampler","dda_null_tracking"},{"gp_model","local_tangent"},
                 {"classic_phase_proposal",config.classicPhaseProposal}};
+        } else if (config.continuationMethod == "global_conditional_renewal_plus") {
+            result["transport"]["continuation"] = result["transport"]["global_conditional_renewal_plus"];
+            result["transport"]["continuation"]["backend"] = "scalar";
+            result["transport"]["continuation"]["resolved_backend"] = "scalar";
+            result["transport"]["continuation"]["birth_policy"] = "first_hit_surface";
         } else if (config.continuationMethod == "global_conditional") {
             result["transport"]["continuation"] = {
                 {"backend","scalar"},{"resolved_backend","scalar"},

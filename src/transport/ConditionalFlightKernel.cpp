@@ -179,18 +179,36 @@ HazardEvaluation ConditionalFlightKernel::evaluate(double age) const {
 }
 
 HitStatistics ConditionalFlightKernel::hitStatistics(double age) const {
-    const auto m=scalarStatistics(age);
+    return {gradientGivenValueDeviation(age,-scalarStatistics(age).meanF)};
+}
+
+Gaussian<3> ConditionalFlightKernel::gradientGivenValueDeviation(double age, double deviation) const {
     const auto factors=seFactors(inverseLength2_,age);
     const double u=inverseLength2_*age*age, r=std::exp(-0.5*u);
     const auto target=field_.mean->evaluate(state_.birthPosition+age*state_.direction);
     Gaussian<3> g;
     g.mean=target.gradient+r*deltaGradient_-precisionDirection_*
-        (age*r*(deltaValue_+age*deltaSlope_)+factors.regression*m.meanF/inverseLength2_);
+        (age*r*(deltaValue_+age*deltaSlope_)-factors.regression*deviation/inverseLength2_);
     const Matrix3 longitudinal=precisionDirection_*precisionDirection_.transpose()/inverseLength2_;
     g.covariance=sigma2_*(-std::expm1(-u)*(field_.kernel.precision()-longitudinal)+
                          factors.slopeVariance*longitudinal);
     g.covariance = 0.5 * (g.covariance + g.covariance.transpose());
-    return {g};
+    return g;
+}
+
+FlightState ConditionalFlightKernel::samplePositiveEndpoint(double age, Random& rng) const {
+    const auto m=scalarStatistics(age);
+    if (!(m.varianceF > 0.0))
+        throw NumericError(NumericStatus::NeedHigherPrecision,"conditional endpoint variance underflow");
+    const double sd=std::sqrt(m.varianceF);
+    const double z=-normalQuantileFromLogCdf(
+        normalLogCdf(m.meanF/sd)+std::log(rng.openUniform01()));
+    FlightState endpoint=startExternalFlight(state_.birthPosition+age*state_.direction,state_.direction);
+    endpoint.birthValue=std::max(std::nextafter(0.0,1.0),m.meanF+sd*z);
+    // Use the sampled deviation directly to avoid subtracting nearly equal
+    // endpoint and mean values when the segment is much shorter than ell.
+    endpoint.birthGradient=sampleGaussianPSD(gradientGivenValueDeviation(age,sd*z),rng);
+    return endpoint;
 }
 
 double ConditionalFlightKernel::intervalMajorant(double lo, double hi) const {

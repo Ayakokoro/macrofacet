@@ -7,6 +7,7 @@
 #include "macrofacet/transport/ConditionalFlightKernel.h"
 #include "macrofacet/transport/ConditionalNullTracking.h"
 #include "macrofacet/transport/ConditionalMedium.h"
+#include "macrofacet/transport/GlobalConditionalRenewalPlusMedium.h"
 #include "macrofacet/transport/CollisionGradientSampler.h"
 #include "macrofacet/transport/NarrowBandMedium.h"
 #include "macrofacet/transport/FunctionSpaceGpisMedium.h"
@@ -88,14 +89,21 @@ Spectrum traceRenewalCameraPath(const Ray& input, const ExperimentConfig& config
 // camera paths. startDepth counts reflections that have already been applied.
 Spectrum traceTrackedFlights(FlightState state, Spectrum throughput, int startDepth,
     const ExperimentConfig& config, const NarrowBandMedium* classicMedium,
-    const ConditionalMedium* conditionalMedium, Random& rng, RenderStatistics& statistics) {
-    const bool conditional = conditionalMedium != nullptr;
+    const ConditionalMedium* conditionalMedium, Random& rng, RenderStatistics& statistics,
+    const GlobalConditionalRenewalPlusMedium* conditionalRenewalMedium = nullptr) {
+    const bool conditional = conditionalMedium != nullptr || conditionalRenewalMedium != nullptr;
     int depth = startDepth;
     for (; depth < config.render.safetyDepthCap; ++depth) {
         try {
             FlightSample flight;
             Vector3 collisionGradient = Vector3::Zero();
-            if (conditional) {
+            if (conditionalRenewalMedium) {
+                ++statistics.conditionalFlights;
+                const auto sample = conditionalRenewalMedium->sample(state,rng,&statistics.tracking,
+                    -1.0,&statistics.conditionalRenewalSegments,config.numeric);
+                flight = {sample.collided,sample.age};
+                collisionGradient = sample.gradient;
+            } else if (conditional) {
                 ++statistics.conditionalFlights;
                 const ConditionalFlightKernel kernel = conditionalMedium->beginFlight(state);
                 flight = conditionalMedium->sample(kernel, rng, &statistics.tracking);
@@ -153,6 +161,23 @@ Spectrum traceTrackedFlights(FlightState state, Spectrum throughput, int startDe
     return Spectrum::Zero();
 }
 
+Spectrum traceConditionalCameraPath(const Ray& ray, const ExperimentConfig& config,
+    const ConditionalMedium* medium, Random& rng, RenderStatistics& statistics,
+    const GlobalConditionalRenewalPlusMedium* renewalMedium = nullptr) {
+    const Vector3 direction=normalizedOrThrow(ray.direction);
+    const auto interval=config.field.activeDomain.intersect({ray.origin,direction});
+    if (!interval.hit || !(interval.exit > interval.entry)) {
+        ++statistics.escapedPaths;
+        return environmentEmission(direction,config.render.environment);
+    }
+    const Point3 entry=(ray.origin+interval.entry*direction)
+        .cwiseMax(config.field.activeDomain.minimum).cwiseMin(config.field.activeDomain.maximum);
+    // Both conditional modes must use the same clipped world-space observation;
+    // even roundoff at a grid face can change the subsequent tracking stream.
+    const auto state=startConditionalExterior(config.field,entry,direction,rng);
+    return traceTrackedFlights(state,Spectrum::Ones(),0,config,nullptr,medium,rng,statistics,renewalMedium);
+}
+
 void accumulateGpis(const GpisFlightSample& sample, RenderStatistics& statistics, bool continuation) {
     ++statistics.gpisFlights;
     if (continuation) ++statistics.gpisContinuationFlights;
@@ -202,6 +227,7 @@ class HybridFirstHitTransport {
     std::unique_ptr<RenewalMedium> positive_, negative_;
     std::unique_ptr<NarrowBandMedium> local_;
     std::unique_ptr<ConditionalMedium> conditionalPositive_, conditionalNegative_;
+    std::unique_ptr<GlobalConditionalRenewalPlusMedium> conditionalRenewalPositive_, conditionalRenewalNegative_;
 public:
     explicit HybridFirstHitTransport(const ExperimentConfig& config)
         : config_(config), negativeField_(firstHitSideField(config.field,-1)) {
@@ -218,6 +244,11 @@ public:
         } else if (config.continuationMethod == "global_conditional") {
             conditionalPositive_ = std::make_unique<ConditionalMedium>(config.field);
             conditionalNegative_ = std::make_unique<ConditionalMedium>(negativeField_);
+        } else if (config.continuationMethod == "global_conditional_renewal_plus") {
+            conditionalRenewalPositive_ = std::make_unique<GlobalConditionalRenewalPlusMedium>(
+                config.field,config.conditionalRenewalDistance);
+            conditionalRenewalNegative_ = std::make_unique<GlobalConditionalRenewalPlusMedium>(
+                negativeField_,config.conditionalRenewalDistance);
         } else if (config.continuationMethod==kTungstenFunctionSpaceMethod) {
             tungstenTail_=std::make_unique<FunctionSpaceGpisMedium>(config.field,config.continuationTungsten);
         } else {
@@ -304,15 +335,16 @@ public:
             config_,*tungstenTail_,*gpisRng,statistics);
         if (local_) return traceTrackedFlights(startClassicCollisionFlight(state.ray.origin,state.ray.direction),
             state.throughput,state.depth,config_,local_.get(),nullptr,continuationRng,statistics);
-        if (conditionalPositive_) {
+        if (conditionalPositive_ || conditionalRenewalPositive_) {
             FlightState birth = startClassicCollisionFlight(state.ray.origin,state.ray.direction);
             birth.birthValue = 0.0;
             birth.birthGradient = state.gradient;
             // Keep the full first-hit gradient and its side. This is a surface
             // birth, not a new exterior observation or a second phase sample.
             const auto* medium = side > 0 ? conditionalPositive_.get() : conditionalNegative_.get();
+            const auto* renewalMedium = side > 0 ? conditionalRenewalPositive_.get() : conditionalRenewalNegative_.get();
             return traceTrackedFlights(birth,state.throughput,state.depth,config_,nullptr,medium,
-                continuationRng,statistics);
+                continuationRng,statistics,renewalMedium);
         }
         return traceRenewalFromSurface(state,config_,side > 0 ? *positive_ : *negative_,
             continuationRng,statistics);
@@ -408,6 +440,12 @@ Spectrum traceRenewalFromSurface(const RenewalPathState& state, const Experiment
 Spectrum traceCameraPath(const Ray& initialRay,
                          const ExperimentConfig& config, Random& rng,
                          RenderStatistics& statistics) {
+    if (config.transportMode == "global_conditional_renewal_plus") {
+        ExperimentConfig prepared = config;
+        prepareRenewalModel(prepared);
+        const GlobalConditionalRenewalPlusMedium medium(prepared.field,prepared.conditionalRenewalDistance);
+        return traceConditionalCameraPath(initialRay,prepared,nullptr,rng,statistics,&medium);
+    }
     if (config.transportMode == "hybrid_first_hit") {
         ExperimentConfig prepared = config;
         prepareRenewalModel(prepared); prepareFirstHitModel(prepared);
@@ -432,8 +470,13 @@ Spectrum traceCameraPath(const Ray& initialRay,
 Spectrum traceCameraPath(const Ray& initialRay,
                          const ExperimentConfig& config, const NarrowBandMedium& medium,
                          Random& rng, RenderStatistics& statistics) {
-    if (config.transportMode == "neural_renewal" || config.transportMode == "hybrid_first_hit")
+    if (config.transportMode == "neural_renewal" || config.transportMode == "hybrid_first_hit" ||
+        config.transportMode == "global_conditional_renewal_plus")
         return traceCameraPath(initialRay, config, rng, statistics);
+    if (config.transportMode == "global_conditional") {
+        const ConditionalMedium conditional(config.field);
+        return traceConditionalCameraPath(initialRay,config,&conditional,rng,statistics);
+    }
     const Vector3 initialDirection = normalizedOrThrow(initialRay.direction);
     const DomainInterval firstInterval = config.field.activeDomain.intersect(
         {initialRay.origin, initialDirection});
@@ -442,13 +485,8 @@ Spectrum traceCameraPath(const Ray& initialRay,
         return environmentEmission(initialDirection, config.render.environment);
     }
     const Point3 entry = initialRay.origin + firstInterval.entry * initialDirection;
-    const bool conditional = config.transportMode == "global_conditional";
-    const ConditionalMedium conditionalMedium(config.field);
-    FlightState state = conditional
-        ? conditionalMedium.startExternal(entry, initialDirection, rng)
-        : medium.startExternal(entry, initialDirection);
-    return traceTrackedFlights(state,Spectrum::Ones(),0,config,&medium,
-        conditional ? &conditionalMedium : nullptr,rng,statistics);
+    const FlightState state = medium.startExternal(entry, initialDirection);
+    return traceTrackedFlights(state,Spectrum::Ones(),0,config,&medium,nullptr,rng,statistics);
 }
 
 RenderedImage renderAnalyticScene(const ExperimentConfig& config,
@@ -459,6 +497,7 @@ RenderedImage renderAnalyticScene(const ExperimentConfig& config,
     std::unique_ptr<NarrowBandMedium> medium;
     std::unique_ptr<RenewalMedium> renewal;
     std::unique_ptr<HybridFirstHitTransport> hybrid;
+    std::unique_ptr<GlobalConditionalRenewalPlusMedium> conditionalRenewal;
     if (config.transportMode == "hybrid_first_hit") {
         prepareRenewalModel(prepared); prepareFirstHitModel(prepared);
         hybrid = std::make_unique<HybridFirstHitTransport>(prepared);
@@ -470,6 +509,10 @@ RenderedImage renderAnalyticScene(const ExperimentConfig& config,
             return renderRenewalWavefront(prepared,completedCameraRays);
         renewal = std::make_unique<RenewalMedium>(prepared.field, *prepared.renewal.model,
                                                 prepared.renewal.profileMaximumStep, prepared.renewal.profileMode);
+    } else if (config.transportMode == "global_conditional_renewal_plus") {
+        prepareRenewalModel(prepared);
+        conditionalRenewal = std::make_unique<GlobalConditionalRenewalPlusMedium>(
+            prepared.field,prepared.conditionalRenewalDistance);
     } else {
         medium = std::make_unique<NarrowBandMedium>(config.field, config.material, config.mediumDensity,
                                                    config.densityMajorantGrid, config.preparedAreaMajorant);
@@ -528,7 +571,9 @@ RenderedImage renderAnalyticScene(const ExperimentConfig& config,
                     }
                     if (record) record->radiance = radiance;
                     sum += radiance;
-                } else sum += renewal ? traceRenewalCameraPath(ray, prepared, *renewal, rng, statistics)
+                } else if (conditionalRenewal)
+                    sum += traceConditionalCameraPath(ray,prepared,nullptr,rng,statistics,conditionalRenewal.get());
+                else sum += renewal ? traceRenewalCameraPath(ray, prepared, *renewal, rng, statistics)
                                       : traceCameraPath(ray, config, *medium, rng, statistics);
                 if (completedCameraRays)
                     completedCameraRays->fetch_add(1, std::memory_order_relaxed);
