@@ -23,6 +23,7 @@ struct FirstHitRenderConfig {
     std::filesystem::path modelPath;
     std::string profileMode = "cubic", backend = "scalar";
     double profileMaximumStep = 0.25;
+    double renewalDistance = 0.01; // First-hit conditional renewal+, independent of continuation.
     int batchSize = 1024; // causal first-hit inference only; bounded camera batches
     FunctionSpaceSamplerConfig reference;
     TungstenFunctionSpaceConfig tungsten;

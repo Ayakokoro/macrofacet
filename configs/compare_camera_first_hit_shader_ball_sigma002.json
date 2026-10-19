@@ -1,0 +1,9 @@
+{
+  "source_config": "configs/render_first_hit_local_gpis_shader_ball_sigma002.json",
+  "output_directory": "outputs/camera_first_hit_comparison_20261017/main",
+  "seed": 2026101702,
+  "trials_per_ray": 65536,
+  "thread_count": 8,
+  "gpis_sample_points": 8,
+  "pixels": [[256, 256], [144, 256], [368, 256], [256, 160], [400, 300], [96, 256], [416, 256], [368, 368]]
+}

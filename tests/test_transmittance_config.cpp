@@ -98,6 +98,93 @@ void testTransmittanceConfig(TestContext& context) {
     context.require(hybrid.continuationMethod == "global_conditional" &&
         hybrid.material.gpModel == GpModel::GlobalPointwise && !hybrid.renewal.model && !hybrid.firstHit.model,
         "GPIS plus conditional config loads and prepares without neural checkpoints");
+    auto conditionalFirstRoot = hybridRoot;
+    conditionalFirstRoot["transport"]["first_hit"] = {{"method","global_conditional"},{"backend","scalar"}};
+    conditionalFirstRoot["transport"]["continuation"] = {{"method",kTungstenFunctionSpaceMethod},
+        {"sampler",{{"sample_points",8},{"step_size",.01}}}};
+    { std::ofstream stream(input); stream << conditionalFirstRoot; }
+    auto conditionalFirst = loadExperimentConfig(input);
+    prepareRenewalModel(conditionalFirst); prepareFirstHitModel(conditionalFirst);
+    writeResolvedConfig(conditionalFirst,resolved);
+    { std::ifstream stream(resolved); stream >> written; }
+    const auto& firstDescription = written["transport"]["first_hit"];
+    context.require(!conditionalFirst.firstHit.model && !conditionalFirst.renewal.model &&
+        conditionalFirst.firstHit.profileMode=="conditional_direct" &&
+        firstDescription["method"]=="global_conditional" &&
+        firstDescription["birth_policy"]=="sampled_positive_exterior" &&
+        firstDescription["sampler"]=="segmented_delta_tracking" &&
+        !firstDescription.contains("model") && !firstDescription.contains("profile_maximum_step") &&
+        written["transport"]["continuation"]["method"]==kTungstenFunctionSpaceMethod,
+        "conditional first-hit plus GPIS config records positive-exterior tracking without a checkpoint or profile");
+    auto renewalFirstRoot = conditionalFirstRoot;
+    renewalFirstRoot["transport"]["first_hit"] = {
+        {"method","global_conditional_renewal_plus"},{"backend","scalar"},{"renewal_distance",.1}};
+    { std::ofstream stream(input); stream << renewalFirstRoot; }
+    auto renewalFirst = loadExperimentConfig(input);
+    prepareRenewalModel(renewalFirst); prepareFirstHitModel(renewalFirst);
+    writeResolvedConfig(renewalFirst,resolved);
+    { std::ifstream stream(resolved); stream >> written; }
+    const auto& renewalFirstDescription = written["transport"]["first_hit"];
+    context.require(!renewalFirst.firstHit.model && !renewalFirst.renewal.model &&
+        renewalFirst.firstHit.profileMode=="conditional_direct" &&
+        renewalFirstDescription["method"]=="global_conditional_renewal_plus" &&
+        renewalFirstDescription["renewal_distance"]==.1 &&
+        renewalFirstDescription["distance_units"]=="world" &&
+        renewalFirstDescription["boundary_policy"]=="sample_previous_segment_positive_endpoint" &&
+        renewalFirstDescription["conditioning"]=="current_segment_value_and_full_gradient" &&
+        !renewalFirstDescription.contains("model") && !renewalFirstDescription.contains("profile_maximum_step") &&
+        written["transport"]["continuation"]["method"]==kTungstenFunctionSpaceMethod &&
+        written["transport"]["continuation"]["sampler"]["step_size"]==.01,
+        "renewal first-hit 0.1 and GPIS continuation 0.01 retain independent samplers and units");
+    auto bothRenewalRoot = renewalFirstRoot;
+    bothRenewalRoot["transport"]["global_conditional_renewal_plus"] = {{"renewal_distance",.5}};
+    bothRenewalRoot["transport"]["continuation"] = {
+        {"method","global_conditional_renewal_plus"},{"renewal_distance",.02}};
+    { std::ofstream stream(input); stream << bothRenewalRoot; }
+    auto bothRenewal = loadExperimentConfig(input);
+    prepareRenewalModel(bothRenewal); prepareFirstHitModel(bothRenewal);
+    writeResolvedConfig(bothRenewal,resolved);
+    { std::ifstream stream(resolved); stream >> written; }
+    context.require(bothRenewal.firstHit.renewalDistance==.1 && bothRenewal.conditionalRenewalDistance==.02 &&
+        written["transport"]["first_hit"]["renewal_distance"]==.1 &&
+        written["transport"]["continuation"]["renewal_distance"]==.02,
+        "first-hit renewal distance cannot be overridden by continuation or shared transport settings");
+    bothRenewalRoot["transport"]["first_hit"].erase("renewal_distance");
+    { std::ofstream stream(input); stream << bothRenewalRoot; }
+    context.near(loadExperimentConfig(input).firstHit.renewalDistance,.01,0,
+        "first-hit renewal distance has an independent 0.01 default");
+    auto localFirstRoot = conditionalFirstRoot;
+    localFirstRoot["transport"]["first_hit"]["method"] = "classic_local";
+    { std::ofstream stream(input); stream << localFirstRoot; }
+    auto localFirst = loadExperimentConfig(input);
+    prepareRenewalModel(localFirst); prepareFirstHitModel(localFirst);
+    writeResolvedConfig(localFirst,resolved);
+    { std::ifstream stream(resolved); stream >> written; }
+    const auto& localFirstDescription = written["transport"]["first_hit"];
+    context.require(!localFirst.firstHit.model && !localFirst.renewal.model &&
+        localFirst.firstHit.profileMode=="local_direct" &&
+        localFirst.material.gpModel==GpModel::GlobalPointwise &&
+        localFirstDescription["method"]=="classic_local" && localFirstDescription["gp_model"]=="local_tangent" &&
+        localFirstDescription["sampler"]=="dda_null_tracking" &&
+        localFirstDescription["phase_proposal"]=="target_vndf" &&
+        !localFirstDescription.contains("model") && !localFirstDescription.contains("profile_maximum_step") &&
+        written["transport"]["continuation"]["method"]==kTungstenFunctionSpaceMethod,
+        "local first-hit plus GPIS describes independent local material and direct sampling without checkpoints");
+    for (const auto& bad : {nlohmann::json{{"model","unused.json"}},
+                           nlohmann::json{{"sampler",{{"step_size",.01}}}},
+                           nlohmann::json{{"profile_mode","cubic"}},
+                           nlohmann::json{{"profile_maximum_step",.25}},
+                           nlohmann::json{{"batch_size",8}},
+                           nlohmann::json{{"backend","torch_cuda"}}}) {
+        for (const auto& base : {conditionalFirstRoot,localFirstRoot,renewalFirstRoot}) {
+            auto invalid = base;
+            invalid["transport"]["first_hit"].update(bad);
+            { std::ofstream stream(input); stream << invalid; }
+            bool rejected = false;
+            try { (void)loadExperimentConfig(input); } catch (const std::invalid_argument&) { rejected=true; }
+            context.require(rejected,"tracked first-hit rejects incompatible network and GPIS profile options");
+        }
+    }
     auto renewalRoot=root;
     renewalRoot["transport"]["mode"]="global_conditional_renewal_plus";
     renewalRoot["transport"]["global_conditional_renewal_plus"]={{"renewal_distance",0.0125}};
@@ -139,6 +226,17 @@ void testTransmittanceConfig(TestContext& context) {
         try { (void)loadExperimentConfig(input); } catch(const std::invalid_argument&) { rejected=true; }
         context.require(rejected,message);
     };
+    for (double distance : {0.0,-.1}) {
+        auto invalid = renewalFirstRoot;
+        invalid["transport"]["first_hit"]["renewal_distance"] = distance;
+        rejectConfig(invalid,"first-hit renewal distance must be positive");
+    }
+    auto invalidFirstStep = renewalFirstRoot;
+    invalidFirstStep["transport"]["first_hit"]["step_size"] = .1;
+    rejectConfig(invalidFirstStep,"renewal first-hit rejects step_size instead of silently ignoring it");
+    auto invalidFirstRenewal = conditionalFirstRoot;
+    invalidFirstRenewal["transport"]["first_hit"]["renewal_distance"] = .1;
+    rejectConfig(invalidFirstRenewal,"ordinary conditional first-hit cannot silently ignore a renewal distance");
     auto removed=root;
     removed["transport"]["mode"]="local_conditional";
     rejectConfig(removed,"removed local_conditional mode is not an alias");

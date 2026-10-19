@@ -1,18 +1,33 @@
 #include "TestHarness.h"
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
 #include "macrofacet/macrofacet/ConductorPhase.h"
+#include "macrofacet/macrofacet/ClassicCoefficients.h"
+#include "macrofacet/transport/NarrowBandMedium.h"
 #include "macrofacet/transport/ConditionalMedium.h"
+#include "macrofacet/transport/GlobalConditionalRenewalPlusMedium.h"
+#include "macrofacet/transport/CollisionGradientSampler.h"
+#include "macrofacet/transport/FunctionSpaceGpisMedium.h"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 
 namespace {
 using Json = nlohmann::json;
 class LocalTestDensity final : public mf::ScalarField {
+    double value_;
 public:
-    double sample(const mf::Point3&) const override { return 8.0; }
-    mf::ScalarBounds bounds(const mf::Bounds3&) const override { return {8.0,8.0,true}; }
+    explicit LocalTestDensity(double value = 8.0) : value_(value) {}
+    double sample(const mf::Point3&) const override { return value_; }
+    mf::ScalarBounds bounds(const mf::Bounds3&) const override { return {value_,value_,true}; }
+};
+class LocalFirstTestMean final : public mf::MeanField {
+public:
+    const char* typeName() const override { return "local_first_test"; }
+    mf::MeanJet evaluate(const mf::Point3& p) const override { return {.25*p.z(),{0,0,.25}}; }
+    mf::BoundsSummary bounds(const mf::Bounds3& b) const override { return {.25*b.minimum.z(),.25,true}; }
+    std::optional<mf::Vector3> affineGradient() const override { return mf::Vector3(0,0,.25); }
 };
 Json constantModel(bool first) {
     Json weights = Json::object();
@@ -55,10 +70,310 @@ Json constantModel(bool first) {
     result["weights"] = weights; return result;
 }
 template<class F> bool rejects(F f) { try { f(); } catch (const std::exception&) { return true; } return false; }
+
+void testLocalFirstHit(TestContext& context) {
+    using namespace mf;
+    ExperimentConfig config;
+    config.transportMode = "hybrid_first_hit";
+    config.firstHit.method = "classic_local";
+    config.continuationMethod = kTungstenFunctionSpaceMethod;
+    config.continuationTungsten = {8,.15};
+    // The global mean gradient is shorter than one, so its valid area bound
+    // cannot be reused for the local tangent NDF at the first collision.
+    config.field = {std::make_shared<LocalFirstTestMean>(),
+        CovarianceKernel::fromCorrelationLengths(.1,Vector3::Ones()),
+        {Point3::Constant(-1),Point3::Constant(1)}};
+    config.material.gpModel = GpModel::GlobalPointwise;
+    config.mediumDensity = std::make_shared<LocalTestDensity>(.4);
+    config.densityMajorantGrid = std::make_shared<DensityMajorantGrid>(*config.mediumDensity,config.field.activeDomain,4);
+    config.preparedAreaMajorant = classicAreaMajorant(config.field,config.material,config.field.activeDomain,Vector3::UnitZ());
+    config.render.cameraPosition = Point3(0,0,4);
+    config.render.cameraTarget = Point3::Zero();
+    config.render.verticalFovDegrees = 20;
+    config.render.width = 4; config.render.height = 4; config.render.samplesPerPixel = 16;
+    config.render.threadCount = 1; config.render.safetyDepthCap = 2;
+    config.render.writeFirstHitSamples = true;
+    config.render.environment = "directional_gradient";
+    const auto environment = [](const Vector3& w) -> Spectrum {
+        const double up = .5*(normalizedOrThrow(w).z()+1);
+        return {0.15+0.85*up,0.2+0.7*up,0.35+0.55*up};
+    };
+    auto localMaterial = config.material;
+    localMaterial.gpModel = GpModel::LocalTangent;
+    const NarrowBandMedium first(config.field,localMaterial,config.mediumDensity,config.densityMajorantGrid);
+    const FunctionSpaceGpisMedium tail(config.field,config.continuationTungsten);
+    for (int rouletteStart : {100,1}) {
+        config.render.rouletteStartDepth = rouletteStart;
+        const auto image = renderAnalyticScene(config);
+        std::uint64_t firstHits = 0, tailFlights = 0, tailEscapes = 0;
+        for (std::size_t i=0; i<image.firstHitRecords.size(); ++i) {
+            const auto& record = image.firstHitRecords[i];
+            const auto& actual = record.first;
+            const auto pixel = i/config.render.samplesPerPixel, sample = i%config.render.samplesPerPixel;
+            Random event(firstHitStreamSeed(config.seed,pixel,sample,1));
+            Random gradient(firstHitStreamSeed(config.seed,pixel,sample,2));
+            Random continuation(firstHitStreamSeed(config.seed,pixel,sample,3));
+            const auto seed = continuation.integer();
+            context.require(seed==record.gpisSeed,"local first-hit leaves the GPIS random stream independent");
+            const auto& ray = record.cameraRay;
+            const auto interval = config.field.activeDomain.intersect(ray);
+            const Point3 entry = (ray.origin+interval.entry*ray.direction)
+                .cwiseMax(config.field.activeDomain.minimum).cwiseMin(config.field.activeDomain.maximum);
+            const auto kernel = first.beginFlight(first.startExternal(entry,ray.direction));
+            const auto expectedHit = first.sample(kernel,event,config.numeric);
+            context.require(actual.enteredDomain && actual.hit==expectedHit.collided && actual.initialSign==1,
+                "local first-hit reproduces the standalone local DDA collision law");
+            context.near(actual.entryDistance,interval.entry,0,"local first-hit separates the camera vacuum distance");
+            context.near(actual.distance,expectedHit.age,0,"local first-hit distance starts at the medium entry");
+            context.near((actual.position-(entry+expectedHit.age*ray.direction)).norm(),0,0,
+                "local first-hit reconstructs world positions from entry age");
+            if (!actual.hit) {
+                context.near((record.radiance-environment(ray.direction)).norm(),0,1e-14,
+                    "local first-hit escape returns the unweighted environment");
+                continue;
+            }
+            ++firstHits;
+            const Vector3 g = sampleCollisionGradient(kernel,expectedHit.age,gradient,config.numeric);
+            context.near((actual.gradient-g).norm(),0,0,
+                "local first-hit retains the full local flux-weighted gradient rather than a unit normal");
+            context.require(actual.fieldValue==0 && actual.observationPosition==actual.position &&
+                ray.direction.dot(g)<0,"local first-hit exports a downcrossing surface state");
+            Random phaseRng(firstHitStreamSeed(config.seed,pixel,sample,2));
+            const auto phase = ConductorPhase(config.field,localMaterial,actual.position,0,true).samplePhase(ray.direction,phaseRng);
+            const Vector3 outgoing = normalizedOrThrow(reflectTravelDirection(ray.direction,actual.normal));
+            context.near((outgoing-phase.direction).norm(),0,1e-13,
+                "local first-hit reflection matches the standalone local target VNDF");
+            context.require(outgoing.dot(g)>0,"local reflection leaves the positive side");
+            Spectrum weight = phase.throughputWeight;
+            TungstenRandom rng(seed);
+            if (rouletteStart==1) {
+                const double probability = std::clamp(weight.maxCoeff(),.05,.95);
+                if (rng.uniform01()>=probability) {
+                    context.near(record.radiance.norm(),0,0,"local first-hit roulette precedes GPIS continuation");
+                    continue;
+                }
+                weight /= probability;
+            }
+            ++tailFlights;
+            const auto draw = tail.sample({actual.position,outgoing},{TungstenSurfaceState{actual.position,0,g}},rng);
+            Spectrum expected = Spectrum::Zero();
+            if (draw.status==GpisFlightStatus::Escape) {
+                ++tailEscapes;
+                expected = weight.cwiseProduct(environment(outgoing));
+            }
+            context.near((record.radiance-expected).norm(),0,1e-13,
+                "local-to-GPIS handoff matches surface conditioning and a single local phase weight");
+        }
+        context.require(firstHits>0 && firstHits<image.statistics.paths && tailEscapes>0,
+            "local first-hit fixture covers collisions, camera escapes and GPIS escapes");
+        context.require(image.statistics.classicFirstHitFlights==image.statistics.firstHitFlights &&
+            image.statistics.classicFlights==image.statistics.classicFirstHitFlights &&
+            image.statistics.gpisContinuationFlights==tailFlights && image.statistics.gpisFlights==tailFlights &&
+            image.statistics.conditionalFlights==0,"local first-hit and GPIS continuation counters remain separate");
+        context.require(image.statistics.firstHitUpcrossings==0 && image.statistics.numericalFailures==0,
+            "local first-hit uses valid local bounds and only facing gradients");
+        config.render.threadCount = 3;
+        const auto parallel = renderAnalyticScene(config);
+        context.require(image.pixels==parallel.pixels &&
+            image.statistics.classicFirstHitFlights==parallel.statistics.classicFirstHitFlights,
+            "local first-hit pixels and diagnostics are independent of worker scheduling");
+        config.render.threadCount = 1;
+        auto otherTail = config;
+        otherTail.continuationMethod = "classic_local";
+        const auto other = renderAnalyticScene(otherTail);
+        context.require(other.statistics.classicFirstHitFlights==image.statistics.firstHitFlights &&
+            other.statistics.gpisFlights==0,"local/local diagnostics retain the first-flight count without GPIS work");
+        if (rouletteStart==100)
+            context.require(other.statistics.classicFlights==other.statistics.classicFirstHitFlights+firstHits,
+                "local/local diagnostics count each first and continuation flight");
+        for (std::size_t i=0; i<image.firstHitRecords.size(); ++i) {
+            const auto& a = image.firstHitRecords[i].first;
+            const auto& b = other.firstHitRecords[i].first;
+            context.require(a.hit==b.hit && a.distance==b.distance && a.gradient==b.gradient,
+                "local first-hit material and random samples do not depend on the continuation strategy");
+        }
+    }
+    Random missRng(19); RenderStatistics missStats;
+    const auto miss = traceCameraPath({Point3(3,0,4),Vector3::UnitZ()},config,missRng,missStats);
+    context.require(missStats.firstHitDomainMisses==1 && missStats.classicFlights==0 && missStats.gpisFlights==0,
+        "domain misses skip both local tracking and GPIS continuation");
+    context.near((miss-environment(Vector3::UnitZ())).norm(),0,0,"local first-hit domain miss returns environment");
+    config.firstHit.backend = "torch_cuda";
+    context.require(rejects([&] { prepareFirstHitModel(config); }),"local first-hit rejects non-scalar backends");
+    config.firstHit.backend = "scalar";
+    config.material.ndfFamily = NdfFamily::GGXBaseline;
+    context.require(rejects([&] { prepareFirstHitModel(config); }),"local first-hit needs a Gaussian full gradient");
+    config.material.ndfFamily = NdfFamily::GeneralizedGaussian;
+    config.material.alphaField = std::make_shared<LocalTestDensity>();
+    context.require(rejects([&] { prepareFirstHitModel(config); }),"local first-hit rejects alpha grids");
+}
+
+void testConditionalFirstHit(TestContext& context, double renewalDistance = 0.0) {
+    using namespace mf;
+    ExperimentConfig config;
+    config.transportMode = "hybrid_first_hit";
+    const bool renew = renewalDistance > 0.0;
+    config.firstHit.method = renew ? "global_conditional_renewal_plus" : "global_conditional";
+    if (renew) config.firstHit.renewalDistance = renewalDistance;
+    config.continuationMethod = kTungstenFunctionSpaceMethod;
+    config.continuationTungsten = {8,.15};
+    // A negative mean must not be treated as an invalid exterior: F is random.
+    config.field = {std::make_shared<ConstantMean>(-.03),
+        CovarianceKernel::fromCorrelationLengths(.1,Vector3::Ones()),
+        {Point3::Constant(-1),Point3::Constant(1)}};
+    config.material.ndfFamily = NdfFamily::GeneralizedGaussian;
+    config.render.cameraPosition = Point3(0,0,4);
+    config.render.cameraTarget = Point3::Zero();
+    config.render.verticalFovDegrees = 20;
+    config.render.width = 4; config.render.height = 4; config.render.samplesPerPixel = 16;
+    config.render.threadCount = 1; config.render.safetyDepthCap = 2;
+    config.render.writeFirstHitSamples = true;
+    config.render.environment = "directional_gradient";
+    const auto environment = [](const Vector3& w) -> Spectrum {
+        const double up = .5*(normalizedOrThrow(w).z()+1);
+        return {0.15+0.85*up,0.2+0.7*up,0.35+0.55*up};
+    };
+    const ConditionalMedium first(config.field);
+    const GlobalConditionalRenewalPlusMedium renewedFirst(config.field,renew ? renewalDistance : .1);
+    const FunctionSpaceGpisMedium tail(config.field,config.continuationTungsten);
+    for (int rouletteStart : {100,1}) {
+        config.render.rouletteStartDepth = rouletteStart;
+        const auto image = renderAnalyticScene(config);
+        std::uint64_t firstHits = 0, tailFlights = 0, tailEscapes = 0;
+        std::uint64_t expectedRenewalSegments = 0;
+        for (std::size_t i=0; i<image.firstHitRecords.size(); ++i) {
+            const auto& record = image.firstHitRecords[i];
+            const auto& actual = record.first;
+            const auto pixel = i/config.render.samplesPerPixel, sample = i%config.render.samplesPerPixel;
+            Random event(firstHitStreamSeed(config.seed,pixel,sample,1));
+            Random gradient(firstHitStreamSeed(config.seed,pixel,sample,2));
+            Random continuation(firstHitStreamSeed(config.seed,pixel,sample,3));
+            const auto seed = continuation.integer();
+            context.require(seed==record.gpisSeed,"conditional first-hit keeps the GPIS stream independent");
+            const auto& ray = record.cameraRay;
+            const auto interval = config.field.activeDomain.intersect(ray);
+            const Point3 entry = (ray.origin+interval.entry*ray.direction)
+                .cwiseMax(config.field.activeDomain.minimum).cwiseMin(config.field.activeDomain.maximum);
+            const auto birth = first.startExternal(entry,ray.direction,event);
+            context.require(birth.birthValue>0 && birth.birthGradient.allFinite(),
+                "conditional camera samples a positive total field even with a negative mean SDF");
+            const auto kernel = first.beginFlight(birth);
+            GlobalConditionalRenewalPlusSample expectedHit;
+            if (renew && renewalDistance < kernel.maximumAgeInDomain()) {
+                expectedHit = renewedFirst.sample(birth,event,nullptr,-1,&expectedRenewalSegments,
+                    config.numeric,&gradient);
+            } else {
+                // A single renewal interval must exactly reproduce the original
+                // conditional first hit, including its separate gradient stream.
+                const auto draw = first.sample(kernel,event);
+                expectedHit.collided = draw.collided;
+                expectedHit.age = draw.age;
+                if (draw.collided)
+                    expectedHit.gradient = sampleCollisionGradient(kernel,draw.age,gradient,config.numeric);
+                if (renew) ++expectedRenewalSegments;
+            }
+            context.require(actual.enteredDomain && actual.initialSign==1 && actual.hit==expectedHit.collided,
+                "conditional first-hit uses the ordinary positive-exterior collision law");
+            context.near(actual.entryDistance,interval.entry,0,"conditional first-hit separates the camera vacuum distance");
+            context.near(actual.distance,expectedHit.age,0,"conditional first-hit age starts at the medium entry");
+            context.near((actual.position-(entry+expectedHit.age*ray.direction)).norm(),0,0,
+                "conditional first-hit reconstructs world positions from entry age");
+            if (!actual.hit) {
+                context.near((record.radiance-environment(ray.direction)).norm(),0,1e-14,
+                    "positive-exterior escape is not multiplied by the prior probability of F>0");
+                continue;
+            }
+            ++firstHits;
+            const Vector3 g = expectedHit.gradient;
+            context.near((actual.gradient-g).norm(),0,0,
+                "first-hit gradient retains the conditional crossing flux and full magnitude");
+            context.require(actual.fieldValue==0 && actual.observationPosition==actual.position &&
+                ray.direction.dot(actual.gradient)<0,"conditional first-hit exports a downcrossing surface state");
+            const Vector3 outgoing = normalizedOrThrow(reflectTravelDirection(ray.direction,normalizedOrThrow(g)));
+            context.require(outgoing.dot(g)>0,"conditional reflection leaves the positive side");
+            Spectrum weight = conductorFresnel(-ray.direction.dot(normalizedOrThrow(g)),config.material.conductor);
+            TungstenRandom rng(seed);
+            if (rouletteStart==1) {
+                const double probability = std::clamp(weight.maxCoeff(),.05,.95);
+                if (rng.uniform01()>=probability) {
+                    context.near(record.radiance.norm(),0,0,"first-hit roulette terminates before GPIS continuation");
+                    continue;
+                }
+                weight /= probability;
+            }
+            ++tailFlights;
+            const auto draw = tail.sample({actual.position,outgoing},{TungstenSurfaceState{actual.position,0,g}},rng);
+            Spectrum expected = Spectrum::Zero();
+            if (draw.status==GpisFlightStatus::Escape) {
+                ++tailEscapes;
+                expected = weight.cwiseProduct(environment(outgoing));
+            }
+            context.near((record.radiance-expected).norm(),0,1e-13,
+                "conditional-to-GPIS handoff matches surface conditioning with one Fresnel factor");
+        }
+        context.require(firstHits>0 && firstHits<image.statistics.paths && tailEscapes>0,
+            "conditional first-hit fixture exercises both hits and escapes");
+        context.require(image.statistics.conditionalFirstHitFlights==image.statistics.firstHitFlights &&
+            image.statistics.conditionalFlights==image.statistics.conditionalFirstHitFlights &&
+            image.statistics.gpisContinuationFlights==tailFlights && image.statistics.gpisFlights==tailFlights,
+            "conditional first-hit and GPIS continuation counts remain separate");
+        context.require(image.statistics.firstHitUpcrossings==0 && image.statistics.numericalFailures==0,
+            "conditional first-hit is positive-side only and has no numerical failures");
+        context.require(image.statistics.conditionalFirstHitRenewalSegments==expectedRenewalSegments &&
+            image.statistics.conditionalRenewalSegments==expectedRenewalSegments,
+            "first-hit renewal counters match standalone segments and exclude GPIS flights");
+        if (renew && renewalDistance==.1)
+            context.require(expectedRenewalSegments>image.statistics.conditionalFirstHitFlights,
+                "renewal first-hit fixture advances through multiple positive endpoints");
+        config.render.threadCount = 3;
+        const auto parallel = renderAnalyticScene(config);
+        context.require(image.pixels==parallel.pixels &&
+            image.statistics.conditionalFirstHitFlights==parallel.statistics.conditionalFirstHitFlights &&
+            image.statistics.conditionalFirstHitRenewalSegments==parallel.statistics.conditionalFirstHitRenewalSegments,
+            "conditional first-hit pixels and diagnostics are independent of worker scheduling");
+        config.render.threadCount = 1;
+        auto otherTail = config;
+        otherTail.continuationMethod = "global_conditional";
+        otherTail.conditionalRenewalDistance = .037;
+        const auto other = renderAnalyticScene(otherTail);
+        for (std::size_t i=0; i<image.firstHitRecords.size(); ++i) {
+            const auto& a = image.firstHitRecords[i].first;
+            const auto& b = other.firstHitRecords[i].first;
+            context.require(a.hit==b.hit && a.distance==b.distance && a.gradient==b.gradient,
+                "changing continuation does not alter conditional first-hit samples");
+        }
+    }
+    Random missRng(19); RenderStatistics missStats;
+    const auto miss = traceCameraPath({Point3(3,0,4),Vector3::UnitZ()},config,missRng,missStats);
+    context.require(missStats.firstHitDomainMisses==1 && missStats.conditionalFlights==0 && missStats.gpisFlights==0,
+        "domain misses do not sample conditional births or GPIS flights");
+    context.near((miss-environment(Vector3::UnitZ())).norm(),0,0,"domain miss returns environment");
+    config.firstHit.backend = "torch_cuda";
+    context.require(rejects([&] { prepareFirstHitModel(config); }),"conditional first-hit rejects non-scalar inference backends");
+    config.firstHit.backend = "scalar";
+    config.material.alphaField = std::make_shared<LocalTestDensity>();
+    context.require(rejects([&] { prepareFirstHitModel(config); }),"conditional first-hit rejects alpha grids");
+    config.material.alphaField.reset();
+    if (renew) {
+        for (double invalid : {0.0,-.1,std::numeric_limits<double>::infinity(),
+                               std::numeric_limits<double>::quiet_NaN()}) {
+            auto bad = config;
+            bad.firstHit.renewalDistance = invalid;
+            context.require(rejects([&] { prepareFirstHitModel(bad); }),
+                "conditional first-hit renewal distance must be finite and positive");
+        }
+    }
+    config.field.kernel = CovarianceKernel::fromCorrelationLengths(CovarianceKernelType::Matern32,.1,Vector3::Ones());
+    context.require(rejects([&] { prepareFirstHitModel(config); }),"conditional first-hit rejects unsupported kernels");
+}
 }
 
 void testFirstHitRender(TestContext& context) {
     using namespace mf;
+    testLocalFirstHit(context);
+    testConditionalFirstHit(context);
+    testConditionalFirstHit(context,.1);
+    testConditionalFirstHit(context,10.0);
     const auto path = std::filesystem::temp_directory_path()/"macrofacet_first_hit_render_fixture.json";
     { std::ofstream f(path); f << constantModel(true); }
     const auto model = std::make_shared<const FirstHitSEModel>(FirstHitSEModel::load(path));

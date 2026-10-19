@@ -86,10 +86,14 @@ void writeFirstHitDiagnostics(const mf::ExperimentConfig& config, const mf::Rend
         {"first_hits",s.firstHits},{"first_hit_escapes",s.firstHitEscapes},
         {"domain_misses",s.firstHitDomainMisses},{"upcrossings",s.firstHitUpcrossings},
         {"real_collisions",s.realCollisions},
-        {"continuation_flights",config.continuationMethod == "classic_local" ? s.classicFlights :
-            (config.continuationMethod == "global_conditional" || config.continuationMethod == "global_conditional_renewal_plus") ? s.conditionalFlights :
+        {"continuation_flights",config.continuationMethod == "classic_local" ? s.classicFlights-s.classicFirstHitFlights :
+            (config.continuationMethod == "global_conditional" || config.continuationMethod == "global_conditional_renewal_plus")
+                ? s.conditionalFlights-s.conditionalFirstHitFlights :
             config.continuationMethod == mf::kTungstenFunctionSpaceMethod ? s.gpisContinuationFlights : s.renewal.flights},
+        {"classic_flights",s.classicFlights},{"classic_first_hit_flights",s.classicFirstHitFlights},
         {"conditional_flights",s.conditionalFlights},
+        {"conditional_first_hit_flights",s.conditionalFirstHitFlights},
+        {"conditional_first_hit_renewal_segments",s.conditionalFirstHitRenewalSegments},
         {"global_conditional_renewal_plus_segments",s.conditionalRenewalSegments},
         {"gpis_flights",s.gpisFlights},{"gpis_continuation_flights",s.gpisContinuationFlights},
         {"gpis_batches",s.gpisBatches},{"gpis_points",s.gpisPoints},
@@ -99,8 +103,22 @@ void writeFirstHitDiagnostics(const mf::ExperimentConfig& config, const mf::Rend
         {"mean_path_depth",s.paths ? s.accumulatedPathDepth/s.paths : 0},
         {"distance_convention","distance from activeDomain entry"},
         {"rng_stream","first_hit_split_v1"}};
-    if (config.firstHit.method==mf::kTungstenFunctionSpaceMethod || config.continuationMethod==mf::kTungstenFunctionSpaceMethod)
+    if (config.firstHit.method==mf::kTungstenFunctionSpaceMethod)
         summary["rng_stream"]="tungsten_pcg_v1";
+    else if (config.continuationMethod==mf::kTungstenFunctionSpaceMethod)
+        summary["rng_stream"]="first_hit_split_v1 with Tungsten tail: seed=continuation_rng.integer()";
+    if (config.firstHit.method=="global_conditional" || config.firstHit.method=="global_conditional_renewal_plus") {
+        summary["first_hit_birth_policy"]="sampled_positive_exterior";
+        summary.erase("first_hit_batch_size");
+    }
+    if (config.firstHit.method=="global_conditional_renewal_plus")
+        summary["first_hit_renewal_distance"]=config.firstHit.renewalDistance;
+    if (config.firstHit.method=="classic_local") {
+        summary["first_hit_birth_policy"]="exterior_without_gp_observation";
+        summary["first_hit_gp_model"]="local_tangent";
+        summary["first_hit_phase_proposal"]="target_vndf";
+        summary.erase("first_hit_batch_size");
+    }
     std::ofstream output(config.outputDirectory/"hybrid_summary.json");
     if (!output) throw std::runtime_error("cannot write hybrid summary");
     output << std::setw(2) << summary << '\n';

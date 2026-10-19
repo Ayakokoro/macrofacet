@@ -1,0 +1,24 @@
+<style>@@CSS@@</style>
+<section id="interactive-report" aria-label="可交互曲线比较">
+  <div class="ir-heading"><div><span class="ir-eyebrow">相机首段 · 交互对比</span><h2>挑选曲线，查看差异最大的射线</h2></div><a href="#static-results">静态图与完整统计 ↓</a></div>
+  <p class="ir-intro">勾选要显示的方法，所有交互图同步更新。重点展示按所选 local、global_conditional、plus 之间的实际差值排序；GPIS 可叠加作参考，不参与这里的排名。</p>
+  <div class="ir-controls">
+    <div class="ir-control-title">显示曲线 <span id="ir-selection-count"></span></div>
+    <div id="ir-methods" class="ir-methods" role="group" aria-label="显示哪些方法"></div>
+    <div class="ir-presets"><button type="button" data-preset="default">local + GC + plus 0.1</button><button type="button" data-preset="plus001">local + GC + plus 0.01</button><button type="button" data-preset="plus">local + GC + 全部 plus</button><button type="button" data-preset="all">全部方法</button><button type="button" data-preset="none">清空</button></div>
+    <div class="ir-settings"><label>差值图基准 <select id="ir-baseline"></select></label><label>梯度分量 <select id="ir-component"></select></label><label>梯度排名范围 <select id="ir-scope"><option value="windows">相同的早 / 中 / 晚窗口</option><option value="all">所有接受的首次碰撞</option></select></label></div>
+    <p class="ir-help">在图中拖动可放大横轴，双击恢复全范围；移动鼠标查看各条曲线数值。差值图单位为百分点，基准不必勾选。排名使用完整样本，图中的连线仅用于显示。</p>
+  </div>
+  <div class="ir-heading"><h3>透射率差异较大的射线</h3><span>每条射线取所选方法之间最大的 |ΔT|，展示前 3 条</span></div>
+  <div id="ir-top-transmittance" class="ir-cards"></div>
+  <div class="ir-heading"><h3>梯度分布差异较大的曲线</h3><span id="ir-gradient-caption"></span></div>
+  <div id="ir-top-gradient" class="ir-cards"></div>
+  <p class="ir-help">梯度排名只使用两组均至少 512 个命中的窗口。这里按当前样本挑选差异较大的案例，用于定位现象，不是独立显著性验证；有限距离窗口也不等同于精确固定空间点。</p>
+  <div class="ir-heading"><h3>逐条查看</h3><span>可查看全部射线与梯度窗口</span></div>
+  <div class="ir-settings"><label>相机射线 <select id="ir-ray"></select></label><label>梯度距离窗口 <select id="ir-window"><option value="early">早碰撞</option><option value="middle" selected>中段碰撞</option><option value="late">晚碰撞</option><option value="all">所有接受的首次碰撞</option></select></label></div>
+  <div class="ir-explorer"><div id="ir-explore-t"></div><div id="ir-explore-g"></div></div>
+  <p class="ir-help">透射率从介质入口计算；上穿拒绝计作交叉事件，梯度只统计接受的下穿。<a href="pairwise_differences.json">下载完整两两差异与最大差所在位置</a>。</p>
+  <noscript><p>交互曲线需要浏览器启用 JavaScript。下面仍可查看静态图与全部统计。</p></noscript>
+</section>
+<script id="ir-data" type="application/json">@@DATA@@</script>
+<script>@@JS@@</script>

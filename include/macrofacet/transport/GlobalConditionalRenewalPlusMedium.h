@@ -19,9 +19,12 @@ public:
     GlobalConditionalRenewalPlusMedium(const GPSSField& field,
                                       double renewalDistance = 0.01);
     FlightState startExternal(const Point3& entry, const Vector3& direction, Random& rng) const;
+    // Hybrid first hits can draw the final collision gradient from a separate
+    // stream. Birth, tracking and positive endpoint renewals still use rng.
     GlobalConditionalRenewalPlusSample sample(const FlightState& birth, Random& rng,
         DdaTrackingDiagnostics* diagnostics = nullptr, double maximumDistance = -1.0,
-        std::uint64_t* renewalSegments = nullptr, const NumericPolicy& numeric = {}) const;
+        std::uint64_t* renewalSegments = nullptr, const NumericPolicy& numeric = {},
+        Random* collisionGradientRng = nullptr) const;
 private:
     const GPSSField& field_;
     double renewalDistance_;

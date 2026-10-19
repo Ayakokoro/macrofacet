@@ -119,12 +119,23 @@ choice renders three comparable modes. The CLI also accepts `--mode`.
 
 `hybrid_first_hit` separates the camera first hit from later flights.
 `transport.first_hit.method` accepts `gpis_function_space`, `neural_first_hit_se`,
-or `gpis_function_space_tungsten`;
+`classic_local`, `global_conditional`, `global_conditional_renewal_plus`, or `gpis_function_space_tungsten`;
 `transport.continuation.method` accepts `classic_local`, `neural_renewal`,
 `global_conditional`, `global_conditional_renewal_plus`, or `gpis_function_space_tungsten`. Continuation requires `backend="scalar"`.
 First hit additionally accepts `torch_cpu` and `torch_cuda` for a
 `macrofacet.causal_first_hit` residual GRU bundle, using `batch_size` in [1,65536]
 (default 1024). Other first-hit models and reference samplers require `scalar`.
+For a `global_conditional_renewal_plus` first hit, set
+`transport.first_hit.renewal_distance` (positive finite world distance, default 0.01).
+This setting is independent of both continuation and the shared
+`transport.global_conditional_renewal_plus` block. The camera starts with a sampled
+positive exterior value; collision-free intervals renew the value and full gradient
+from the positive endpoint law. The first collision passes `F=0` and the full gradient
+to the selected continuation. See the [0.1 first-hit / GPIS example](../configs/render_first_hit_renewal_plus_gpis_shader_ball_sigma002.json).
+Analytic local and conditional first hits use direct field queries and require scalar
+Gaussian materials without alpha grids; conditional first hits also require the SE kernel.
+They reject `model`, `sampler`, `profile_maximum_step`, and `batch_size` in `first_hit`.
+Use `renewal_distance`, not `step_size`, for conditional renewal+.
 The causal model's recurrent step is fixed by its checkpoint; `profile_maximum_step`
 does not change that grid. See [causal first-hit rendering](FIRST_HIT_CAUSAL_RENDER_SIGMA002.md).
 Global conditional

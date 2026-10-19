@@ -222,17 +222,114 @@ Spectrum traceGpisFlights(Ray ray, TungstenSurfaceState birth, Spectrum throughp
 class HybridFirstHitTransport {
     const ExperimentConfig& config_;
     GPSSField negativeField_;
+    MaterialConfig localFirstMaterial_;
     std::unique_ptr<FirstHitSEMedium> first_;
     std::unique_ptr<FunctionSpaceGpisMedium> tungstenFirst_, tungstenTail_;
     std::unique_ptr<RenewalMedium> positive_, negative_;
     std::unique_ptr<NarrowBandMedium> local_;
+    std::unique_ptr<NarrowBandMedium> localFirst_;
+    std::unique_ptr<ConditionalMedium> conditionalFirst_;
+    std::unique_ptr<GlobalConditionalRenewalPlusMedium> conditionalRenewalFirst_;
     std::unique_ptr<ConditionalMedium> conditionalPositive_, conditionalNegative_;
     std::unique_ptr<GlobalConditionalRenewalPlusMedium> conditionalRenewalPositive_, conditionalRenewalNegative_;
+
+    FirstHitSESurfaceSample sampleLocalFirst(const Ray& ray, Random& eventRng,
+        Random& gradientRng, RenderStatistics& statistics) const {
+        FirstHitSESurfaceSample hit;
+        const auto interval = config_.field.activeDomain.intersect(ray);
+        if (!interval.hit || !(interval.exit > interval.entry)) return hit;
+        hit.enteredDomain = true;
+        hit.entryDistance = interval.entry;
+        hit.entry = (ray.origin + interval.entry*ray.direction)
+            .cwiseMax(config_.field.activeDomain.minimum).cwiseMin(config_.field.activeDomain.maximum);
+        const auto kernel = localFirst_->beginFlight(localFirst_->startExternal(hit.entry,ray.direction));
+        hit.maximumDistance = kernel.maximumAgeInDomain();
+        ++statistics.classicFlights;
+        ++statistics.classicFirstHitFlights;
+        const auto sample = localFirst_->sample(kernel,eventRng,config_.numeric,&statistics.tracking);
+        hit.hit = sample.collided;
+        hit.distance = sample.age;
+        const double ell = 1/std::sqrt(ray.direction.dot(config_.field.kernel.precision()*ray.direction));
+        hit.q = hit.distance/ell;
+        hit.position = hit.entry + hit.distance*ray.direction;
+        hit.observationPosition = hit.position;
+        if (hit.hit) {
+            // Exact local target VNDF, retaining the full gradient required by
+            // the GPIS surface birth. The common path applies Fresnel once.
+            hit.gradient = sampleCollisionGradient(kernel,hit.distance,gradientRng,config_.numeric);
+            hit.normal = normalizedOrThrow(hit.gradient);
+            hit.speed = -hit.gradient.dot(ray.direction)*ell/config_.field.kernel.sigma();
+        }
+        // This is a local extinction event, with no sampled exterior GP state.
+        // The hybrid surface handoff assigns F=0 and the original field side.
+        return hit;
+    }
+
+    FirstHitSESurfaceSample sampleConditionalFirst(const Ray& ray, Random& eventRng,
+        Random& gradientRng, RenderStatistics& statistics) const {
+        FirstHitSESurfaceSample hit;
+        const auto interval = config_.field.activeDomain.intersect(ray);
+        if (!interval.hit || !(interval.exit > interval.entry)) return hit;
+        hit.enteredDomain = true;
+        hit.entryDistance = interval.entry;
+        hit.entry = (ray.origin + interval.entry*ray.direction)
+            .cwiseMax(config_.field.activeDomain.minimum).cwiseMin(config_.field.activeDomain.maximum);
+        // Match the ordinary global_conditional camera birth, including the
+        // sampled positive total field and full (unnormalized) prior gradient.
+        const auto birth = conditionalFirst_->startExternal(hit.entry,ray.direction,eventRng);
+        const auto kernel = conditionalFirst_->beginFlight(birth);
+        hit.maximumDistance = kernel.maximumAgeInDomain();
+        ++statistics.conditionalFlights;
+        ++statistics.conditionalFirstHitFlights;
+        if (conditionalRenewalFirst_) {
+            std::uint64_t segments = 0;
+            const auto sample = conditionalRenewalFirst_->sample(birth,eventRng,&statistics.tracking,
+                hit.maximumDistance,&segments,config_.numeric,&gradientRng);
+            hit.hit = sample.collided;
+            hit.distance = sample.age;
+            hit.gradient = sample.gradient;
+            statistics.conditionalFirstHitRenewalSegments += segments;
+            statistics.conditionalRenewalSegments += segments;
+        } else {
+            const auto sample = conditionalFirst_->sample(kernel,eventRng,&statistics.tracking);
+            hit.hit = sample.collided;
+            hit.distance = sample.age;
+            if (hit.hit)
+                hit.gradient = sampleCollisionGradient(kernel,hit.distance,gradientRng,config_.numeric);
+        }
+        const double ell = 1/std::sqrt(ray.direction.dot(config_.field.kernel.precision()*ray.direction));
+        hit.q = hit.distance/ell;
+        hit.position = hit.entry + hit.distance*ray.direction;
+        hit.observationPosition = hit.position;
+        if (hit.hit) {
+            hit.normal = normalizedOrThrow(hit.gradient);
+            hit.speed = -hit.gradient.dot(ray.direction)*ell/config_.field.kernel.sigma();
+        }
+        // initialSign=+1 and fieldValue=0 describe the accepted downcrossing.
+        // No Phi(mean/sigma) weight: the camera birth is conditioned on F>0.
+        return hit;
+    }
 public:
     explicit HybridFirstHitTransport(const ExperimentConfig& config)
-        : config_(config), negativeField_(firstHitSideField(config.field,-1)) {
+        : config_(config), negativeField_(firstHitSideField(config.field,-1)),
+          localFirstMaterial_(config.material) {
         if (config.firstHit.method==kTungstenFunctionSpaceMethod)
             tungstenFirst_=std::make_unique<FunctionSpaceGpisMedium>(config.field,config.firstHit.tungsten);
+        else if (config.firstHit.method=="global_conditional" ||
+                 config.firstHit.method=="global_conditional_renewal_plus") {
+            conditionalFirst_=std::make_unique<ConditionalMedium>(config.field);
+            if (config.firstHit.method=="global_conditional_renewal_plus")
+                conditionalRenewalFirst_=std::make_unique<GlobalConditionalRenewalPlusMedium>(
+                    config.field,config.firstHit.renewalDistance);
+        }
+        else if (config.firstHit.method=="classic_local") {
+            localFirstMaterial_.gpModel = GpModel::LocalTangent;
+            // A global projected-area bound can underestimate the local NDF,
+            // whose mean gradient has unit length. Recompute when models differ.
+            localFirst_ = std::make_unique<NarrowBandMedium>(config.field,localFirstMaterial_,
+                config.mediumDensity,config.densityMajorantGrid,
+                config.material.gpModel==GpModel::LocalTangent ? config.preparedAreaMajorant : std::nullopt);
+        }
         else first_=std::make_unique<FirstHitSEMedium>(config.field,config.firstHit.model,
             config.firstHit.profileMaximumStep,config.firstHit.reference);
         if (config.continuationMethod == "classic_local") {
@@ -287,7 +384,9 @@ public:
             if (hit.hit) hit.normal=normalizedOrThrow(hit.gradient);
             if (sample.status==GpisFlightStatus::RejectedUpcrossing) ++statistics.firstHitUpcrossings;
         } else {
-            if (preparedFirst) hit=*preparedFirst;
+            if (localFirst_) hit=sampleLocalFirst(ray,eventRng,gradientRng,statistics);
+            else if (conditionalFirst_) hit=sampleConditionalFirst(ray,eventRng,gradientRng,statistics);
+            else if (preparedFirst) hit=*preparedFirst;
             else {
                 const auto flight=first_->beginFlight(ray);
                 if (flight) hit=first_->sample(*flight,eventRng,gradientRng,config_.numeric.distanceAbsoluteTolerance);

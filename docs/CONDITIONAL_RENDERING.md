@@ -12,6 +12,12 @@ render, or `transport.continuation.renewal_distance` with continuation method
 The continuation value overrides the shared setting. `local_conditional` and
 its configuration block are removed; they are not compatibility aliases.
 
+In `hybrid_first_hit`, the camera stage also accepts
+`first_hit.method="global_conditional_renewal_plus"` with its own
+`first_hit.renewal_distance` (default `0.01`). It is independent of the shared
+and continuation settings. See the [first-hit 0.1 / GPIS continuation config](../configs/render_first_hit_renewal_plus_gpis_shader_ball_sigma002.json).
+First-hit distances accumulate from the medium entry, excluding the camera vacuum.
+
 Each segment starts with a sampled value `f` and full, unnormalized world
 gradient `g`. Conditioning uses the residuals `f-m(x)` and `g-grad(m)(x)`.
 Queries throughout the segment evaluate the original global mean and gradient

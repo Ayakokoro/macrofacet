@@ -204,3 +204,137 @@ macrofacet 渲染器；不宣称相同 seed 下整张图与 Tungsten 逐像素�
 gpis_batches、gpis_points、gpis_rejected_upcrossings、gpis_invalid_gradients。
 可选 first-hit CSV 追加 failed、field_value、observation_x/y/z 和 gpis_seed。
 上穿拒绝计入独立计数，不计为 numerical_failures。
+
+## Global conditional 首段，GPIS 后续段（2026-10-17）
+
+`hybrid_first_hit` 支持 `first_hit.method="global_conditional"`，可与
+`continuation.method="gpis_function_space_tungsten"` 组合。完整示例：
+[σ=0.02 配置](../configs/render_first_hit_global_conditional_gpis_shader_ball_sigma002.json)。
+
+```json
+"transport": {
+  "mode": "hybrid_first_hit",
+  "first_hit": {"method": "global_conditional", "backend": "scalar"},
+  "continuation": {
+    "method": "gpis_function_space_tungsten",
+    "backend": "scalar",
+    "sampler": {"sample_points": 8, "step_size": 0.01, "correlation_context": "renewal+"}
+  },
+  "roulette_start_depth": 8
+}
+```
+
+首段复用 `startConditionalExterior`：在真实介质入口采样
+`F ~ N(m, sigma²) | F>0`，以及独立的完整 SE 先验梯度；正值条件施加于随机总场，
+并非要求 VDB 均值 `m>0`。随后固定这份入口观测，以原 `ConditionalMedium` 的
+解析条件消光率和分段 delta tracking 采样首碰。距离从介质入口起算，不含相机到入口的真空段。
+这里没有启用 `global_conditional_renewal_plus` 的途中观测刷新。
+
+这是条件于正侧入口的传输，入口权重为 1，不另乘 `Phi(m/sigma)`；它与现有
+无条件、保留正负入口的 first-hit 教师不同，也不同于 Tungsten 未条件化的首批采样。
+首段直接查询均值场，不使用训练模型、三次剖面或 GPIS 的采样步长。
+要求 scalar、SE 核、generalized_gaussian、禁用 alpha grid；首段配置中不接受
+`model`、`sampler`、`profile_maximum_step` 或 `batch_size`。
+
+命中时用 `sampleCollisionGradient` 采样通量加权的条件完整梯度，只做一次反射与 Fresnel。
+传给 GPIS 的状态为碰撞观测位置、`F=0` 和未归一化完整梯度；后续从 surface-born
+renewal+ 开始，不再抽取入口或首碰法线。GPIS 查询仍遵循其 float 射线约定，
+条件观测位置保留 double。它只保留出生点条件，不恢复相机段的完整 GP 历史。
+
+首段入口与 delta tracking 使用 event 随机流，碰撞梯度使用 gradient 随机流，
+GPIS 的 PCG 种子来自 continuation 随机流；更换后续方法不改变首段样本。
+`hybrid_summary.json` 中 `conditional_first_hit_flights` 单独统计进入域的 conditional 首段；
+`conditional_flights` 是全部 conditional 航段，`continuation_flights` 不含首段。
+
+```powershell
+.\build\Release\macrofacet_experiments.exe render --config configs/render_first_hit_global_conditional_gpis_shader_ball_sigma002.json
+```
+
+## Local 首段，GPIS 后续段（2026-10-17）
+
+`hybrid_first_hit` 支持 `first_hit.method="classic_local"`，完整示例：
+[σ=0.02 配置](../configs/render_first_hit_local_gpis_shader_ball_sigma002.json)。
+相机、VDB、粗糙度和后续 GPIS 参数与上面的 global_conditional 首段配置相同。
+
+```json
+"transport": {
+  "mode": "hybrid_first_hit",
+  "first_hit": {"method": "classic_local", "backend": "scalar"},
+  "continuation": {
+    "method": "gpis_function_space_tungsten",
+    "backend": "scalar",
+    "sampler": {"sample_points": 8, "step_size": 0.01, "correlation_context": "renewal+"}
+  },
+  "roulette_start_depth": 8
+}
+```
+
+首段使用现有 `NarrowBandMedium` 的场景烘焙密度和 DDA delta tracking，距离从介质入口起算。
+其材质固定为 `local_tangent`：非零均值梯度归一化，梯度协方差沿用配置的粗糙度。
+首段独立持有 local 材质及其 projected-area majorant，后续的 `global_pointwise` 设置不会改变它。
+这里不抽取入口 GP 值和梯度，也不施加入口 `F>0` 条件。
+
+命中后从 local 材质的通量加权完整高斯梯度分布采样，相当于直接采样 local target VNDF。
+首碰固定采用这个精确 proposal，`transport.classic_phase_proposal` 仍只控制 classic 后续段。
+反射和 Fresnel 仅计算一次，无额外法线 PDF 权重。GPIS 接收碰撞位置、`F=0` 和未归一化的
+完整 local 梯度，再按现有 surface-born renewal+ 算法处理后续段。这是 local 首碰与 GPIS
+后续的混合模型；首段没有生成 GPIS 随机场历史，后续也不会恢复该历史。
+
+首段要求 scalar、generalized_gaussian、禁用 alpha grid；不接受 `model`、`sampler`、
+`profile_maximum_step` 或 `batch_size`。`profile_mode` 如显式配置，必须是 `local_direct`。
+GPIS 后续段仍要求 SE 核。event、gradient、continuation 随机流分别用于首碰距离、首碰梯度、
+后续采样，切换后续策略不会改变首碰样本。
+`hybrid_summary.json` 的 `classic_first_hit_flights` 单独统计 local 首段；
+`classic_flights` 包含全部 classic 航段，`continuation_flights` 不含首段。
+
+```powershell
+.\build\Release\macrofacet_experiments.exe render --config configs/render_first_hit_local_gpis_shader_ball_sigma002.json
+```
+
+## Conditional renewal+ 首段 0.1，GPIS 后续段（2026-10-18）
+
+[完整配置](../configs/render_first_hit_renewal_plus_gpis_shader_ball_sigma002.json) 沿用上面的
+sigma=0.02 VDB、相机、粗糙度、512×512 / 128 spp 和 GPIS 后续段设置：
+
+```json
+"transport": {
+  "mode": "hybrid_first_hit",
+  "first_hit": {
+    "method": "global_conditional_renewal_plus",
+    "backend": "scalar",
+    "renewal_distance": 0.1
+  },
+  "continuation": {
+    "method": "gpis_function_space_tungsten",
+    "backend": "scalar",
+    "sampler": {
+      "sample_points": 8, "step_size": 0.01, "correlation_context": "renewal+",
+      "intersect_method": "gp_discrete", "normal_method": "conditioned_gaussian", "skip_space": 0.0
+    }
+  },
+  "roulette_start_depth": 8
+}
+```
+
+`first_hit.renewal_distance` 是世界距离，默认 0.01，必须有限且大于零；
+独立于 `transport.global_conditional_renewal_plus` 和 `continuation` 的参数。
+首段的 `step_size` 会报错，避免与 GPIS 的采样点间距混淆。
+
+相机从介质入口采样正的总场值和完整先验梯度，每个区间内复用 conditional delta tracking。
+区间末端未碰撞且仍需前进时，从 `p(F,G | 当前起点观测, F>0)` 联合采样端点，
+携带值与完整梯度到下一区间。总距离从原介质入口累计，最后一个区间按剩余长度截短。
+这仍是只保留最近观测的正端点近似，没有条件化整段连续未碰撞事件。
+
+命中后把碰撞位置、`F=0` 和未归一化完整梯度交给 GPIS，沿用已有的一次反射、Fresnel、
+俄罗斯轮盘和 surface-born 条件化。入口、距离和正端点采样使用 event 随机流；
+真实碰撞梯度使用独立 gradient 随机流，GPIS 种子来自 continuation 随机流。
+当更新距离覆盖整条首段时，首碰与 `global_conditional` 的样本和权重一致。
+
+`hybrid_summary.json` 的 `first_hit_renewal_distance` 记录实际设置，
+`conditional_first_hit_renewal_segments` 单独统计首段区间数；
+`global_conditional_renewal_plus_segments` 统计首段与后续段的总区间数。
+首段要求 scalar、SE 核、generalized_gaussian、禁用 alpha grid；不加载神经网络或三次剖面。
+
+```powershell
+.\build\Release\macrofacet_experiments.exe render --config configs/render_first_hit_renewal_plus_gpis_shader_ball_sigma002.json
+```

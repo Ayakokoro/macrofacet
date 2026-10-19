@@ -24,7 +24,8 @@ FlightState GlobalConditionalRenewalPlusMedium::startExternal(const Point3& entr
 
 GlobalConditionalRenewalPlusSample GlobalConditionalRenewalPlusMedium::sample(
     const FlightState& birth, Random& rng, DdaTrackingDiagnostics* diagnostics,
-    double maximumDistance, std::uint64_t* renewalSegments, const NumericPolicy& numeric) const {
+    double maximumDistance, std::uint64_t* renewalSegments, const NumericPolicy& numeric,
+    Random* collisionGradientRng) const {
     if (birth.age != 0.0 || !std::isfinite(maximumDistance) ||
         !birth.birthPosition.allFinite() || !birth.birthGradient.allFinite() ||
         !(birth.birthValue >= 0.0) || !std::isfinite(birth.birthValue) ||
@@ -48,7 +49,8 @@ GlobalConditionalRenewalPlusSample GlobalConditionalRenewalPlusMedium::sample(
         if (renewalSegments) ++*renewalSegments;
         const auto hit = medium.sample(flight,rng,diagnostics,length);
         if (hit.collided)
-            return {true,age+hit.age,sampleCollisionGradient(flight,hit.age,rng,numeric)};
+            return {true,age+hit.age,sampleCollisionGradient(flight,hit.age,
+                collisionGradientRng ? *collisionGradientRng : rng,numeric)};
         if (length == end-age) return {false,end,Vector3::Zero()};
         // Endpoint-positive closure, not conditioning on the full survival
         // event. Sample F and G jointly, retain the full world gradient, and

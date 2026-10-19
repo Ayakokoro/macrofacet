@@ -788,9 +788,11 @@ python python/first_hit_se_cli.py camera-study --config python/configs/first_hit
 ## 首次碰撞混合渲染（CPU 标量，2026-10-14）
 
 `transport.mode=hybrid_first_hit` 将相机首次段与后续段分开。`first_hit.method` 可选
-`neural_first_hit_se` 或 `gpis_function_space`；`continuation.method` 当前支持
-`neural_renewal`、`classic_local` 或 `global_conditional`。首次段和续段后端都要求 `scalar`，不接受 `auto` 或 GPU 静默回退。
-首次段使用 cubic 均值剖面，RNO 内部步长从导出模型读取；后续 renewal 的
+`neural_first_hit_se`、`gpis_function_space`、`gpis_function_space_tungsten`、`classic_local`、
+`global_conditional` 或 `global_conditional_renewal_plus`；`continuation.method` 支持
+`neural_renewal`、`classic_local`、`global_conditional`、`global_conditional_renewal_plus` 或 `gpis_function_space_tungsten`。
+解析首段和续段后端要求 `scalar`；causal GRU 首段另支持 Torch 批量后端，见[接入说明](FIRST_HIT_CAUSAL_RENDER_SIGMA002.md)。
+RNO 和旧 `gpis_function_space` 首段使用 cubic 均值剖面，RNO 内部步长从导出模型读取；后续 renewal 的
 `profile_mode` 独立配置，可使用 `point_linear`。
 
 直接可用的场景配置：
@@ -801,6 +803,8 @@ python python/first_hit_se_cli.py camera-study --config python/configs/first_hit
 - [GPIS 首次段 + classic local](../configs/render_first_hit_gpis_local_shader_ball_sigma005.json)
 
 这四份配置保持原 sigma=0.05 VDB、相机、512×512 分辨率和 128 spp。
+另有 [renewal_plus 首段 0.1 + GPIS 后续段](../configs/render_first_hit_renewal_plus_gpis_shader_ball_sigma002.json)，
+使用 sigma=0.02 场景；`first_hit.renewal_distance` 独立控制首段更新间隔，后续 GPIS 的 `sampler.step_size` 为 0.01。
 CPU 验证可以通过 CLI 缩小渲染预算：
 
 ```powershell

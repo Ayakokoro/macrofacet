@@ -208,6 +208,27 @@ void prepareRenewalModel(ExperimentConfig& config) {
 
 void prepareFirstHitModel(ExperimentConfig& config) {
     if (config.transportMode != "hybrid_first_hit") return;
+    if (config.firstHit.method == "classic_local") {
+        if (config.firstHit.backend != "scalar" || config.material.ndfFamily != NdfFamily::GeneralizedGaussian ||
+            config.material.alphaField)
+            throw std::invalid_argument("classic_local first-hit requires scalar generalized_gaussian without alpha grid");
+        config.firstHit.model.reset();
+        config.firstHit.profileMode = "local_direct";
+        return;
+    }
+    if (config.firstHit.method == "global_conditional" ||
+        config.firstHit.method == "global_conditional_renewal_plus") {
+        if (config.firstHit.backend != "scalar" || config.material.ndfFamily != NdfFamily::GeneralizedGaussian ||
+            config.material.alphaField)
+            throw std::invalid_argument(config.firstHit.method + " first-hit requires scalar generalized_gaussian without alpha grid");
+        if (!config.field.kernel.supportsAnalyticConditionalTransport())
+            throw std::invalid_argument(config.firstHit.method + " first-hit requires a squared_exponential kernel");
+        if (config.firstHit.method == "global_conditional_renewal_plus")
+            (void)GlobalConditionalRenewalPlusMedium(config.field,config.firstHit.renewalDistance);
+        config.firstHit.model.reset();
+        config.firstHit.profileMode = "conditional_direct";
+        return;
+    }
     if (config.firstHit.method == kTungstenFunctionSpaceMethod) {
         if (config.firstHit.backend!="scalar" || config.material.ndfFamily!=NdfFamily::GeneralizedGaussian ||
             config.material.alphaField) throw std::invalid_argument("Tungsten first-hit requires scalar generalized_gaussian without alpha grid");
@@ -425,13 +446,19 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         config.firstHit.method = first.at("method").get<std::string>();
         config.firstHit.modelPath = first.value("model", "");
         const bool tungstenFirst = config.firstHit.method == kTungstenFunctionSpaceMethod;
-        config.firstHit.profileMode = first.value("profile_mode", tungstenFirst ? "tungsten_direct" : "cubic");
+        const bool conditionalRenewalFirst = config.firstHit.method == "global_conditional_renewal_plus";
+        const bool conditionalFirst = config.firstHit.method == "global_conditional" || conditionalRenewalFirst;
+        const bool localFirst = config.firstHit.method == "classic_local";
+        const std::string profileMode = tungstenFirst ? "tungsten_direct" : conditionalFirst ? "conditional_direct" :
+            localFirst ? "local_direct" : "cubic";
+        config.firstHit.profileMode = first.value("profile_mode", profileMode);
         config.firstHit.profileMaximumStep = first.value("profile_maximum_step", 0.25);
         config.firstHit.backend = first.value("backend", "scalar");
         config.firstHit.batchSize = first.value("batch_size",1024);
-        if (config.firstHit.method != "neural_first_hit_se" && config.firstHit.method != "gpis_function_space" && !tungstenFirst)
+        if (config.firstHit.method != "neural_first_hit_se" && config.firstHit.method != "gpis_function_space" &&
+            !tungstenFirst && !conditionalFirst && !localFirst)
             throw std::invalid_argument("unknown transport.first_hit.method");
-        if (config.firstHit.profileMode != (tungstenFirst ? "tungsten_direct" : "cubic"))
+        if (config.firstHit.profileMode != profileMode)
             throw std::invalid_argument("first-hit profile_mode must match its sampler");
         if (config.firstHit.backend!="scalar" && (config.firstHit.method!="neural_first_hit_se" ||
             (config.firstHit.backend!="torch_cpu" && config.firstHit.backend!="torch_cuda")))
@@ -439,7 +466,20 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
         if (config.firstHit.batchSize<1 || config.firstHit.batchSize>65536)
             throw std::invalid_argument("first-hit batch_size must be in [1,65536]");
         requirePositiveFinite(config.firstHit.profileMaximumStep,"transport.first_hit.profile_maximum_step");
-        if (tungstenFirst) {
+        if (conditionalRenewalFirst) {
+            if (first.contains("step_size"))
+                throw std::invalid_argument("global_conditional_renewal_plus first-hit uses renewal_distance, not step_size");
+            config.firstHit.renewalDistance = first.value("renewal_distance",0.01);
+            requirePositiveFinite(config.firstHit.renewalDistance,"transport.first_hit.renewal_distance");
+        } else if (first.contains("renewal_distance")) {
+            throw std::invalid_argument("transport.first_hit.renewal_distance requires global_conditional_renewal_plus");
+        }
+        if (conditionalFirst || localFirst) {
+            if (first.contains("model") || first.contains("profile_maximum_step") || first.contains("sampler") ||
+                first.contains("batch_size"))
+                throw std::invalid_argument(config.firstHit.method +
+                    " first-hit uses direct delta tracking, not a model or profile sampler");
+        } else if (tungstenFirst) {
             if (first.contains("model") || first.contains("profile_maximum_step"))
                 throw std::invalid_argument("Tungsten first-hit uses direct field queries, not a model or profile step");
             config.firstHit.tungsten=readTungstenSampler(first.value("sampler",nlohmann::json::object()));
@@ -815,6 +855,41 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
                 {"profile_mode","tungsten_direct"},{"step_units","world"},
                 {"sampler",tungstenSamplerJson(config.firstHit.tungsten)},
                 {"gradient","conditioned_gaussian_with_secant_longitudinal_derivative"}};
+        }
+        if (config.firstHit.method == "classic_local") {
+            result["transport"]["first_hit"] = {
+                {"method","classic_local"},{"backend","scalar"},{"profile_mode","local_direct"},
+                {"gp_model","local_tangent"},
+                {"distance_convention","distance from activeDomain entry"},
+                {"birth_policy","exterior_without_gp_observation"},
+                {"sampler","dda_null_tracking"},{"density","scene_baked_density"},
+                {"gradient","negative_flux_weighted_full_local_material_gradient"},
+                {"phase_proposal","target_vndf"},
+                {"surface_handoff","collision_position, F=0, full_local_gradient"}};
+        }
+        if (config.firstHit.method == "global_conditional" ||
+            config.firstHit.method == "global_conditional_renewal_plus") {
+            result["transport"]["first_hit"] = {
+                {"method",config.firstHit.method},{"backend","scalar"},{"profile_mode","conditional_direct"},
+                {"distance_convention","distance from activeDomain entry"},
+                {"birth_policy","sampled_positive_exterior"},
+                {"entry_value","F(entry) drawn from N(mean,sigma^2) conditioned on F>0"},
+                {"entry_gradient","full SE Gaussian prior, independent of entry value"},
+                {"entry_weight","unit: rendering is conditional on positive exterior"},
+                {"sampler","segmented_delta_tracking"},
+                {"majorant","analytic_birth_and_conditional_interval_bounds"},
+                {"conditioning","sampled_entry_value_and_full_gradient"},
+                {"gradient","negative_flux_weighted_conditional_full_gradient"}};
+            if (config.firstHit.method == "global_conditional_renewal_plus") {
+                auto& first = result["transport"]["first_hit"];
+                first["renewal_distance"] = config.firstHit.renewalDistance;
+                first["distance_units"] = "world";
+                first["conditioning"] = "current_segment_value_and_full_gradient";
+                first["boundary_policy"] = "sample_previous_segment_positive_endpoint";
+                first["mean_policy"] = "global_field";
+                first["kernel_policy"] = "shared_global_kernel";
+                first["surface_handoff"] = "collision_position, F=0, full_conditional_gradient";
+            }
         }
         result["transport"]["side_convention"] = config.continuationMethod == "classic_local"
             ? "first_hit preserves initial_sign; classic_local uses scene density and original field orientation"
