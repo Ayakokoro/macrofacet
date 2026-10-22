@@ -23,11 +23,11 @@ class CausalConfig:
 
 
 class CausalResidual(nn.Module):
-    def __init__(self, config=None):
+    def __init__(self, config=None, *, entry_size=2):
         super().__init__()
         self.config = config or CausalConfig()
         c = self.config
-        self.initial = nn.Sequential(nn.Linear(2, c.hidden), nn.SiLU(), nn.Linear(c.hidden, c.hidden))
+        self.initial = nn.Sequential(nn.Linear(entry_size, c.hidden), nn.SiLU(), nn.Linear(c.hidden, c.hidden))
         self.segment = nn.Sequential(nn.Linear(7, c.embedding), nn.SiLU(),
                                      nn.Linear(c.embedding, c.embedding), nn.SiLU())
         self.gru = nn.GRU(c.embedding, c.hidden, batch_first=True)
@@ -70,7 +70,7 @@ def branch_values(delta, batch, query, prefix=None):
     factor = delta.exp()
     if prefix is None:
         prefix = torch.nn.functional.pad((batch['mass']*factor).cumsum(-1), (1, 0))
-    index = query['cell'][:, None].expand(-1, 2, -1)
+    index = query['cell'][:, None].expand(-1, delta.shape[1], -1)
     H = prefix.gather(-1, index)+query['partial']*factor.gather(-1, index)
     rate = query['local_log_rate']+delta.gather(-1, index)
     return H, rate

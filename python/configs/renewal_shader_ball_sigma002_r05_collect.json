@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "seed": 20261022,
+  "executable": "build/Release/macrofacet_collect_shader_ball_dataset.exe",
+  "render_config": "configs/render_first_hit_gpis_tungsten_shader_ball_sigma002.json",
+  "geometry": "outputs/datasets/shader_ball_se_sigma002_r05_20261022/geometry.json",
+  "output_directory": "outputs/datasets/shader_ball_se_sigma002_r05_20261022",
+  "sigma": 0.02,
+  "roughness": 0.5,
+  "surface_residual_limit": 3.0,
+  "coarse_maximum_step": 0.015625,
+  "profile_maximum_step": 0.25,
+  "curve_bins": 128,
+  "realizations_per_profile": {"train": 2048, "validation": 2048, "test": 8192},
+  "workers": 12
+}

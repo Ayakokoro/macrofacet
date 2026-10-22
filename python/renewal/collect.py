@@ -26,7 +26,25 @@ def write_json(path: Path, value) -> None:
 
 
 def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    checksum = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024*1024), b""):
+            checksum.update(chunk)
+    return checksum.hexdigest()
+
+
+def collision_seeds(root: int, state: int, resolution: int, count: int):
+    """Match FirstPassageExperiment.cpp's uint64 stream derivation."""
+    def mix(values):
+        values = np.asarray(values, dtype=np.uint64)
+        with np.errstate(over="ignore"):
+            values = values + np.uint64(0x9e3779b97f4a7c15)
+            values = (values ^ (values >> np.uint64(30))) * np.uint64(0xbf58476d1ce4e5b9)
+            values = (values ^ (values >> np.uint64(27))) * np.uint64(0x94d049bb133111eb)
+        return values ^ (values >> np.uint64(31))
+    prefix = (mix(root ^ 0x636f6c6c6973696f) ^ mix(state + 0x10001)
+              ^ mix(resolution + 0x20001))
+    return mix(prefix ^ mix(np.arange(count, dtype=np.uint64) + np.uint64(0x30001)))
 
 
 def _invoke(executable: Path, command: str, config: Path, output: Path) -> None:

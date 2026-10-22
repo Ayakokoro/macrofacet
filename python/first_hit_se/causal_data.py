@@ -14,19 +14,19 @@ from .model import validate_profile
 from .spline import local_profile
 
 
-def integrate(features, left, right, order):
+def integrate(features, left, right, order, *, positive_only=False):
     """Intervals must each lie inside one cubic; endpoints may coincide."""
     nodes, weights = (torch.as_tensor(a.copy(), dtype=features.dtype, device=features.device)
                       for a in np.polynomial.legendre.leggauss(order))
     width = right-left
     q = left[:, None]+width[:, None]*(nodes+1)/2
     b, db = local_profile(features, q.flatten())
-    signs = features.new_tensor([1., -1.])[:, None, None]
+    signs = features.new_tensor([1.] if positive_only else [1., -1.])[:, None, None]
     rates = local_log_hazard(signs*b.reshape(len(left), -1), signs*db.reshape(len(left), -1))
     return (rates.exp()*(weights/2)).sum(-1)*width
 
 
-def geometry(features, config):
+def geometry(features, config, *, positive_only=False):
     validate_profile(features)
     features = features.double()
     Q = features[:, 4].exp().sum()
@@ -35,10 +35,11 @@ def geometry(features, config):
     right = (left+config.step).clamp_max(Q)
     points = torch.stack((left, (left+right)/2, right), -1)
     b, db = (v.reshape(count, 3) for v in local_profile(features, points.flatten()))
-    signs = features.new_tensor([1., -1.])[:, None, None]
+    signs = features.new_tensor([1.] if positive_only else [1., -1.])[:, None, None]
+    branches = len(signs)
     sb, sd = (signs*b).asinh(), (signs*db).asinh()
-    tokens = torch.cat((sb, sd, (right-left).log1p()[None, :, None].expand(2, -1, 1)), -1)
-    local = torch.cat((sb[:, :, :1], sd[:, :, :1], left.log1p()[None, :, None].expand(2, -1, 1)), -1)
+    tokens = torch.cat((sb, sd, (right-left).log1p()[None, :, None].expand(branches, -1, 1)), -1)
+    local = torch.cat((sb[:, :, :1], sd[:, :, :1], left.log1p()[None, :, None].expand(branches, -1, 1)), -1)
     fine = torch.arange(math.ceil(float(Q)/config.integration_step), dtype=features.dtype,
                         device=features.device)*config.integration_step
     knots = torch.unique(torch.cat((fine, left, features[:, 4].exp().cumsum(0).clamp_max(Q), Q[None])), sorted=True)
@@ -47,15 +48,16 @@ def geometry(features, config):
     counts = torch.bincount(cell, minlength=count)
     offset = torch.arange(len(cell), device=cell.device)-(counts.cumsum(0)-counts)[cell]
     slots = int(counts.max())
-    masses = integrate(features, interval_left, interval_right, config.quadrature_order)
-    packed = masses.new_zeros((2, count*slots)).scatter(1, (cell*slots+offset)[None].expand(2, -1), masses)
-    cumulative = torch.nn.functional.pad(packed.reshape(2, count, slots).cumsum(-1), (1, 0))
-    prior = torch.special.log_ndtr(features[0, 0]*features.new_tensor([1., -1.]))
+    masses = integrate(features, interval_left, interval_right, config.quadrature_order,
+                       positive_only=positive_only)
+    packed = masses.new_zeros((branches, count*slots)).scatter(1, (cell*slots+offset)[None].expand(branches, -1), masses)
+    cumulative = torch.nn.functional.pad(packed.reshape(branches, count, slots).cumsum(-1), (1, 0))
+    prior = torch.special.log_ndtr(features[0, 0]*signs.flatten())
     prior -= torch.logsumexp(prior, 0)
     return {'features': features, 'tokens': tokens, 'left': local, 'entry': local[:, 0, :2],
         'widths': right-left, 'horizon': Q, 'mass': cumulative[:, :, -1], 'log_prior': prior,
         '_knots': knots, '_cell': cell, '_offset': offset, '_cumulative': cumulative,
-        '_order': config.quadrature_order}
+        '_order': config.quadrature_order, '_positive_only': positive_only}
 
 
 def queries(geo, q):
@@ -64,9 +66,11 @@ def queries(geo, q):
     q = q.clamp_max(geo['horizon'])
     i = (torch.searchsorted(geo['_knots'], q, right=True)-1).clamp(0, len(geo['_cell'])-1)
     cell, offset = geo['_cell'][i], geo['_offset'][i]
-    partial = geo['_cumulative'][:, cell, offset]+integrate(geo['features'], geo['_knots'][i], q, geo['_order'])
+    positive_only = geo.get('_positive_only', False)
+    partial = geo['_cumulative'][:, cell, offset]+integrate(
+        geo['features'], geo['_knots'][i], q, geo['_order'], positive_only=positive_only)
     b, db = local_profile(geo['features'], q)
-    signs = q.new_tensor([1., -1.])[:, None]
+    signs = q.new_tensor([1.] if positive_only else [1., -1.])[:, None]
     return {'cell': cell, 'partial': partial, 'local_log_rate': local_log_hazard(signs*b, signs*db)}
 
 

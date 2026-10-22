@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import bisect
+from array import array
 from collections import defaultdict
 import csv
 import json
@@ -13,7 +14,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 
 from . import FORMAT_VERSION, KERNEL, validate_kernel
-from .collect import digest, write_json
+from .collect import collision_seeds, digest, write_json
 from .profiles import subdivide_features, validate_subdivision_factors
 from .reference_sampler import reference_sampler, sampler_from_source, require_same_sampler
 from .reference_sampler import validate_sampler_row
@@ -32,12 +33,19 @@ def prepare(manifest_path: Path, output: Path) -> dict:
     if manifest.get("schema_version") != FORMAT_VERSION:
         raise ValueError("unsupported dataset schema")
     convention = validate_kernel(manifest.get("kernel"))
+    split_unit = manifest.get("split_unit", "scene")
+    if split_unit not in ("scene", "ray"):
+        raise ValueError("split_unit must be scene or ray")
     packed = {"format_version": FORMAT_VERSION, "kernel": convention, "feature_names": list(FEATURES),
-              "manifest_sha256": digest(manifest_path)}
+              "manifest_sha256": digest(manifest_path), "split_unit": split_unit}
+    if "surface_derivative_sampling" in manifest:
+        packed["surface_derivative_sampling"] = manifest["surface_derivative_sampling"]
     features, offsets, initial, horizons = [], [0], [], []
     scene_ids, split_ids, profile_keys, provenance = [], [], [], []
-    sample_profile, hit, speed, end_segment, end_u, distance = [], [], [], [], [], []
-    scenes, geometries, source_paths = {}, {}, set()
+    # Compact buffers avoid millions of boxed Python numbers during collection.
+    sample_profile, hit, speed = array("q"), array("b"), array("f")
+    end_segment, end_u, distance = array("q"), array("f"), array("d")
+    scenes, geometries, source_paths, ray_splits = defaultdict(set), {}, set(), {}
     resolution_counts = defaultdict(int)
     for source in manifest["sources"]:
         directory = Path(source["directory"])
@@ -47,13 +55,37 @@ def prepare(manifest_path: Path, output: Path) -> dict:
             raise ValueError("duplicate reference source")
         source_paths.add(directory)
         scene, split = source["scene_id"], source["split"]
-        if split not in SPLITS or scenes.setdefault(scene, split) != split:
+        if split not in SPLITS:
+            raise ValueError("unknown split")
+        scenes[scene].add(split)
+        if split_unit == "scene" and len(scenes[scene]) != 1:
             raise ValueError("a scene must belong to exactly one split")
         geometry = json.dumps(source.get("geometry", {"scene_id": scene}), sort_keys=True)
-        if geometries.setdefault(geometry, split) != split:
+        if split_unit == "scene" and geometries.setdefault(geometry, split) != split:
             raise ValueError("identical geometry appears in multiple splits")
         config_path = directory / "resolved_first_passage_config.json"
-        config = json.loads(config_path.read_text(encoding="utf-8"))["first_passage"]
+        resolved = json.loads(config_path.read_text(encoding="utf-8"))
+        config = resolved["first_passage"]
+        if split_unit == "ray":
+            rays = config["initial_condition"].get("rays", [])
+            if not rays:
+                raise ValueError("ray splits require explicit physical rays")
+            field = config.get("process", {}).get("mean_field", {})
+            field_key = str(Path(field["grid_file"]).resolve()).casefold() if "grid_file" in field else geometry
+            for ray in rays:
+                # Ignore gradient/horizon: reusing a profile with new conditions
+                # still does not constitute an independent geometry holdout.
+                identity = (field_key, *(round(float(v), 12) for v in ray["origin"] + ray["direction"]))
+                if ray_splits.setdefault(identity, split) != split:
+                    raise ValueError("identical physical ray appears in multiple splits")
+        expected_seeds = None
+        if manifest.get("seed_scheme") == "first_passage_collision_v1":
+            if resolved["seed"] != source["seed"]:
+                raise ValueError("resolved seed differs from collection source")
+            expected_seeds = {(r["id"], float(step)): collision_seeds(
+                resolved["seed"], state, resolution, config["monte_carlo"]["trajectories"])
+                for state, r in enumerate(config["initial_condition"]["rays"])
+                for resolution, step in enumerate(config["grid"]["step_sizes"])}
         sampler = sampler_from_source(config)
         if "reference_sampler" in manifest:
             require_same_sampler(manifest["reference_sampler"], sampler, "manifest and source")
@@ -107,6 +139,10 @@ def prepare(manifest_path: Path, output: Path) -> dict:
         trajectories = set()
         counts_by_profile = defaultdict(int)
         for row in _rows(directory / "first_passage_samples.csv"):
+            if expected_seeds is not None:
+                expected_seed = expected_seeds[(row["state_id"], float(row["base_step"]))][int(row["trajectory"])]
+                if int(row["seed"]) != int(expected_seed):
+                    raise ValueError("trajectory seed differs from the recorded stream")
             if row["training_resolution"] != "1":
                 continue
             if row["sampler_type"] != expected_sampler:
@@ -135,6 +171,14 @@ def prepare(manifest_path: Path, output: Path) -> dict:
                 if not math.isfinite(g) or g <= 0:
                     raise ValueError("surface starts require a known outward derivative")
                 known = [1.0, b0, -b0, g-db0]
+                if "surface_derivative_sampling" in manifest:
+                    limit = manifest["surface_derivative_sampling"]["residual_limit"]
+                    if abs(known[3]) > limit + 1e-8:
+                        raise ValueError("surface residual exceeds the declared training range")
+                if "start_condition" in source and not math.isclose(
+                        known[3], source["start_condition"]["standardized_derivative_residual"],
+                        rel_tol=1e-8, abs_tol=1e-8):
+                    raise ValueError("surface residual differs from the planned condition")
             elif row["beta_g"]:
                 raise ValueError("exterior starts must not contain a sampled derivative")
             if initial[p] is not None and initial[p] != known:
@@ -174,8 +218,8 @@ def prepare(manifest_path: Path, output: Path) -> dict:
                            "samples_sha256": digest(directory / "first_passage_samples.csv"),
                            "segments_sha256": digest(directory / "first_passage_mean_segments.csv"),
                            "reference_grid": config["grid"], "sampler": config["sampler"]})
-    if not sample_profile or set(scenes.values()) != set(SPLITS):
-        raise ValueError("nonempty, geometry-disjoint train/validation/test splits are required")
+    if not sample_profile or set(split_ids) != set(SPLITS.values()):
+        raise ValueError("nonempty train/validation/test splits are required")
     # Retain double geometry: float32 endpoint cancellation corrupts derivatives
     # in the very short cells near voxel edges. Neural encoders cast afterwards.
     for name, values, dtype in (("features", features, torch.float64), ("offsets", offsets, torch.long),
@@ -184,17 +228,19 @@ def prepare(manifest_path: Path, output: Path) -> dict:
         ("hit", hit, torch.bool), ("speed", speed, torch.float32),
         ("end_segment", end_segment, torch.long), ("end_u", end_u, torch.float32),
         ("distance", distance, torch.float64)):
-        packed[name] = torch.tensor(values, dtype=dtype)
+        packed[name] = (torch.frombuffer(values, dtype=dtype).clone()
+                        if isinstance(values, array) else torch.tensor(values, dtype=dtype))
     packed.update(scene_ids=scene_ids, profile_keys=profile_keys, provenance=provenance)
     counts = {}
     for split, i in SPLITS.items():
         mask = packed["split"][packed["sample_profile"]] == i
-        counts[split] = {"scenes": sum(v == split for v in scenes.values()),
+        counts[split] = {"scenes": sum(split in v for v in scenes.values()),
                          "profiles": split_ids.count(i), "samples": int(mask.sum()),
                          "hits": int(packed["hit"][mask].sum())}
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(packed, output)
     report = {"counts": counts, "kernel": convention, "finest_resolution_counts": dict(resolution_counts),
+              "split_unit": split_unit,
               "reference_sampler": packed["reference_sampler"],
               "segments": len(features), "manifest_sha256": packed["manifest_sha256"],
               "dataset_sha256": digest(output)}

@@ -1,5 +1,58 @@
 # Renewal+ 序列数据与网络训练
 
+shader-ball（σ=0.02、roughness=0.5）的 **A/B 条件残差 GRU** 使用
+`outputs/datasets/shader_ball_se_sigma002_r05_20261022/data/combined.pt`：A 是已知入口场值为正，
+B 是已知起点场值为零、向外导数为 `g0>0`。二者共享 GRU，以起点模式和已知条件初始化状态；
+每条剖面只计算自己的条件分布，不包含负侧入口分支，也不混合入口符号概率。
+
+```powershell
+python -B python/renewal_cli.py train-residual --config python/configs/renewal_shader_ball_sigma002_r05_residual.json
+```
+
+`--smoke-test` 在独立的 `smoke_test` 子目录中用每种模式各两条训练/验证剖面运行两轮；
+`--resume` 从对应目录的 `last.pt` 继续，要求配置、数据哈希和实现一致。
+正式配置按已有射线划分训练/验证，每批 24 条剖面，每轮每条剖面抽取 512 条轨迹，
+GRU 对同一剖面只运行一次。按验证集条件距离 NLL 保存 `best.pt`，分别记录 A/B 指标。
+
+起点输入为 A `[0,b0,0,0]`、B `[1,b0,-b0,z0]`，其中
+`z0=ell*g0/sigma-b_prime(0)`；网络在屏蔽 A 的未知起点量后使用 `asinh` 编码。
+`|z0|<=3` 是本数据的 B 起点覆盖范围，推理输入没有裁剪，也不代表范围外精度有保证。
+距离模型为 `lambda=positive_local_hazard*exp(GRU_residual)`，B 的起点条件由残差学习，
+局部基线本身没有做起点再条件化。命中和逃逸都参与删失似然；生存曲线监督使用每条剖面的全部标签。
+
+```powershell
+python -B python/renewal_cli.py evaluate-residual --checkpoint outputs/models/renewal_shader_ball_sigma002_r05_residual/best.pt --dataset outputs/datasets/shader_ball_se_sigma002_r05_20261022/data/combined.pt --split test --device cuda --output outputs/models/renewal_shader_ball_sigma002_r05_residual/test_metrics.json
+```
+
+距离 checkpoint 格式为 `renewal_causal_residual`。距离训练完成后，冻结所选主干，
+用同一数据集的命中标签训练梯度头：
+
+```powershell
+python -B python/renewal_cli.py train-gradient --config python/configs/renewal_shader_ball_sigma002_r05_gradient.json
+```
+
+梯度头预测 `w=-ell*f_prime(q)/sigma>0` 的 8 分量正半轴截断 Gaussian mixture，
+输入命中位置之前的 GRU 状态、步内位置和局部均值/导数。A/B 起点条件由主干状态传入，
+不增加负侧入口分支；`w` 没有 3σ 上限。逃逸标签不训练梯度头，联合 NLL 仍包含其距离似然。
+按验证集命中条件 NLL 选择梯度头，分别报告 A/B 的梯度 NLL、联合 NLL 和 PIT 校准。
+
+该命令也支持 `--resume`。`--smoke-test` 使用配置中明确指定的距离试跑 checkpoint，
+对每种模式选取包含命中的少量剖面运行两轮；输出到独立的 `smoke_test` 目录。
+正式联合 checkpoint 为 `outputs/models/renewal_shader_ball_sigma002_r05_joint/best.pt`，
+格式 `renewal_causal_joint`，同时保存冻结的距离主干和梯度头，推理时不依赖原距离文件。
+
+```powershell
+python -B python/renewal_cli.py evaluate-joint --checkpoint outputs/models/renewal_shader_ball_sigma002_r05_joint/best.pt --dataset outputs/datasets/shader_ball_se_sigma002_r05_20261022/data/combined.pt --split test --device cuda --output outputs/models/renewal_shader_ball_sigma002_r05_joint/test_metrics.json
+```
+
+Python 查询入口为 `renewal.causal_gradient.load_joint` 和 `query_points`。给定三次剖面 `features`、
+上述 A/B 起点向量 `initial` 和命中位置向量 `q`，用 `head(query_points(backbone, features, initial, q))`
+取得分布参数；`first_hit_se.gradient_cdf.log_prob/cdf/sample` 可计算密度、CDF 和采样。
+采样使用每个命中点两个位于 `(0,1)` 的均匀数，物理方向导数恢复为 `-sigma*w/ell`。
+这是沿射线的方向导数头；C++ 渲染导出尚未接入新的 A/B 联合 checkpoint。
+
+下面的 `first_hit_se_cli.py causal-residual` 是先前无条件首次过零实验的入口。
+
 新增的无条件 SE 相机 first-hit 连续状态模型和保留 GRU 的对比流程见 [SE first hit](../docs/FIRST_HIT_SE.md)。它从介质入口计距，允许负侧出发的首次上穿，使用独立的数据、训练入口和导出格式。
 
 sigma=0.02 多视角整段 MLP 的 [残差正则与透射率监督实验](../docs/FIRST_HIT_RESIDUAL_SUPERVISION_SIGMA002.md)：

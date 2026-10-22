@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "seed": 20261022,
+  "render_config": "configs/render_first_hit_gpis_tungsten_shader_ball_sigma002.json",
+  "sigma": 0.02,
+  "roughness": 0.5,
+  "profile_maximum_step": 0.25,
+  "surface_residual_limit": 3.0,
+  "splits": {
+    "train": {
+      "profiles_per_mode": 695,
+      "cameras": 8,
+      "azimuth_phase": 0.0,
+      "elevations_degrees": [10, 25, 40]
+    },
+    "validation": {
+      "profiles_per_mode": 158,
+      "cameras": 2,
+      "azimuth_phase": 0.17,
+      "elevations_degrees": [17, 34]
+    },
+    "test": {
+      "profiles_per_mode": 280,
+      "cameras": 4,
+      "azimuth_phase": 0.42,
+      "elevations_degrees": [-5, 15, 30, 50]
+    }
+  }
+}

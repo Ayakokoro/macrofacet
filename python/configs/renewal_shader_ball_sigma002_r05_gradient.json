@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "dataset": "outputs/datasets/shader_ball_se_sigma002_r05_20261022/data/combined.pt",
+  "dataset_sha256": "54265f0e05ded53c02356258afd79c57a8ed83f528c430c09f827e3008ab1ebe",
+  "backbone_checkpoint": "outputs/models/renewal_shader_ball_sigma002_r05_residual/best.pt",
+  "smoke_backbone_checkpoint": "outputs/models/renewal_shader_ball_sigma002_r05_residual/smoke_test/best.pt",
+  "output_directory": "outputs/models/renewal_shader_ball_sigma002_r05_joint",
+  "device": "cuda",
+  "cpu_threads": 1,
+  "seed": 20261022,
+  "epochs": 150,
+  "patience": 20,
+  "profiles_per_batch": 24,
+  "samples_per_profile_per_epoch": 512,
+  "validation_every": 5,
+  "learning_rate": 0.001,
+  "minimum_learning_rate": 0.00002,
+  "weight_decay": 0.00001,
+  "gradient_clip": 1.0,
+  "head": {"width": 64, "size": 8}
+}
