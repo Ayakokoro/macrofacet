@@ -35,6 +35,8 @@ def write(name, source):
 
 
 s = load('src/learned/CausalFirstHitModel.cpp')
+shared = 'src/learned/CausalModelInternal.h'
+hashes[shared] = hashlib.sha256((root/shared).read_bytes()).hexdigest()
 s = wrap(s, 'makeCausalTorchBackend(model.impl_->weights,backend=="torch_cuda")', 'setup.device_backend')
 s = wrap(s, 'backend.initialize(entries)', 'sample.initialize')
 s = wrap(s, 'backend.correction(active,left)', 'sample.correction')

@@ -27,6 +27,17 @@ select normalized query distances, survival intervals, and optical depths.
 See [Renewal C++ queries](RENEWAL_CPP.md) for export commands, units, and output.
 
 `transport.mode="neural_renewal"` enables full Renewal+ neural path tracing.
+
+`transport.mode="neural_causal_renewal"` loads an A/B joint model exported with
+`python/renewal_cli.py export-joint`. It uses `transport.renewal.model`, requires
+`backend="scalar"`, `profile_mode="cubic"`, an SE kernel and `use_alpha_grid=false`.
+The exported recurrent/integration steps are fixed; `profile_maximum_step` only
+controls the mean profile. Camera rays use positive-exterior conditioning and
+reflections retain the last full collision gradient. See
+[the joint scene](../configs/render_neural_causal_renewal_shader_ball_sigma002.json)
+and [deployment instructions](RENEWAL_CPP.md).
+
+The following backend and architecture settings describe the legacy `neural_renewal` model.
 Set `transport.renewal.model` to the JSON from `export-model` and optionally
 `transport.renewal.profile_maximum_step` (default `0.25`). This mode requires
 unit-decay `matern_3_2` or unit-length `squared_exponential` matching the model,
@@ -114,7 +125,7 @@ build\Release\macrofacet_experiments.exe render --config configs\macrofacet_ci.j
 
 `transport.mode` accepts `classic` (default, follows `material.gp_model`),
 `classic_local`, `classic_global`, `global_conditional`, `global_conditional_renewal_plus`, `neural_renewal`,
-`hybrid_first_hit`, and `all`. The last
+`neural_causal_renewal`, `hybrid_first_hit`, and `all`. The last
 choice renders three comparable modes. The CLI also accepts `--mode`.
 
 `hybrid_first_hit` separates the camera first hit from later flights.

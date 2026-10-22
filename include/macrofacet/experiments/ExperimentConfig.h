@@ -16,6 +16,7 @@
 namespace mf {
 
 class RenewalHazardModel;
+class CausalRenewalModel;
 class FirstHitSEModel;
 
 struct FirstHitRenderConfig {
@@ -43,6 +44,7 @@ struct RenewalRenderConfig {
     int maximumInFlightBatches = 2; // bounded inference queue/window; CPU tasks are independent even at 1
     // Loaded once, immutable and shared by every render worker.
     std::shared_ptr<const RenewalHazardModel> model;
+    std::shared_ptr<const CausalRenewalModel> causalModel;
 };
 
 struct RenderConfig {

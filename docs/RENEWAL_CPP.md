@@ -2,7 +2,55 @@
 
 实现方案中的碰撞距离、穿越速度、完整梯度／法线采样、模型透射率和多次散射路径追踪。C++ 保留 Eigen 标量推理，并支持 LibTorch CPU/CUDA 多射线批量推理；两者加载相同 JSON 权重。支持 Matérn-3/2 的 `rho(x)=(1+x)exp(-x)`（`unit_decay`）和 SE 的 `rho(x)=exp(-x*x/2)`（`unit_length`），均为 `beta=1`；支持空域起点 A 和已知表面向外起点 B。模型导出的核与场核必须匹配。
 
+## A/B 条件残差 GRU joint 模型
+
+`outputs/models/renewal_shader_ball_sigma002_r05_joint/best.pt` 使用独立的
+`renewal_causal_joint` 格式，包含距离主干和梯度头。导出与渲染命令在仓库根目录运行：
+
+```powershell
+python -B python/renewal_cli.py export-joint --checkpoint outputs/models/renewal_shader_ball_sigma002_r05_joint/best.pt --output outputs/models/renewal_shader_ball_sigma002_r05_joint/renewal_model.json
+cmake --build build --config Release --target macrofacet_experiments macrofacet_query_causal_renewal --parallel 4
+build/Release/macrofacet_experiments.exe render --config configs/render_neural_causal_renewal_shader_ball_sigma002.json
+```
+
+配置默认 128×128、16 spp，使用完整 shader-ball 场、SE 核、σ=0.02 和 roughness=0.5，
+结果在 `outputs/render_neural_causal_renewal_shader_ball_sigma002`。
+可加 `--width 32 --height 32 --spp 4 --output outputs/render_neural_causal_renewal_shader_ball_sigma002/smoke` 做小图检查。
+
+该模式名为 `neural_causal_renewal`，权重路径仍放在 `transport.renewal.model`。
+它只接受 `backend="scalar"`、`profile_mode="cubic"`、SE 核和 `use_alpha_grid=false`，
+CPU 光线线程数由 `render.thread_count` 或 `--threads` 控制。
+旧的 `export-model`、`neural_renewal` 和无条件 `neural_first_hit_se` 使用不同模型契约。
+目前 joint 没有 CUDA 批量后端，也未接入 `hybrid_first_hit` 的混合模式。
+
+相机首段采用与训练相同的 A 条件 `F(entry)>0`；进入包围盒是计距起点，不是一次零值观测。
+每次反射后，以同一碰撞点和完整梯度建立 B 条件。四维输入为
+`[0,b0,0,0]` 或 `[1,b0,-b0,ell*dot(direction,gradient)/sigma-b_prime(0)]`。
+新方向重新初始化 GRU，当前直线飞行内按固定 `q=s/ell` 网格推进。
+
+距离采用 `positive_local_hazard * exp(residual)`，保留出口逃逸概率。
+导出保存训练步长（本模型 `step=0.125`、`integration_step=0.015625`、8 点积分）；
+它们不能被渲染配置覆盖，也不等于构造三次均值剖面用的 `profile_maximum_step`。
+命中梯度头使用当前区间的进入状态，恰在边界时取左极限。
+采样正速度 `W` 后以 `V=-sigma*W/ell` 恢复方向导数，复用 Renewal+ 的条件横向梯度重建。
+`resolved_config.json` 记录 checkpoint 哈希、固定步长和 A/B 条件。
+
+部署数值对照：
+
+```powershell
+$env:PYTHONPATH = 'python'
+python -B -m renewal.causal_verify --checkpoint outputs/models/renewal_shader_ball_sigma002_r05_joint/best.pt --executable build/Release/macrofacet_query_causal_renewal.exe --output outputs/validation/causal_renewal_joint
+```
+
+可用 `--dataset <combined.pt>` 增加测试集中的真实 A/B 剖面。
+检查包括累计 hazard、透射率、混合参数，以及相同均匀数下的距离和速度采样，
+结果写入 `verification.json`。这是部署一致性检查，不衡量模型相对于 GP 参考的近似误差。
+独立 C++ 查询程序接受 `features`、`queries`、`start` 和可选的三维 `uniforms` 数组；
+`start.mode` 为 `positive_exterior` 或 `collision_state`，后者还需归一化的 `outward_derivative=ell*g0/sigma`。
+
 ## 单条真实相机光线的透射率对照
+
+以下 `neural_renewal` 章节使用旧 `RenewalNetwork`；A/B joint 使用上节的独立模式和导出器。
 
 `macrofacet_inspect_renewal_ray` 从渲染配置重放一个像素的第 0 个相机采样，复用相机 RNG、有效域入口、`profile_mode`、原始分段和所选推理后端。当前支持完整域 NanoVDB 场景的第一段相机飞行，起点条件为 A：`F(0)>0`。它输出神经透射率、光线元数据及两份参考配置；参考计算复用已有 `first-passage` 命令，没有新增参考渲染器。
 

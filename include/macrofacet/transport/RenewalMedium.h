@@ -2,6 +2,7 @@
 
 #include "macrofacet/gpss/GPSSField.h"
 #include "macrofacet/transport/RenewalRayDistribution.h"
+#include "macrofacet/learned/CausalRenewalModel.h"
 
 namespace mf {
 
@@ -50,6 +51,8 @@ class RenewalMedium {
 public:
     RenewalMedium(const GPSSField& field, const RenewalHazardModel& model, double maximumStep = 0.25,
                   const std::string& profileMode = "cubic");
+    RenewalMedium(const GPSSField& field, const CausalRenewalModel& model, double maximumStep = 0.25,
+                  const std::string& profileMode = "cubic");
     // Origin must already be in the active domain. A null flight exits immediately.
     // cubic builds to the domain exit; point_linear builds only visited segments.
     std::optional<RenewalFlight> beginFlight(const Ray& ray,
@@ -65,9 +68,13 @@ public:
         double maximumDistance) const;
 private:
     const GPSSField& field_;
-    const RenewalHazardModel& model_;
+    const RenewalHazardModel* model_ = nullptr;
+    const CausalRenewalModel* causal_ = nullptr;
     double maximumStep_;
     bool pointLinear_ = false;
+    void validate(CovarianceKernelType kernelType) const;
+    RenewalSurfaceSample reconstruct(const RenewalFlight& flight, std::size_t segment,
+        double x, double speed, Random& rng) const;
 };
 
 } // namespace mf

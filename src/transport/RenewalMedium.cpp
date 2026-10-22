@@ -65,16 +65,27 @@ Vector3 sampleFirstHitSEGradient(const CovarianceKernel& kernel, const Vector3& 
 
 RenewalMedium::RenewalMedium(const GPSSField& field, const RenewalHazardModel& model, double maximumStep,
                            const std::string& profileMode)
-    : field_(field), model_(model), maximumStep_(maximumStep), pointLinear_(profileMode == "point_linear") {
+    : field_(field), model_(&model), maximumStep_(maximumStep), pointLinear_(profileMode == "point_linear") {
     if (profileMode != "cubic" && !pointLinear_)
         throw std::invalid_argument("unknown Renewal profile mode: " + profileMode);
-    field_.validate();
-    if (!model_.hasMixture())
+    if (!model_->hasMixture())
         throw std::invalid_argument("neural_renewal requires a full model export");
-    if (field_.kernel.type() != model_.kernelType())
+    validate(model_->kernelType());
+}
+
+RenewalMedium::RenewalMedium(const GPSSField& field, const CausalRenewalModel& model, double maximumStep,
+                           const std::string& profileMode)
+    : field_(field), causal_(&model), maximumStep_(maximumStep) {
+    if (profileMode != "cubic") throw std::invalid_argument("neural_causal_renewal requires cubic profiles");
+    validate(CovarianceKernelType::SquaredExponential);
+}
+
+void RenewalMedium::validate(CovarianceKernelType kernelType) const {
+    field_.validate();
+    if (field_.kernel.type() != kernelType)
         throw std::invalid_argument(std::string("neural_renewal field/model kernel mismatch: field=")+
-            covarianceKernelTypeName(field_.kernel.type())+", model="+covarianceKernelTypeName(model_.kernelType()));
-    if (!(maximumStep > 0) || !std::isfinite(maximumStep))
+            covarianceKernelTypeName(field_.kernel.type())+", model="+covarianceKernelTypeName(kernelType));
+    if (!(maximumStep_ > 0) || !std::isfinite(maximumStep_))
         throw std::invalid_argument("invalid Renewal profile maximum step");
     const Eigen::LLT<Matrix3> cholesky(field_.kernel.metric());
     if (cholesky.info() != Eigen::Success)
@@ -111,18 +122,35 @@ RenewalSurfaceSample RenewalMedium::sample(const RenewalFlight& flight, Random& 
     double tolerance, RenewalTrackingDiagnostics* diagnostics) const {
     if (!(tolerance > 0) || !std::isfinite(tolerance)) throw std::invalid_argument("invalid Renewal sample tolerance");
     if (diagnostics) ++diagnostics->flights;
-    auto state = model_.initialize(flight.mean.segment(0), flight.start);
+    if (causal_) {
+        const std::array<double,3> uniforms{rng.openUniform01(),rng.openUniform01(),rng.openUniform01()};
+        const auto s = causal_->sample(flight.mean,flight.start,uniforms,tolerance/flight.ell);
+        if (diagnostics) diagnostics->segments += s.intervals;
+        if (s.hit) {
+            if (diagnostics) ++diagnostics->mixtureQueries;
+            const auto& segments = flight.mean.segments();
+            const auto it = std::lower_bound(segments.begin(),segments.end(),s.q,
+                [](const auto& segment, double q) { return segment.end < q; });
+            const auto index = std::min(static_cast<std::size_t>(it-segments.begin()),segments.size()-1);
+            return reconstruct(flight,index,s.q,s.speed,rng);
+        }
+        RenewalSurfaceSample miss;
+        miss.distance = flight.maximumDistance(); miss.segment = flight.mean.constructedSegmentCount();
+        miss.position = flight.ray.origin+miss.distance*flight.ray.direction;
+        return miss;
+    }
+    auto state = model_->initialize(flight.mean.segment(0), flight.start);
     double remaining = -std::log(rng.openUniform01());
     for (std::size_t i = 0; flight.mean.hasSegment(i); ++i) {
         const auto& segment = flight.mean.segment(i);
-        auto step = model_.evaluate(state, segment);
+        auto step = model_->evaluate(state, segment);
         if (diagnostics) ++diagnostics->segments;
         const RenewalHazardSegment hazard(segment.begin, segment.end, step.rates);
         const double mass = hazard.integral(0,1);
         if (mass > 0 && remaining <= mass) {
             const double u = hazard.inverse(remaining, 0, 1, tolerance/flight.ell);
             if (diagnostics) ++diagnostics->mixtureQueries;
-            return sampleHit(flight,i,u,model_.mixture(state,segment,u),rng);
+            return sampleHit(flight,i,u,model_->mixture(state,segment,u),rng);
         }
         remaining -= mass;
         state = std::move(step.nextState);
@@ -140,11 +168,17 @@ RenewalSurfaceSample RenewalMedium::sampleHit(const RenewalFlight& flight, std::
         throw std::invalid_argument("invalid Renewal collision coordinate");
     const auto& segment = flight.mean.segment(index);
     const double x = segment.begin+(segment.end-segment.begin)*u;
+    return reconstruct(flight,index,x,mixture.sample(rng),rng);
+}
+
+RenewalSurfaceSample RenewalMedium::reconstruct(const RenewalFlight& flight, std::size_t index,
+    double x, double speed, Random& rng) const {
+    const auto& segment = flight.mean.segment(index);
     RenewalSurfaceSample result;
     result.hit = true; result.segment = index; result.distance = x*flight.ell;
     result.position = flight.ray.origin+result.distance*flight.ray.direction;
     result.position = result.position.cwiseMax(field_.activeDomain.minimum).cwiseMin(field_.activeDomain.maximum);
-    result.speed = mixture.sample(rng);
+    result.speed = speed;
     const Point3 interior = flight.ray.origin+(0.5*(segment.begin+segment.end)*flight.ell)*flight.ray.direction;
     const Vector3 meanGradient = field_.mean->evaluateInCell(result.position,interior).gradient;
     result.gradient = sampleRenewalGradient(field_.kernel,flight.ray.direction,x,
@@ -157,7 +191,11 @@ RenewalSurfaceSample RenewalMedium::sampleHit(const RenewalFlight& flight, std::
 
 double RenewalMedium::transmittance(const RenewalFlight& flight, double distance) const {
     if (!(distance >= 0) || !std::isfinite(distance)) throw std::invalid_argument("invalid Renewal visibility distance");
-    return renewalTransmittance(model_, flight.mean, flight.start, flight.ell, 0,
+    if (causal_) {
+        const double q = std::min(distance/flight.ell,flight.mean.maximumX());
+        return q == 0 ? 1 : std::exp(-causal_->query(flight.mean,flight.start,{q})[0].cumulativeHazard);
+    }
+    return renewalTransmittance(*model_, flight.mean, flight.start, flight.ell, 0,
         std::min(distance, flight.maximumDistance()));
 }
 

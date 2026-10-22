@@ -38,6 +38,8 @@ int main() {
     catch (const std::exception& e) { context.require(false, std::string("first-hit render threw: ") + e.what()); }
     try { testCausalFirstHit(context); }
     catch (const std::exception& e) { context.require(false, std::string("causal first-hit threw: ") + e.what()); }
+    try { testCausalRenewal(context); }
+    catch (const std::exception& e) { context.require(false, std::string("causal renewal threw: ") + e.what()); }
     try { testTungstenFunctionSpace(context); }
     catch (const std::exception& e) { context.require(false, std::string("Tungsten function space threw: ") + e.what()); }
 #if defined(MACROFACET_TEST_FIELDS)

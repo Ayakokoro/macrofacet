@@ -539,6 +539,13 @@ Spectrum traceRenewalFromSurface(const RenewalPathState& state, const Experiment
 Spectrum traceCameraPath(const Ray& initialRay,
                          const ExperimentConfig& config, Random& rng,
                          RenderStatistics& statistics) {
+    if (config.transportMode == "neural_causal_renewal") {
+        ExperimentConfig prepared = config;
+        prepareRenewalModel(prepared);
+        const RenewalMedium medium(prepared.field,*prepared.renewal.causalModel,
+                                   prepared.renewal.profileMaximumStep,prepared.renewal.profileMode);
+        return traceRenewalCameraPath(initialRay,prepared,medium,rng,statistics);
+    }
     if (config.transportMode == "global_conditional_renewal_plus") {
         ExperimentConfig prepared = config;
         prepareRenewalModel(prepared);
@@ -569,7 +576,7 @@ Spectrum traceCameraPath(const Ray& initialRay,
 Spectrum traceCameraPath(const Ray& initialRay,
                          const ExperimentConfig& config, const NarrowBandMedium& medium,
                          Random& rng, RenderStatistics& statistics) {
-    if (config.transportMode == "neural_renewal" || config.transportMode == "hybrid_first_hit" ||
+    if (config.transportMode == "neural_renewal" || config.transportMode == "neural_causal_renewal" || config.transportMode == "hybrid_first_hit" ||
         config.transportMode == "global_conditional_renewal_plus")
         return traceCameraPath(initialRay, config, rng, statistics);
     if (config.transportMode == "global_conditional") {
@@ -602,6 +609,10 @@ RenderedImage renderAnalyticScene(const ExperimentConfig& config,
         hybrid = std::make_unique<HybridFirstHitTransport>(prepared);
         if (prepared.firstHit.backend!="scalar")
             return renderCausalFirstHit(prepared,*hybrid,completedCameraRays);
+    } else if (config.transportMode == "neural_causal_renewal") {
+        prepareRenewalModel(prepared);
+        renewal = std::make_unique<RenewalMedium>(prepared.field,*prepared.renewal.causalModel,
+                                                prepared.renewal.profileMaximumStep,prepared.renewal.profileMode);
     } else if (config.transportMode == "neural_renewal") {
         prepareRenewalModel(prepared);
         if (prepared.renewal.resolvedBackend != "scalar")
@@ -640,6 +651,7 @@ RenderedImage renderAnalyticScene(const ExperimentConfig& config,
 
     const auto renderRow = [&](int worker, int y) {
         RenderStatistics& statistics = perWorker[static_cast<std::size_t>(worker)];
+        if (renewal) statistics.renewal.cpuWorkers = workers;
         for (int x = 0; x < result.width; ++x) {
             Spectrum sum = Spectrum::Zero();
             const std::uint64_t pixelIndex = static_cast<std::uint64_t>(y * result.width + x);

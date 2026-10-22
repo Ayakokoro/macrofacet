@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "seed": 17429,
+  "field": {
+    "mean_type": "nanovdb",
+    "grid_file": "outputs/fields/shader_ball_full_0.05.nvdb",
+    "use_alpha_grid": false,
+    "kernel_type": "squared_exponential"
+  },
+  "material": {
+    "ndf_family": "generalized_gaussian",
+    "type": "conductor",
+    "gp_model": "global_pointwise",
+    "eta_rgb": [0.2, 0.9, 1.1],
+    "k_rgb": [3.9, 2.5, 2.2],
+    "roughness": 0.5
+  },
+  "transport": {
+    "mode": "neural_causal_renewal",
+    "renewal": {
+      "model": "outputs/models/renewal_shader_ball_sigma002_r05_joint/renewal_model.json",
+      "profile_mode": "cubic",
+      "profile_maximum_step": 0.25,
+      "backend": "scalar"
+    },
+    "roulette_start_depth": 8
+  },
+  "numeric": {
+    "relative_tolerance": 1e-6,
+    "absolute_tolerance": 1e-9,
+    "max_quadrature_subdivisions": 2048,
+    "max_root_iterations": 128,
+    "distance_absolute_tolerance": 1e-10
+  },
+  "render": {
+    "width": 128,
+    "height": 128,
+    "samples_per_pixel": 16,
+    "camera_position": [2.27, -1.09, 1.42],
+    "camera_target": [0.0, 0.0, 0.35],
+    "vertical_fov_degrees": 25.0,
+    "environment": "directional_gradient",
+    "thread_count": 0,
+    "safety_depth_cap": 128
+  },
+  "output_directory": "outputs/render_neural_causal_renewal_shader_ball_sigma005"
+}

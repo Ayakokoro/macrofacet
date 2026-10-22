@@ -176,7 +176,7 @@ void runRenderExperiments(const ExperimentConfig& config) {
                 (mode == "hybrid_first_hit" && config.continuationMethod == "classic_local"))
                 renderConfig.material.gpModel = GpModel::LocalTangent;
             if (mode == "classic_global" || mode == "global_conditional" ||
-                mode == "global_conditional_renewal_plus" || mode == "neural_renewal" ||
+                mode == "global_conditional_renewal_plus" || mode == "neural_renewal" || mode == "neural_causal_renewal" ||
                 (mode == "hybrid_first_hit" && (config.continuationMethod == "neural_renewal" ||
                     config.continuationMethod == "global_conditional" ||
                     config.continuationMethod == "global_conditional_renewal_plus" ||

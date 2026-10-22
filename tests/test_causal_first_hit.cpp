@@ -4,6 +4,7 @@
 #include "macrofacet/mathutility/Gaussian1D.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <sstream>
 
 namespace {
 nlohmann::json causalFixture() {
@@ -32,6 +33,107 @@ nlohmann::json causalFixture() {
         {"gradient_config",{{"hidden",2},{"width",2},{"size",2},{"kind","mixture"},{"history",true}}},
         {"backbone",b},{"gradient",g}};
 }
+
+} // namespace
+
+void testCausalRenewal(TestContext& context) {
+    using namespace mf;
+    auto fixture = causalFixture();
+    fixture["format"] = "macrofacet.causal_renewal";
+    fixture.erase("event"); fixture.erase("gradient_convention");
+    fixture["distance_convention"] = "q=distance_from_birth/ell";
+    fixture["gru_convention"] = "pytorch_rzn_reset_after";
+    fixture["checkpoint_sha256"] = std::string(64,'0');
+    fixture["conditioning"] = {
+        {"modes", {"positive_exterior", "collision_state"}},
+        {"initial", {"surface_mode", "b0", "known_value_residual", "known_derivative_residual"}},
+        {"derivative_residual", "ell*g0/sigma - b_prime(0)"},
+        {"encoding", "asinh; unknown A residuals masked"},
+        {"event", "first_downcrossing_after_start"}, {"baseline", "positive_side_local_hazard"}};
+    fixture["target"] = {
+        {"variable", "w = -ell * directional_derivative_at_hit / sigma"},
+        {"support", "w > 0; no upper truncation"}, {"physical_derivative", "-sigma * w / ell"},
+        {"event", "first_downcrossing_after_start"}, {"state", "left_limit_of_fixed_q_interval"}};
+    fixture["backbone"]["initial.0.weight"] = {{"shape",{2,4}},{"values",std::vector<float>(8,0)}};
+    std::istringstream input(fixture.dump());
+    const auto model = std::make_shared<CausalRenewalModel>(CausalRenewalModel::load(input));
+    const RayMeanProfile profile({{0,2.03,{0,0,0,0}}});
+    const RayMeanProfile split({{0,.31,{0,0,0,0}},{.31,2.03,{0,0,0,0}}});
+    const RayMeanProfile shortProfile({{0,.03,{0,0,0,0}}});
+    const std::array<RayStartCondition,2> starts{{{}, {RayStartMode::SurfaceOutward,1.2}}};
+    for (const auto& start : starts) {
+        for (const auto& p : model->query(profile,start,{0,.125,.126,1.,2.03}))
+            context.near(p.cumulativeHazard,p.q/kPi,2e-14,"A/B zero residual gives the positive local hazard");
+        Random rng(771);
+        for (int i = 0; i < 80; ++i) {
+            const auto& p = i%3 == 0 ? shortProfile : i%3 == 1 ? split : profile;
+            const std::array<double,3> u{rng.openUniform01(),rng.openUniform01(),rng.openUniform01()};
+            const auto s = model->sample(p,start,u,1e-11);
+            const double q = -kPi*std::log(u[0]);
+            context.require(s.hit == (q < p.maximumX()),"A/B retains escape probability");
+            context.near(s.q,std::min(q,p.maximumX()),1e-11,"A/B inverse matches analytic exponential");
+            if (s.hit) {
+                const float scale = std::log1p(std::exp(0.f))+.01f;
+                context.near(s.speed,scale*normalQuantile((1+u[2])/2),1e-10,"A/B speed is a normalized half normal");
+            }
+        }
+    }
+    bool rejected = false;
+    try { model->sample(profile,{RayStartMode::SurfaceOutward,0},{.5,.5,.5}); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    context.require(rejected,"joint sampler rejects inward or tangent B starts");
+    rejected = false;
+    try { model->sample(profile,{}, {0,.5,.5}); } catch (const std::invalid_argument&) { rejected = true; }
+    context.require(rejected,"joint sampler rejects closed uniforms");
+    auto wrong = fixture; wrong["kernel"] = "matern_3_2";
+    rejected = false;
+    try { std::istringstream stream(wrong.dump()); CausalRenewalModel::load(stream); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    context.require(rejected,"joint loader enforces SE contract");
+
+    GPSSField field{std::make_shared<ConstantMean>(0),
+        CovarianceKernel::fromCorrelationLengths(CovarianceKernelType::SquaredExponential,.02,Vector3(.1,.1,.1)),
+        {Point3(-.1,-.1,-.1),Point3(.1,.1,.1)}};
+    RenewalMedium medium(field,*model);
+    Random rng(102);
+    const Vector3 birthGradient(.2,.3,1.);
+    const auto flight = *medium.beginFlight({Point3::Zero(),Vector3::UnitZ()},birthGradient);
+    context.near(flight.start.outwardDerivative,5,1e-14,"B projects the full birth gradient with ell/sigma");
+    context.near(medium.transmittance(flight,.05),std::exp(-.5/kPi),1e-14,"joint visibility uses the conditional survival");
+    bool observedHit = false;
+    for (int i = 0; i < 64; ++i) {
+        const auto hit = medium.sample(flight,rng);
+        if (!hit.hit) continue;
+        observedHit = true;
+        context.near(hit.gradient.dot(flight.ray.direction),-flight.sigma/flight.ell*hit.speed,1e-14,
+                     "joint full gradient preserves its sampled directional derivative");
+        context.near(hit.normal.norm(),1,1e-14,"joint normal is normalized");
+    }
+    context.require(observedHit,"joint medium exercises B collisions");
+    ExperimentConfig config; config.transportMode = "neural_causal_renewal"; config.field = field;
+    config.renewal.causalModel = model;
+    config.material.ndfFamily = NdfFamily::GeneralizedGaussian;
+    config.material.conductor.forceUnitFresnel = true;
+    config.render.cameraPosition = Point3(0,0,.4); config.render.cameraTarget = Point3::Zero();
+    config.render.width = 4; config.render.height = 4; config.render.samplesPerPixel = 16;
+    config.render.safetyDepthCap = 128; config.render.rouletteStartDepth = 128;
+    config.render.environment = "unit_white"; config.render.threadCount = 1;
+    const auto image = renderAnalyticScene(config);
+    context.require(image.statistics.realCollisions > 0 && image.statistics.numericalFailures == 0 &&
+                    image.statistics.safetyCapTerminations == 0,"joint renderer traces A/B reflections without failures");
+    for (const auto& pixel : image.pixels)
+        context.near((pixel-Spectrum::Ones()).norm(),0,1e-14,"joint white furnace conserves energy");
+    config.render.environment = "directional_gradient";
+    config.material.conductor.forceUnitFresnel = false;
+    const auto serial = renderAnalyticScene(config);
+    config.render.threadCount = 3;
+    const auto threaded = renderAnalyticScene(config);
+    for (std::size_t i = 0; i < serial.pixels.size(); ++i)
+        context.near((threaded.pixels[i]-serial.pixels[i]).norm(),0,0,"joint rendering is deterministic across workers");
+    config.renewal.backend = "torch_cuda";
+    rejected = false;
+    try { prepareRenewalModel(config); } catch (const std::invalid_argument&) { rejected = true; }
+    context.require(rejected,"joint renderer explicitly rejects unsupported GPU inference");
 }
 
 void testCausalFirstHit(TestContext& context) {

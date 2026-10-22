@@ -1,0 +1,19 @@
+{
+  "source_config": "configs/render_neural_causal_renewal_shader_ball_sigma002.json",
+  "source_image": "outputs/render_neural_causal_renewal_shader_ball_sigma002/render_neural_causal_renewal_directional.pfm",
+  "output_directory": "outputs/diagnostics/contact_b_20261022",
+  "seed": 20261022,
+  "pixels_per_axis": 8,
+  "states_per_region_depth": 32,
+  "trials_per_state": 2048,
+  "thread_count": 16,
+  "gpis_sample_points": 8,
+  "gpis_step_size": 0.01,
+  "regions": [
+    {"name": "lower_contact", "kind": "contact", "xyxy": [160, 360, 350, 410]},
+    {"name": "inner_top_contact", "kind": "contact", "xyxy": [240, 90, 325, 130]},
+    {"name": "inner_right_contact", "kind": "contact", "xyxy": [340, 170, 385, 230]},
+    {"name": "front_band_control", "kind": "control", "xyxy": [180, 290, 330, 325]},
+    {"name": "center_inset_control", "kind": "control", "xyxy": [240, 165, 305, 220]}
+  ]
+}

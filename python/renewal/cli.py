@@ -53,6 +53,9 @@ def main():
     full_exporter = commands.add_parser("export-model")
     full_exporter.add_argument("--checkpoint", type=Path, required=True)
     full_exporter.add_argument("--output", type=Path, required=True)
+    joint_exporter = commands.add_parser("export-joint", help="export the A/B residual GRU and its hit-gradient head")
+    joint_exporter.add_argument("--checkpoint", type=Path, required=True)
+    joint_exporter.add_argument("--output", type=Path, required=True)
     verifier = commands.add_parser("verify-cpp")
     verifier.add_argument("--checkpoint", type=Path, required=True)
     verifier.add_argument("--executable", type=Path, required=True)
@@ -91,6 +94,9 @@ def main():
         result = export_hazard(args.checkpoint, args.output)
     elif args.command == "export-model":
         result = export_model(args.checkpoint, args.output)
+    elif args.command == "export-joint":
+        from .causal_export import export_joint
+        result = export_joint(args.checkpoint, args.output)
     elif args.command == "verify-cpp":
         result = verify_cpp(args.checkpoint, args.executable, args.config, args.output, args.trials, args.limit_rays)
     else:

@@ -91,3 +91,8 @@ conductor reflections in the `neural_renewal` mode. The `renewal-query` command
 evaluates A/B distance, transmittance and speed distributions. See
 `configs/render_neural_renewal_shader_ball.json` for a complete scene.
 That scene selects `backend="auto"` and `batch_size=4096`, using CUDA when available.
+
+The A/B residual-GRU joint checkpoint uses `export-joint` and the independent
+`neural_causal_renewal` mode (CPU scalar inference, parallel camera paths). See
+[the joint scene](configs/render_neural_causal_renewal_shader_ball_sigma002.json)
+and [export/render instructions](docs/RENEWAL_CPP.md).

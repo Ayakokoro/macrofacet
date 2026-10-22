@@ -146,6 +146,23 @@ void requireNanoVdbField(const ExperimentConfig& config) {
 }
 
 void prepareRenewalModel(ExperimentConfig& config) {
+    if (config.transportMode == "neural_causal_renewal") {
+        if (config.renewal.backend != "scalar")
+            throw std::invalid_argument("neural_causal_renewal currently supports backend=scalar only");
+        if (config.material.ndfFamily != NdfFamily::GeneralizedGaussian || config.material.alphaField)
+            throw std::invalid_argument("neural_causal_renewal requires generalized_gaussian and field.use_alpha_grid=false");
+        if (!config.renewal.causalModel) {
+            if (config.renewal.modelPath.empty())
+                throw std::invalid_argument("neural_causal_renewal requires transport.renewal.model (export-joint JSON)");
+            config.renewal.causalModel = std::make_shared<const CausalRenewalModel>(
+                CausalRenewalModel::load(config.renewal.modelPath));
+        }
+        (void)RenewalMedium(config.field,*config.renewal.causalModel,config.renewal.profileMaximumStep,config.renewal.profileMode);
+        config.renewal.resolvedBackend = "scalar";
+        if (config.material.gpModel != GpModel::GlobalPointwise) config.preparedAreaMajorant.reset();
+        config.material.gpModel = GpModel::GlobalPointwise;
+        return;
+    }
     if (config.transportMode == "global_conditional_renewal_plus") {
         if (config.material.ndfFamily != NdfFamily::GeneralizedGaussian || config.material.alphaField)
             throw std::invalid_argument("global_conditional_renewal_plus requires generalized_gaussian without alpha grid");
@@ -427,7 +444,7 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     if (config.transportMode != "classic" && config.transportMode != "classic_local" &&
         config.transportMode != "classic_global" &&
         config.transportMode != "global_conditional" && config.transportMode != "global_conditional_renewal_plus" &&
-        config.transportMode != "neural_renewal" &&
+        config.transportMode != "neural_renewal" && config.transportMode != "neural_causal_renewal" &&
         config.transportMode != "hybrid_first_hit" && config.transportMode != "all")
         throw std::invalid_argument("unknown transport.mode: " + config.transportMode);
     if (transport.contains("local_conditional"))
@@ -513,6 +530,9 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
     }
     if (renewalJson) {
         const auto& renewal = *renewalJson;
+        if (config.transportMode == "neural_causal_renewal" &&
+            (renewal.contains("step") || renewal.contains("step_size") || renewal.contains("integration_step")))
+            throw std::invalid_argument("causal renewal recurrent/integration steps are fixed by the exported model");
         config.renewal.modelPath = renewal.at("model").get<std::string>();
         config.renewal.profileMaximumStep = renewal.value("profile_maximum_step", 0.25);
         config.renewal.profileMode = renewal.value("profile_mode", "cubic");
@@ -789,7 +809,7 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         {"mean_policy","global_field"},{"kernel_policy","shared_global_kernel"},
         {"coordinate_system","world"},
         {"majorant","analytic_birth_and_conditional_interval_bounds"}};
-    if ((!config.renewal.modelPath.empty() || config.renewal.model) &&
+    if ((!config.renewal.modelPath.empty() || config.renewal.model || config.renewal.causalModel) &&
         !(config.transportMode == "hybrid_first_hit" && config.continuationMethod != "neural_renewal")) {
         result["transport"]["renewal"] = {
             {"model", config.renewal.modelPath.string()},
@@ -805,6 +825,16 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
         if (config.renewal.model) {
             result["transport"]["renewal"]["checkpoint_sha256"] = config.renewal.model->checkpointSha256();
             result["transport"]["renewal"]["model_kernel_type"] = covarianceKernelTypeName(config.renewal.model->kernelType());
+        }
+        if (config.transportMode == "neural_causal_renewal" && config.renewal.causalModel) {
+            const auto& model = *config.renewal.causalModel;
+            result["transport"]["renewal"]["checkpoint_sha256"] = model.checkpointSha256();
+            result["transport"]["renewal"]["model_kernel_type"] = "squared_exponential";
+            result["transport"]["renewal"]["model_format"] = "macrofacet.causal_renewal";
+            result["transport"]["renewal"]["recurrent_step"] = model.step();
+            result["transport"]["renewal"]["integration_step"] = model.integrationStep();
+            result["transport"]["renewal"]["camera_condition"] = "positive_exterior";
+            result["transport"]["renewal"]["continuation_condition"] = "last_collision_value_and_full_gradient";
         }
     }
     if (config.transportMode == "hybrid_first_hit") {

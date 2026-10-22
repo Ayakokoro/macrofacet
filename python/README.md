@@ -49,7 +49,17 @@ Python 查询入口为 `renewal.causal_gradient.load_joint` 和 `query_points`�
 上述 A/B 起点向量 `initial` 和命中位置向量 `q`，用 `head(query_points(backbone, features, initial, q))`
 取得分布参数；`first_hit_se.gradient_cdf.log_prob/cdf/sample` 可计算密度、CDF 和采样。
 采样使用每个命中点两个位于 `(0,1)` 的均匀数，物理方向导数恢复为 `-sigma*w/ell`。
-这是沿射线的方向导数头；C++ 渲染导出尚未接入新的 A/B 联合 checkpoint。
+这是沿射线的方向导数头。C++ 使用独立的 `neural_causal_renewal` 模式加载 joint 导出，
+相机光线采用 A 条件，每次反射后用完整碰撞梯度初始化 B 条件。当前支持 CPU 标量推理与多线程渲染：
+
+```powershell
+python -B python/renewal_cli.py export-joint --checkpoint outputs/models/renewal_shader_ball_sigma002_r05_joint/best.pt --output outputs/models/renewal_shader_ball_sigma002_r05_joint/renewal_model.json
+cmake --build build --config Release --target macrofacet_experiments macrofacet_query_causal_renewal --parallel 4
+build/Release/macrofacet_experiments.exe render --config configs/render_neural_causal_renewal_shader_ball_sigma002.json --width 32 --height 32 --spp 4 --output outputs/render_neural_causal_renewal_shader_ball_sigma002/smoke
+```
+
+旧 `export-model` 用于旧的 `RenewalNetwork`，joint 应使用 `export-joint`。
+固定 GRU 步长、梯度左极限约定和 Python/C++ 对照命令见 [C++ 接入说明](../docs/RENEWAL_CPP.md)。
 
 下面的 `first_hit_se_cli.py causal-residual` 是先前无条件首次过零实验的入口。
 

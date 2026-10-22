@@ -203,9 +203,11 @@ int main(int argc, char** argv) {
         if (config.transportMode != "classic" && config.transportMode != "classic_local" &&
             config.transportMode != "classic_global" &&
             config.transportMode != "global_conditional" && config.transportMode != "global_conditional_renewal_plus" &&
-            config.transportMode != "neural_renewal" &&
+            config.transportMode != "neural_renewal" && config.transportMode != "neural_causal_renewal" &&
             config.transportMode != "hybrid_first_hit" && config.transportMode != "all")
             throw std::invalid_argument("unknown transport mode: " + config.transportMode);
+        if (command == "curves" && config.transportMode == "neural_causal_renewal")
+            throw std::invalid_argument("use macrofacet_query_causal_renewal for joint A/B queries and render for path tracing");
         if (command == "curves" && (config.transportMode == "neural_renewal" || config.transportMode == "hybrid_first_hit"))
             throw std::invalid_argument("use renewal-query for neural curves and render for neural path tracing");
         mf::prepareRenewalModel(config);

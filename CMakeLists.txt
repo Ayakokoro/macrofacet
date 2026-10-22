@@ -26,6 +26,7 @@ add_library(macrofacet
     src/learned/RenewalHazardModel.cpp
     src/learned/FirstHitSEModel.cpp
     src/learned/CausalFirstHitModel.cpp
+    src/learned/CausalRenewalModel.cpp
     src/learned/RenewalBatchSession.cpp
     src/transport/RenewalRayDistribution.cpp
     src/transport/RenewalMedium.cpp
@@ -103,6 +104,8 @@ add_executable(macrofacet_verify_renewal_batch EXCLUDE_FROM_ALL tools/verify_ren
 target_link_libraries(macrofacet_verify_renewal_batch PRIVATE macrofacet)
 add_executable(macrofacet_query_first_hit_se EXCLUDE_FROM_ALL tools/query_first_hit_se.cpp)
 target_link_libraries(macrofacet_query_first_hit_se PRIVATE macrofacet)
+add_executable(macrofacet_query_causal_renewal tools/query_causal_renewal.cpp)
+target_link_libraries(macrofacet_query_causal_renewal PRIVATE macrofacet)
 
 # ---------------------------------------------------------------------------
 # macrofacet_field: the NanoVDB-backed field library.
@@ -183,11 +186,14 @@ if(MACROFACET_BUILD_FIELDS)
     target_link_libraries(macrofacet_inspect_collision_gradients PRIVATE macrofacet_field)
     add_executable(macrofacet_compare_camera_first_hit EXCLUDE_FROM_ALL tools/compare_camera_first_hit.cpp)
     target_link_libraries(macrofacet_compare_camera_first_hit PRIVATE macrofacet_field)
+    add_executable(macrofacet_compare_contact_b EXCLUDE_FROM_ALL tools/compare_contact_b.cpp)
+    target_link_libraries(macrofacet_compare_contact_b PRIVATE macrofacet_field)
     if(MSVC)
         target_compile_options(macrofacet_inspect_renewal_ray PRIVATE /EHsc /utf-8)
         target_compile_options(macrofacet_collect_shader_ball_dataset PRIVATE /EHsc /utf-8)
         target_compile_options(macrofacet_inspect_collision_gradients PRIVATE /EHsc /utf-8)
         target_compile_options(macrofacet_compare_camera_first_hit PRIVATE /EHsc /utf-8)
+        target_compile_options(macrofacet_compare_contact_b PRIVATE /EHsc /utf-8)
     endif()
     if(MACROFACET_ENABLE_TORCH)
         # Diagnostic copies override the corresponding static-library objects.
@@ -202,7 +208,7 @@ if(MACROFACET_BUILD_FIELDS)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/profiling/generate_causal_profile.py"
                         "${CMAKE_CURRENT_SOURCE_DIR}" "${CAUSAL_PROFILE_DIR}"
                 DEPENDS tools/profiling/generate_causal_profile.py
-                        src/learned/CausalFirstHitModel.cpp src/learned/CausalFirstHitTorchBackend.cpp
+                        src/learned/CausalFirstHitModel.cpp src/learned/CausalModelInternal.h src/learned/CausalFirstHitTorchBackend.cpp
                         src/integrator/MacrofacetPathTracer.cpp
                 VERBATIM)
             add_executable(macrofacet_profile_causal_first_hit EXCLUDE_FROM_ALL
@@ -302,6 +308,7 @@ if(WIN32 AND MACROFACET_ENABLE_TORCH)
         DEPENDS ${MACROFACET_TORCH_DLLS}
         COMMENT "Deploying LibTorch runtime DLLs" VERBATIM)
     add_custom_target(macrofacet_torch_runtime DEPENDS "${MACROFACET_TORCH_RUNTIME_STAMP}")
+    add_dependencies(macrofacet_query_causal_renewal macrofacet_torch_runtime)
     foreach(executable macrofacet_experiments macrofacet_tests macrofacet_fieldgen macrofacet_renewal_benchmark macrofacet_verify_renewal_batch macrofacet_query_first_hit_se macrofacet_profile_renewal macrofacet_profile_causal_first_hit macrofacet_inspect_renewal_ray macrofacet_inspect_first_hit_se macrofacet_compare_first_hit_render macrofacet_inspect_collision_gradients macrofacet_compare_camera_first_hit macrofacet_collect_shader_ball_dataset)
         if(TARGET ${executable})
             add_dependencies(${executable} macrofacet_torch_runtime)
@@ -328,10 +335,10 @@ set_tests_properties(macrofacet_data_analysis_tests PROPERTIES
 # Python neural tests remain optional, independently of the C++ LibTorch backend.
 option(MACROFACET_TEST_NEURAL "Run Renewal+ Python tests (requires torch and numpy)" OFF)
 if(MACROFACET_TEST_NEURAL)
-    add_dependencies(macrofacet_tests macrofacet_query_first_hit_se)
+    add_dependencies(macrofacet_tests macrofacet_query_first_hit_se macrofacet_query_causal_renewal)
     add_test(NAME macrofacet_renewal_tests
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s python/tests -v)
     set_tests_properties(macrofacet_renewal_tests PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        ENVIRONMENT "MACROFACET_RENEWAL_EXE=$<TARGET_FILE:macrofacet_experiments>;MACROFACET_FIRST_HIT_EXE=$<TARGET_FILE:macrofacet_query_first_hit_se>")
+        ENVIRONMENT "MACROFACET_RENEWAL_EXE=$<TARGET_FILE:macrofacet_experiments>;MACROFACET_FIRST_HIT_EXE=$<TARGET_FILE:macrofacet_query_first_hit_se>;MACROFACET_CAUSAL_RENEWAL_EXE=$<TARGET_FILE:macrofacet_query_causal_renewal>")
 endif()
