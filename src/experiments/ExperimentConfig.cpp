@@ -1,4 +1,5 @@
 #include "macrofacet/experiments/ExperimentConfig.h"
+#include "macrofacet/integrator/CausalRenewalCuda.h"
 #include "macrofacet/learned/RenewalBatchSession.h"
 #include "macrofacet/learned/CausalFirstHitModel.h"
 #include "macrofacet/fields/MeanFactory.h"
@@ -146,9 +147,15 @@ void requireNanoVdbField(const ExperimentConfig& config) {
 }
 
 void prepareRenewalModel(ExperimentConfig& config) {
+    if (config.renewal.sampler != "cumulative_inversion" &&
+        !(config.renewal.sampler == "segmented_delta_tracking" &&
+          config.transportMode == "neural_causal_renewal" && config.renewal.backend == "cuda_wavefront"))
+        throw std::invalid_argument("segmented_delta_tracking requires neural_causal_renewal with backend=cuda_wavefront");
     if (config.transportMode == "neural_causal_renewal") {
-        if (config.renewal.backend != "scalar")
-            throw std::invalid_argument("neural_causal_renewal currently supports backend=scalar only");
+        if (config.renewal.backend != "scalar" && config.renewal.backend != "cuda_wavefront")
+            throw std::invalid_argument("neural_causal_renewal requires backend=scalar or cuda_wavefront");
+        if (config.renewal.backend == "cuda_wavefront" && !causalRenewalCudaRegistered())
+            throw std::invalid_argument("cuda_wavefront requires MACROFACET_ENABLE_CAUSAL_CUDA=ON and registered NanoVDB fields");
         if (config.material.ndfFamily != NdfFamily::GeneralizedGaussian || config.material.alphaField)
             throw std::invalid_argument("neural_causal_renewal requires generalized_gaussian and field.use_alpha_grid=false");
         if (!config.renewal.causalModel) {
@@ -158,7 +165,7 @@ void prepareRenewalModel(ExperimentConfig& config) {
                 CausalRenewalModel::load(config.renewal.modelPath));
         }
         (void)RenewalMedium(config.field,*config.renewal.causalModel,config.renewal.profileMaximumStep,config.renewal.profileMode);
-        config.renewal.resolvedBackend = "scalar";
+        config.renewal.resolvedBackend = config.renewal.backend;
         if (config.material.gpModel != GpModel::GlobalPointwise) config.preparedAreaMajorant.reset();
         config.material.gpModel = GpModel::GlobalPointwise;
         return;
@@ -540,13 +547,19 @@ ExperimentConfig loadExperimentConfig(const std::filesystem::path& path) {
             throw std::invalid_argument("transport.renewal.profile_mode must be cubic or point_linear");
         requirePositiveFinite(config.renewal.profileMaximumStep, "transport.renewal.profile_maximum_step");
         config.renewal.backend = renewal.value("backend", "scalar");
+        config.renewal.sampler = renewal.value("sampler", "cumulative_inversion");
+        if (config.renewal.sampler != "cumulative_inversion" &&
+            !(config.renewal.sampler == "segmented_delta_tracking" &&
+              config.transportMode == "neural_causal_renewal" && config.renewal.backend == "cuda_wavefront"))
+            throw std::invalid_argument("transport.renewal.sampler: segmented_delta_tracking requires the CUDA joint backend");
         config.renewal.batchSize = renewal.value("batch_size", 4096);
         config.renewal.rayPoolSize = renewal.value("ray_pool_size", 0);
         config.renewal.auxiliaryBatchMinimum = renewal.value("auxiliary_batch_minimum", 256);
         config.renewal.maximumQueueDelay = renewal.value("maximum_queue_delay", 4);
         config.renewal.maximumInFlightBatches = renewal.value("max_in_flight_batches", 2);
         if (config.renewal.backend != "scalar" && config.renewal.backend != "torch_cpu" &&
-            config.renewal.backend != "torch_cuda" && config.renewal.backend != "auto")
+            config.renewal.backend != "torch_cuda" && config.renewal.backend != "auto" &&
+            !(config.transportMode == "neural_causal_renewal" && config.renewal.backend == "cuda_wavefront"))
             throw std::invalid_argument("unknown transport.renewal.backend");
         if (config.renewal.batchSize < 1 || config.renewal.batchSize > 65536)
             throw std::invalid_argument("transport.renewal.batch_size must be 1..65536");
@@ -821,7 +834,7 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
             {"auxiliary_batch_minimum", config.renewal.auxiliaryBatchMinimum},
             {"maximum_queue_delay", config.renewal.maximumQueueDelay},
             {"max_in_flight_batches", config.renewal.maximumInFlightBatches},
-            {"sampler", "cumulative_inversion"}, {"normal", "full_renewal_plus"}};
+            {"sampler", config.renewal.sampler}, {"normal", "full_renewal_plus"}};
         if (config.renewal.model) {
             result["transport"]["renewal"]["checkpoint_sha256"] = config.renewal.model->checkpointSha256();
             result["transport"]["renewal"]["model_kernel_type"] = covarianceKernelTypeName(config.renewal.model->kernelType());
@@ -835,6 +848,14 @@ void writeResolvedConfig(const ExperimentConfig& config, const std::filesystem::
             result["transport"]["renewal"]["integration_step"] = model.integrationStep();
             result["transport"]["renewal"]["camera_condition"] = "positive_exterior";
             result["transport"]["renewal"]["continuation_condition"] = "last_collision_value_and_full_gradient";
+            if (config.renewal.resolvedBackend == "cuda_wavefront") {
+                result["transport"]["renewal"]["rng_stream"] = "curand_philox_path_v1";
+                result["transport"]["renewal"]["precision"] = "float32_network_float64_geometry_and_integration";
+                if (config.renewal.sampler == "segmented_delta_tracking") {
+                    result["transport"]["renewal"]["majorant"] = "cell_bernstein_gaussian_upper_fixed_gru_factor";
+                    result["transport"]["renewal"]["rng_stream"] = "curand_philox_path_delta_v1";
+                }
+            }
         }
     }
     if (config.transportMode == "hybrid_first_hit") {

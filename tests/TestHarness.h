@@ -49,6 +49,7 @@ void testTungstenFunctionSpace(TestContext& context);
 void testFirstHitRender(TestContext& context);
 void testCausalFirstHit(TestContext& context);
 void testCausalRenewal(TestContext& context);
+void testCausalMajorant(TestContext& context);
 
 #if defined(MACROFACET_TEST_FIELDS)
 void testNanoVdbField(TestContext& context);

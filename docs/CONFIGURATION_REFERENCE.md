@@ -30,12 +30,33 @@ See [Renewal C++ queries](RENEWAL_CPP.md) for export commands, units, and output
 
 `transport.mode="neural_causal_renewal"` loads an A/B joint model exported with
 `python/renewal_cli.py export-joint`. It uses `transport.renewal.model`, requires
-`backend="scalar"`, `profile_mode="cubic"`, an SE kernel and `use_alpha_grid=false`.
+`backend="scalar"` or `backend="cuda_wavefront"`, `profile_mode="cubic"`, an SE
+kernel and `use_alpha_grid=false`.
 The exported recurrent/integration steps are fixed; `profile_maximum_step` only
 controls the mean profile. Camera rays use positive-exterior conditioning and
 reflections retain the last full collision gradient. See
 [the joint scene](../configs/render_neural_causal_renewal_shader_ball_sigma002.json)
 and [deployment instructions](RENEWAL_CPP.md).
+
+The optional `cuda_wavefront` backend requires `MACROFACET_ENABLE_CAUSAL_CUDA=ON`
+and a full-domain NanoVDB SDF. It currently accepts isotropic SE kernels,
+hidden/embedding dimensions up to 32, head widths up to 64 and up to 16 mixture
+components. `ray_pool_size` selects 1..65536 resident paths (0 selects 8192).
+`transport.renewal.sampler` selects `cumulative_inversion` (default) or
+`segmented_delta_tracking` (CUDA joint only). The latter uses conservative
+cellwise cubic Bernstein / Gaussian bounds multiplied by the known recurrent
+interval correction. It retains the fixed GRU grid and full-gradient normal
+sampling; null events never reinitialize or condition the process. Candidate,
+null-event and bound counts appear in `render_summary.csv`; a violated majorant
+fails the render. No quadrature or root inversion is performed for delta flight
+sampling; explicit diagnostic hazard queries still use reference quadrature.
+Field queries, inference, integration/inversion, gradient sampling, reflection,
+roulette and image accumulation execute on CUDA; `thread_count` does not control
+this backend. The legacy inference queue settings, including `batch_size`, do
+not schedule it. The RNG is `curand_philox_path_v1`, independently keyed by camera
+sample index. CPU and GPU images therefore have different Monte Carlo noise.
+Network arithmetic is FP32; geometry and integration remain FP64. Unsupported
+configurations and numerical failures raise errors without a CPU fallback.
 
 The following backend and architecture settings describe the legacy `neural_renewal` model.
 Set `transport.renewal.model` to the JSON from `export-model` and optionally

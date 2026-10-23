@@ -1,4 +1,7 @@
 #include "macrofacet/fields/NanoVdbMean.h"
+#ifdef MACROFACET_HAS_CAUSAL_CUDA
+#include "macrofacet/integrator/CausalRenewalCuda.h"
+#endif
 
 #include "fieldgen/NanoVdbIO.h"
 #include "fields/NanoVdbGridSampler.h"
@@ -301,6 +304,9 @@ nlohmann::json writeNanoVdbMean(const MeanField& mean) {
 } // namespace
 
 void registerNanoVdbFieldTypes() {
+#ifdef MACROFACET_HAS_CAUSAL_CUDA
+    registerCausalRenewalCudaBackend();
+#endif
     registerMeanFactory("nanovdb", makeNanoVdbMean);
     registerMeanWriter("nanovdb", writeNanoVdbMean);
 }

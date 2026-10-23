@@ -50,6 +50,7 @@ add_library(macrofacet
     src/transport/NarrowBandMedium.cpp
     src/transport/CollisionGradientSampler.cpp
     src/integrator/MacrofacetPathTracer.cpp
+    src/integrator/CausalRenewalCudaDispatch.cpp
     src/integrator/RenewalWavefront.cpp
     src/integrator/RenewalCpuExecutor.cpp
     src/experiments/ExperimentConfig.cpp
@@ -115,6 +116,10 @@ target_link_libraries(macrofacet_query_causal_renewal PRIVATE macrofacet)
 # additionally get the "nanovdb" mean type registered.
 # ---------------------------------------------------------------------------
 option(MACROFACET_BUILD_FIELDS "Build the NanoVDB field generator" ON)
+option(MACROFACET_ENABLE_CAUSAL_CUDA "Build full GPU joint causal-renewal renderer" OFF)
+if(MACROFACET_ENABLE_CAUSAL_CUDA AND NOT MACROFACET_BUILD_FIELDS)
+    message(FATAL_ERROR "MACROFACET_ENABLE_CAUSAL_CUDA requires MACROFACET_BUILD_FIELDS")
+endif()
 
 if(MACROFACET_BUILD_FIELDS)
     find_package(nanovdb CONFIG REQUIRED)
@@ -140,6 +145,31 @@ if(MACROFACET_BUILD_FIELDS)
     target_include_directories(macrofacet_field PUBLIC include PRIVATE src)
     target_link_libraries(macrofacet_field
         PUBLIC macrofacet nanovdb::nanovdb igl::igl_core igl_raytri_shim)
+    if(MACROFACET_ENABLE_CAUSAL_CUDA)
+        enable_language(CUDA)
+        find_package(CUDAToolkit REQUIRED)
+        add_library(macrofacet_causal_cuda STATIC src/cuda/CausalRenewalDevice.cu)
+        target_include_directories(macrofacet_causal_cuda PRIVATE include)
+        target_link_libraries(macrofacet_causal_cuda PRIVATE nanovdb::nanovdb CUDA::cudart)
+        set_target_properties(macrofacet_causal_cuda PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
+        # Keep geometry/integration in double and avoid fast-math changes to
+        # Gaussian tails and the FP32 network while validating the first port.
+        target_compile_options(macrofacet_causal_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>)
+        if(MSVC)
+            target_compile_options(macrofacet_causal_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
+        endif()
+        target_sources(macrofacet_field PRIVATE src/fields/CausalRenewalCudaBridge.cpp)
+        target_link_libraries(macrofacet_field PRIVATE macrofacet_causal_cuda)
+        target_compile_definitions(macrofacet_field PUBLIC MACROFACET_HAS_CAUSAL_CUDA=1)
+        add_executable(macrofacet_verify_causal_cuda EXCLUDE_FROM_ALL tools/verify_causal_cuda.cpp)
+        target_link_libraries(macrofacet_verify_causal_cuda PRIVATE macrofacet_field)
+        add_executable(macrofacet_verify_causal_delta EXCLUDE_FROM_ALL tools/verify_causal_delta.cpp)
+        target_link_libraries(macrofacet_verify_causal_delta PRIVATE macrofacet_field)
+        if(MSVC)
+            target_compile_options(macrofacet_verify_causal_cuda PRIVATE /EHsc /utf-8)
+            target_compile_options(macrofacet_verify_causal_delta PRIVATE /EHsc /utf-8)
+        endif()
+    endif()
     if(MSVC)
         # /utf-8 is mandatory: nanovdb headers contain non-ASCII bytes and the
         # default MSVC codepage here is 936, which produces a wall of C4819.
@@ -270,6 +300,7 @@ set(MACROFACET_TEST_SOURCES
     tests/test_tungsten_function_space.cpp
     tests/test_first_hit_render.cpp
     tests/test_causal_first_hit.cpp
+    tests/test_causal_majorant.cpp
     tests/test_transmittance_config.cpp
     tests/test_rendering_threads.cpp)
 set(MACROFACET_TEST_LIBRARIES macrofacet)
@@ -309,6 +340,10 @@ if(WIN32 AND MACROFACET_ENABLE_TORCH)
         COMMENT "Deploying LibTorch runtime DLLs" VERBATIM)
     add_custom_target(macrofacet_torch_runtime DEPENDS "${MACROFACET_TORCH_RUNTIME_STAMP}")
     add_dependencies(macrofacet_query_causal_renewal macrofacet_torch_runtime)
+    if(TARGET macrofacet_verify_causal_cuda)
+        add_dependencies(macrofacet_verify_causal_cuda macrofacet_torch_runtime)
+        add_dependencies(macrofacet_verify_causal_delta macrofacet_torch_runtime)
+    endif()
     foreach(executable macrofacet_experiments macrofacet_tests macrofacet_fieldgen macrofacet_renewal_benchmark macrofacet_verify_renewal_batch macrofacet_query_first_hit_se macrofacet_profile_renewal macrofacet_profile_causal_first_hit macrofacet_inspect_renewal_ray macrofacet_inspect_first_hit_se macrofacet_compare_first_hit_render macrofacet_inspect_collision_gradients macrofacet_compare_camera_first_hit macrofacet_collect_shader_ball_dataset)
         if(TARGET ${executable})
             add_dependencies(${executable} macrofacet_torch_runtime)

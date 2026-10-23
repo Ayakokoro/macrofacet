@@ -47,6 +47,47 @@ build\Release\macrofacet_experiments.cmd first-passage --config configs\collisio
 build\Release\macrofacet_experiments.cmd first-passage --config configs\collision_state_matern52_training.json
 ```
 
+To render the same NanoVDB with classic local/global, global conditional, and
+the joint neural model, use the standard-library Python comparison script:
+
+```powershell
+python tools/render_nvdb_comparison.py --config configs/render_neural_causal_renewal_shader_ball_sigma002_cuda.json --width 128 --height 128 --spp 16 --output outputs/compare_shader_ball
+```
+
+The script inherits the base config's NVDB, camera, material, lighting, seed,
+roulette/depth limits, and render budget unless overridden. It runs the four
+modes sequentially, placing results in `classic_local/`, `classic_global/`,
+`global_conditional/`, and `neural/`. Each has PFM/BMP images, renderer statistics,
+resolved config, and `render.log`; the output root has generated `configs/`,
+`comparison.csv`, run status/commands in `comparison.json`, and a side-by-side
+`comparison.html`. Reusing the output directory reruns the selected modes and
+replaces their outputs; the source config is not modified.
+
+For Gaussian classic modes, an omitted `transport.classic_phase_proposal`
+defaults to `target_vndf` in this script. This directly samples the target visible
+normal distribution, avoiding the large importance weights of the renderer's
+`uniform` default. Explicit base-config choices are preserved;
+`--classic-phase-proposal uniform|paper_mixture|target_vndf` overrides them.
+The selected proposal is recorded in the generated configs and comparison CSV.
+
+`--nvdb <file.nvdb>` replaces the shared field, and `--model <bundle.json>`
+replaces the joint checkpoint. `--config configs/render_neural_causal_renewal_bunny_cuda.json`
+uses the bunny setup. A field without stored sigma also
+needs `field.sigma` or `--sigma 0.02`; a stored sigma must agree with the supplied
+value. Relative paths are resolved from the repository root, even when invoked
+elsewhere. Python 3.10+ and a built `macrofacet_experiments` are required; use
+`--exe` for a binary outside the usual `build/` locations.
+
+`--modes class_local class_global global_conditional neural` selects the default
+four modes (`class_*` aliases mean `classic_*`). Here `neural` means
+`neural_causal_renewal`, using an `export-joint` bundle. Analytic modes run on CPU;
+neural inherits its backend/sampler from the config. `--neural-backend scalar`
+selects CPU neural inference with cumulative inversion; CUDA requires a CUDA-enabled
+build. `--threads` controls CPU workers only. The same seed does not make CPU and
+CUDA noise identical. Comparisons require SE, a generalized Gaussian material,
+`field.use_alpha_grid=false`, and full-domain SDF coverage for neural rendering.
+Add `--dry-run` to write configs and print commands without starting any renders.
+
 The `first-passage` executable only generates CSV/JSON data. Create the plots
 in a separate step with the standard-library Python visualizer:
 
@@ -93,6 +134,10 @@ evaluates A/B distance, transmittance and speed distributions. See
 That scene selects `backend="auto"` and `batch_size=4096`, using CUDA when available.
 
 The A/B residual-GRU joint checkpoint uses `export-joint` and the independent
-`neural_causal_renewal` mode (CPU scalar inference, parallel camera paths). See
+`neural_causal_renewal` mode (CPU scalar paths or the optional full CUDA renderer). See
 [the joint scene](configs/render_neural_causal_renewal_shader_ball_sigma002.json)
-and [export/render instructions](docs/RENEWAL_CPP.md).
+and [export/render instructions](docs/RENEWAL_CPP.md). The
+[CUDA joint scene](configs/render_neural_causal_renewal_shader_ball_sigma002_cuda.json)
+uses `backend="cuda_wavefront"` and `sampler="segmented_delta_tracking"`;
+build with `MACROFACET_ENABLE_CAUSAL_CUDA=ON`. Set the sampler to
+`cumulative_inversion` for the original GPU quadrature/inversion path.

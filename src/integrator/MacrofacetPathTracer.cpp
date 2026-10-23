@@ -1,4 +1,5 @@
 #include "macrofacet/integrator/MacrofacetPathTracer.h"
+#include "macrofacet/integrator/CausalRenewalCuda.h"
 #include "macrofacet/integrator/RenewalWavefront.h"
 #include "macrofacet/integrator/RenewalCpuExecutor.h"
 #include "macrofacet/learned/CausalFirstHitModel.h"
@@ -611,6 +612,8 @@ RenderedImage renderAnalyticScene(const ExperimentConfig& config,
             return renderCausalFirstHit(prepared,*hybrid,completedCameraRays);
     } else if (config.transportMode == "neural_causal_renewal") {
         prepareRenewalModel(prepared);
+        if (prepared.renewal.resolvedBackend == "cuda_wavefront")
+            return renderCausalRenewalCuda(prepared,completedCameraRays);
         renewal = std::make_unique<RenewalMedium>(prepared.field,*prepared.renewal.causalModel,
                                                 prepared.renewal.profileMaximumStep,prepared.renewal.profileMode);
     } else if (config.transportMode == "neural_renewal") {

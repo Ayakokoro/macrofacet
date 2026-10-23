@@ -3,7 +3,7 @@
   "seed": 17429,
   "field": {
     "mean_type": "nanovdb",
-    "grid_file": "outputs/fields/shader_ball_full_0.02.nvdb",
+    "grid_file": "outputs/fields/shader_ball_full_0.05.nvdb",
     "use_alpha_grid": false,
     "kernel_type": "squared_exponential"
   },
@@ -77,5 +77,5 @@
     "thread_count": 0,
     "safety_depth_cap": 64
   },
-  "output_directory": "outputs/render_first_hit_gpis_tungsten_shader_ball_sigma002"
+  "output_directory": "outputs/render_first_hit_gpis_tungsten_shader_ball_sigma005"
 }

@@ -18,10 +18,11 @@ build/Release/macrofacet_experiments.exe render --config configs/render_neural_c
 可加 `--width 32 --height 32 --spp 4 --output outputs/render_neural_causal_renewal_shader_ball_sigma002/smoke` 做小图检查。
 
 该模式名为 `neural_causal_renewal`，权重路径仍放在 `transport.renewal.model`。
-它只接受 `backend="scalar"`、`profile_mode="cubic"`、SE 核和 `use_alpha_grid=false`，
+它接受 `backend="scalar"` 或 `backend="cuda_wavefront"`，要求
+`profile_mode="cubic"`、SE 核和 `use_alpha_grid=false`，
 CPU 光线线程数由 `render.thread_count` 或 `--threads` 控制。
 旧的 `export-model`、`neural_renewal` 和无条件 `neural_first_hit_se` 使用不同模型契约。
-目前 joint 没有 CUDA 批量后端，也未接入 `hybrid_first_hit` 的混合模式。
+joint 尚未接入 `hybrid_first_hit` 的混合模式。
 
 相机首段采用与训练相同的 A 条件 `F(entry)>0`；进入包围盒是计距起点，不是一次零值观测。
 每次反射后，以同一碰撞点和完整梯度建立 B 条件。四维输入为
@@ -35,7 +36,88 @@ CPU 光线线程数由 `render.thread_count` 或 `--threads` 控制。
 采样正速度 `W` 后以 `V=-sigma*W/ell` 恢复方向导数，复用 Renewal+ 的条件横向梯度重建。
 `resolved_config.json` 记录 checkpoint 哈希、固定步长和 A/B 条件。
 
-部署数值对照：
+### Joint CUDA 渲染
+
+在安装 CUDA Toolkit 的环境中启用独立的原生后端：
+
+```powershell
+cmake -S . -B build -DMACROFACET_ENABLE_CAUSAL_CUDA=ON
+cmake --build build --config Release --target macrofacet_experiments macrofacet_verify_causal_cuda --parallel 4
+build/Release/macrofacet_experiments.exe render --config configs/render_neural_causal_renewal_shader_ball_sigma002_cuda.json
+```
+
+CUDA 示例固定为 σ=0.02、128×128、16 spp，默认分段 delta tracking，输出目录带 `_cuda_delta`。
+可以追加 `--width 512 --height 512 --spp 16`。原 checkpoint 无需重新训练或导出。
+`ray_pool_size` 默认为 8192，控制显存中的路径槽位；路径完成后在设备上领取新任务。
+每个 8 线程小组协作推进一条路径，单次 kernel 最多推进 8 个区间，以限制显示 GPU 上的单次工作量。
+CPU 只负责加载、上传、kernel 提交、读取进度和最终图像。
+
+SDF 查询、逐体素三次剖面、GRU/MLP、hazard 积分和求逆、完整梯度、Fresnel、
+反射及俄罗斯轮盘赌都在 CUDA 上执行。体素多项式按需构造并在积分片段之间复用；
+hazard 使用等价的 `erfcx` 公式稳定计算高斯尾部。选择积分求逆时，积分步长和 GL8 规则与 scalar 一致。
+网络保留 float32，几何、积分和图像累积使用 float64，没有启用 fast math。
+
+当前支持 full-domain NanoVDB、各向同性 SE、hidden/embedding ≤32、head width ≤64、
+mixture components ≤16，以及 `directional_gradient` / `unit_white` 环境。
+输入不受支持或出现数值失败时直接报错。CUDA 使用按相机样本编号独立初始化的
+`curand_philox_path_v1`；与 CPU 的 `per_pixel_v1` 噪声不同，不能要求 PFM 逐像素相同。
+槽位数量不改变路径随机数，但原子累积顺序可能产生最后几位的舍入差异。
+
+可使用已捕获的接触区域 B 状态以及自动生成的相机 A 状态检查实现：
+
+```powershell
+build/Release/macrofacet_verify_causal_cuda.exe configs/render_neural_causal_renewal_shader_ball_sigma002_cuda.json outputs/diagnostics/contact_b_20261022/capture.json outputs/diagnostics/cuda_joint_20261022/parity.json 64
+```
+
+验证为两端提供相同的均匀数和正态数，比较完整飞行的再碰撞概率、命中事件、距离、
+速度与完整梯度。它验证实现一致性，不改变模型与 GPIS 之间已有的统计差异。
+
+原积分求逆基准：2026-10-22，RTX 4060 Laptop 8 GiB、i9-13900HX，σ=0.02、128×128、16 spp，
+交替运行两轮：CPU 32 线程为 55.87 / 47.33 s，CUDA 为 33.30 / 33.20 s，
+中位数比约 1.55。计时包含 CUDA 初始化和上传，不包含配置加载阶段的场准备。
+320 条实际 B 状态与 137 条相机 A 状态各采样 64 次，命中判断无差异；再碰撞概率
+最大绝对差 1.19e-7，法线最大夹角 0.00183°。白炉、射线池容量变化、CUDA memcheck /
+synccheck 均通过。完整结果见 [GPU 验证汇总](../outputs/diagnostics/cuda_joint_20261022/summary.json)
+及 [两轮原始计时](../outputs/diagnostics/cuda_joint_20261022/benchmark.json)。
+
+### 分段 delta tracking
+
+CUDA joint 还支持 `transport.renewal.sampler="segmented_delta_tracking"`。
+将其设为 `"cumulative_inversion"` 可恢复上述积分求逆模式；省略该项时仍默认积分求逆。
+分段 delta tracking 在原固定 GRU 区间与体素三次剖面的交集上构造上界，
+用候选事件替代 GL8 积分和碰撞距离二分；网络、精度与法线采样不变。
+三次多项式及其导数通过 Bernstein 控制系数给出下界，再使用
+[高斯 Mills 比例不等式](https://dlmf.nist.gov/7.8.E2) 给出解析 hazard 上界，
+乘以当前 GRU 区间已知的 `exp(residual)`。控制系数采用向外舍入，并计入
+Horner 求值和函数舍入余量。上界不是通过有限采样点的最大值估计的。
+
+指数光学距离在上界区间之间连续消耗；空碰撞只拒绝候选点，不添加 GP 观测、
+不重置出生点或隐藏状态。只有经过原固定 GRU 边界才更新状态，真实命中后才调用梯度头。
+`render_summary.csv` 中 `dda_candidates`、`null_collisions`、`bound_intervals`
+记录跟踪工作量；上界越界或非法候选会报错，而不会夹紧接受概率。
+该模式记录 RNG 为 `curand_philox_path_delta_v1`，与积分求逆的图像噪声不同。
+
+```powershell
+cmake --build build --config Release --target macrofacet_verify_causal_delta --parallel 4
+build/Release/macrofacet_verify_causal_delta.exe configs/render_neural_causal_renewal_shader_ball_sigma002_cuda.json outputs/diagnostics/contact_b_20261022/capture.json outputs/diagnostics/cuda_delta_20261022/distributions.json 2048
+```
+
+此工具比较捕获的 B 射线和相机 A 射线的经验 CDF 与 scalar 积分结果，并对独立的
+delta / inversion 样本检查距离、速度和法线三个分量的分布。
+固定随机数验证工具 `macrofacet_verify_causal_cuda` 始终检查积分求逆路径。
+delta 的采样输出没有累计 hazard（诊断 API 返回 NaN）；`queryOnly=true`
+则执行参考积分，并返回全射线累计 hazard。换采样器不会消除神经模型相对 GPIS 的误差。
+
+同日同一可执行文件的交替计时（RTX 4060 Laptop，σ=0.02，128×128，16 spp）：
+积分求逆 35.96 / 35.84 s，分段 delta tracking 24.22 / 24.58 s；中位数比 1.47，
+耗时减少约 32%。未重跑 512×512、128 spp。全部 320 条 B 与 137 条 A 各采样
+2048 次，经验 CDF 与参考一致；308 个有足够命中的状态通过速度和法线分布检验，
+另外 149 个状态仍检查距离和存活概率。约 75.4 万个候选中没有触发上界越界检查。
+白炉 RGB 精确为 1，射线池 8192 / 513 的图像和路径计数相同；304714 项 C++ 检查、
+CUDA memcheck / synccheck 通过。见 [验证与计时汇总](../outputs/diagnostics/cuda_delta_20261022/summary.json)
+及 [可重跑的计时脚本](../outputs/diagnostics/cuda_delta_20261022/run_benchmark.py)。
+
+### CPU 与训练代码的部署数值对照
 
 ```powershell
 $env:PYTHONPATH = 'python'

@@ -85,6 +85,7 @@ CausalRenewalModel CausalRenewalModel::load(std::istream& input) {
 double CausalRenewalModel::step() const { return impl_->step; }
 double CausalRenewalModel::integrationStep() const { return impl_->fine; }
 const std::string& CausalRenewalModel::checkpointSha256() const { return impl_->checkpoint; }
+const CausalNetworkWeights& CausalRenewalModel::networkWeights() const { return impl_->weights; }
 
 std::vector<CausalRenewalPrediction> CausalRenewalModel::query(const RayMeanProfile& p,
     const RayStartCondition& start, const std::vector<double>& q) const {

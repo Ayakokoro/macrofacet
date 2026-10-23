@@ -2,6 +2,7 @@
 #include "macrofacet/learned/RenewalHazardModel.h"
 
 namespace mf {
+struct CausalNetworkWeights;
 
 struct CausalRenewalPrediction {
     double q = 0, cumulativeHazard = 0, logHazard = 0;
@@ -23,6 +24,8 @@ public:
     double step() const;
     double integrationStep() const;
     const std::string& checkpointSha256() const;
+    // Immutable weights shared with optional native inference backends.
+    const CausalNetworkWeights& networkWeights() const;
     std::vector<CausalRenewalPrediction> query(const RayMeanProfile& profile,
         const RayStartCondition& start, const std::vector<double>& q) const;
     // Uniforms: exponential optical depth, mixture component, component CDF.

@@ -35,8 +35,9 @@ struct RenewalRenderConfig {
     std::filesystem::path modelPath;
     double profileMaximumStep = 0.25;
     std::string profileMode = "cubic"; // cubic (exact cells), point_linear (lazy tangent approximation)
-    std::string backend = "scalar"; // scalar, torch_cpu, torch_cuda, auto
+    std::string backend = "scalar"; // scalar, torch_cpu, torch_cuda, auto; joint model: cuda_wavefront
     std::string resolvedBackend = "scalar";
+    std::string sampler = "cumulative_inversion"; // CUDA joint also supports segmented_delta_tracking
     int batchSize = 4096;
     int rayPoolSize = 0; // 0: min(65536, 2*batchSize), also bounded by pixel count
     int auxiliaryBatchMinimum = 256; // initialization/mixture flush threshold
